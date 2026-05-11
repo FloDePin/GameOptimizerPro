@@ -11,16 +11,22 @@
     3.0
 #>
 
-# Hide the console window immediately via Win32 API
-Add-Type -Name Window -Namespace Console -MemberDefinition '
-[DllImport("Kernel32.dll")]
-public static extern IntPtr GetConsoleWindow();
-[DllImport("user32.dll")]
-public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-'
-$consoleHandle = [Console.Window]::GetConsoleWindow()
-[Console.Window]::ShowWindow($consoleHandle, 0) | Out-Null
+# ─────────────────────────────────────────
+# HIDE CONSOLE WINDOW IMMEDIATELY
+# ─────────────────────────────────────────
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class ConsoleWindow {
+    [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+    [DllImport("user32.dll")]   public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}
+"@
+[ConsoleWindow]::ShowWindow([ConsoleWindow]::GetConsoleWindow(), 0) | Out-Null
 
+# ─────────────────────────────────────────
+# WPF ASSEMBLIES
+# ─────────────────────────────────────────
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
@@ -253,7 +259,6 @@ $AllTweaks = @(
         Category = "Windows"
         Group    = "Performance"
         Action   = {
-            # FIX: Regex GUID-Extraktion — sprachunabhaengig (kein .Split()[3])
             powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>$null
             $guidMatch = powercfg -list |
                 Select-String -Pattern '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})' |
@@ -929,7 +934,6 @@ function New-TweakRow($Tweak) {
     $btn.Cursor            = [System.Windows.Input.Cursors]::Hand
     $btn.VerticalAlignment = "Center"
 
-    # FIX: .GetNewClosure() auf allen scriptblocks — friert Variablen pro Schleifendurchlauf ein
     $capturedDesc = $Tweak.Desc
     $capturedName = $Tweak.Name
     $btn.Add_Click({
@@ -952,7 +956,6 @@ function New-TweakRow($Tweak) {
     return $panel
 }
 
-# FIX: alle 4 Kategorien in der Map — RAM & Storage war vorher nicht eingetragen
 $categories = @{
     "Windows"       = $WindowsPanel
     "Gaming"        = $GamingPanel
