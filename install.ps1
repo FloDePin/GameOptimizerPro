@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "SilentlyContinue"
 $url  = "https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/GameOptimizerPro.ps1"
 $dest = "$env:TEMP\GameOptimizerPro.ps1"
 
@@ -13,7 +13,7 @@ try {
     Write-Host "  Download complete!" -ForegroundColor Green
     Write-Host "  Launching as Administrator..." -ForegroundColor Yellow
     Write-Host ""
-    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$dest`"" -Verb RunAs
+    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -STA -NonInteractive -File `"$dest`"" -Verb RunAs
 } catch {
     Write-Host "  [ERROR] Download failed: $_" -ForegroundColor Red
     Write-Host "  Make sure you have internet access and the file exists on GitHub." -ForegroundColor Gray
