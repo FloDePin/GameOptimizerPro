@@ -1,18 +1,27 @@
-#Requires -RunAsAdministrator
 <#
-.SYNOPSIS
-    GameOptimizerPro - Windows & Gaming Optimizer
-.DESCRIPTION
-    GUI-based PowerShell optimizer with checkboxes and info tooltips.
-    Tabs: Windows (Debloat) | Gaming | Network | RAM & Storage
-.AUTHOR
-    FloDePin
-.VERSION
-    3.0
+.SYNOPSIS    GameOptimizerPro - Windows & Gaming Optimizer
+.AUTHOR      FloDePin
+.VERSION     3.0
 #>
 
 # ─────────────────────────────────────────
-# HIDE CONSOLE WINDOW IMMEDIATELY
+# SELF-ELEVATION (kein #Requires)
+# ─────────────────────────────────────────
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -STA -NonInteractive -File `"$PSCommandPath`"" -Verb RunAs
+    exit
+}
+
+# ─────────────────────────────────────────
+# WPF ASSEMBLIES (ZUERST)
+# ─────────────────────────────────────────
+Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
+Add-Type -AssemblyName System.Windows.Forms
+
+# ─────────────────────────────────────────
+# HIDE CONSOLE WINDOW (NACH WPF-LOAD)
 # ─────────────────────────────────────────
 Add-Type @"
 using System;
@@ -23,6 +32,11 @@ public class ConsoleWindow {
 }
 "@
 [ConsoleWindow]::ShowWindow([ConsoleWindow]::GetConsoleWindow(), 0) | Out-Null
+
+# ─────────────────────────────────────────
+# REST DES SCRIPTS (HARDWARE, TWEAKS, GUI...)
+# ─────────────────────────────────────────
+
 
 # ─────────────────────────────────────────
 # WPF ASSEMBLIES
