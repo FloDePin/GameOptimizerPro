@@ -4,7 +4,7 @@ $dest = "$env:TEMP\WinTweaker_v1.ps1"
 
 Write-Host ""
 Write-Host "  WinTweaker v3.0 Installer" -ForegroundColor Red
-Write-Host "  -----------------------------" -ForegroundColor DarkGray
+Write-Host "  ─────────────────────────────" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  Downloading WinTweaker v3.0..." -ForegroundColor Cyan
 
@@ -13,10 +13,10 @@ try {
     Write-Host "  Download complete!" -ForegroundColor Green
     Write-Host "  Launching as Administrator..." -ForegroundColor Yellow
     Write-Host ""
-    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$dest`"" -Verb RunAs
+    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$dest`"" -Verb RunAs
 } catch {
     Write-Host "  [ERROR] Download failed: $_" -ForegroundColor Red
-    Write-Host "  Check your internet connection and GitHub file." -ForegroundColor Gray
+    Write-Host "  Make sure you have internet access and the file exists on GitHub." -ForegroundColor Gray
     Write-Host ""
     Read-Host "  Press Enter to exit"
 }
