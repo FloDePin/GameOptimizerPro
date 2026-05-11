@@ -1,4 +1,4 @@
-# ⚡ WinTweaker
+# ⚡ GameOptimizerPro
 
 > **All-in-one Windows & Gaming Optimizer** — PowerShell GUI with checkboxes, info tooltips, hardware auto-detection and restore point backup.
 
