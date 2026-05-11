@@ -16,7 +16,6 @@ if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne [System.Thr
     Read-Host "Press Enter to exit"
     exit
 }
-}
 
 try {
 Add-Type -AssemblyName PresentationFramework
