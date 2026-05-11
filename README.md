@@ -23,104 +23,78 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 | Tab | Tweaks | Description |
 |-----|--------|-------------|
-| 🪟 Windows | 23 Tweaks | Bloatware, Privacy, Performance, Mouse & UI |
-| 🎮 Gaming | 12 Tweaks | Game Mode, GPU, MMCSS, HAGS, MSI, Shader Cache, BG Throttling, DX12 |
-| 🌐 Network | 12 Tweaks | Nagle, DNS, TCP, LSO, QoS, Throttling Index, Google DNS |
-| 💾 RAM & Storage | 9 Tweaks | PageFile, TRIM, Hibernation, NVMe, Temp Cleanup, Memory Compression |
+| 🪟 Windows 11 (F9) | 7 Tweaks | OS-Scan, Win11-Tweaks, Win10-Grauausblendung + Banner |
+| 🔊 Audio (F11) | 6 Tweaks | Audio-Tweaks, eigener Tab |
+| 🎮 GPU Tweaks (F14) | 7 Tweaks | 4 NVIDIA + 3 AMD Tweaks, GPU-Erkennung, Brand-Grauausblendung |
+| ⚡ Power Plan (F13) | 7 Tweaks | USB, PCI-E, HDD, Display, Sleep, CPU Min/Max |
+| 🚀 Startup Manager (F10) | ✅ | Eigenes Fenster, HKCU/HKLM/Run32, Disable/Enable/Refresh |
+| 🌍 Language DE/EN (F15) | ✅ | 80 EN-Beschreibungen, Toggle-Button, live umschaltbar |
 
 ---
 
-## 🪟 Windows Tab (23 Tweaks)
+## 🪟 Windows 11 Tab (F9) - 7 Tweaks
 
-### 📦 Bloatware Removal (6 Tweaks)
-- **Remove Cortana** — Entfernt Cortana vollständig. Reduziert Datenübertragung an Microsoft.
-- **Remove Xbox Apps** — Deinstalliert Xbox Game Bar, Identity Provider, TCUI und Overlays.
-- **Remove Microsoft Teams (Personal)** — Entfernt Teams Consumer-Version und blockiert Neuinstallation.
-- **Remove Copilot** — Deaktiviert und entfernt Windows Copilot komplett.
-- **Remove OneDrive** — Vollständige Deinstallation inkl. Explorer-Integration. Lokale Dateien bleiben.
-- **Remove Other Bloatware** — Entfernt Candy Crush, TikTok, Disney+, Facebook, Instagram, Spotify, News, Solitaire, Clipchamp, ToDo, Paint3D und mehr.
-
-### 🔒 Privacy (8 Tweaks)
-- **Disable Telemetry and Data Collection** — Stoppt DiagTrack und dmwappushservice.
-- **Disable Activity History** — Deaktiviert Windows Timeline-Funktion.
-- **Disable Advertising ID** — Verhindert geräteübergreifendes Tracking durch Apps.
-- **Disable Location Tracking** — Schaltet den Standortdienst systemweit aus.
-- **Block Telemetry Hosts** — Blockiert Microsoft-Telemetrie-Server in der hosts-Datei.
-- **Disable Scheduled Telemetry Tasks** — Deaktiviert geplante Aufgaben zur Datensammlung.
-
-### ⚡ Performance (6 Tweaks)
-- **Ultimate Performance Plan** — Aktiviert Ultimative Leistung. CPU-Kerne werden nicht gedrosselt.
-- **Disable HPET** — Kann Latenz reduzieren und Gaming-Performance verbessern.
-- **Set 0.5ms Timer Resolution** — Verbessert Frame-Timing und reduziert Input-Lag.
-- **Disable Prefetch and Superfetch** — Reduziert Hintergrund-Schreibzugriffe (ideal für SSDs).
-- **Optimize Visual Effects (Performance Mode)** — Schaltet alle Animationen aus für schnellere Reaktion.
-- **Disable Windows Search Indexing** — Reduziert Festplattenzugriffe im Hintergrund.
-
-### 🖱️ Mouse and UI (3 Tweaks)
-- **Disable Mouse Acceleration** — 1:1 Übertragung wichtig für FPS-Spiele.
-- **Disable Sticky Keys** — Verhindert ungewollte Unterbrechungen im Spiel.
-- **Enable Dark Mode** — Schont die Augen bei langen Gaming-Sessions.
-- **Disable Transparency Effects** — Spart GPU-Ressourcen in Taskleiste und Startmenü.
+### 📦 Windows 11 & 10 Optimization
+- **OS-Scan** — Scannt das Betriebssystem auf Optimierungspotenziale
+- **Win11 Tweaks** — 7 spezialisierte Optimierungen für Windows 11
+- **Win10 Grauausblendung + Banner** — Optimierte Darstellung für Windows 10-Kompatibilität
 
 ---
 
-## 🎮 Gaming Tab (12 Tweaks)
+## 🔊 Audio Tab (F11) - 6 Tweaks
 
-### 🚀 In-Game Boosts (9 Tweaks)
-- **Enable Game Mode** — Priorisiert CPU/GPU für aktive Spiele, blockiert WU-Neustarts.
-- **Disable Xbox Game Bar** — Deaktiviert Win+G ohne Game Mode zu beeinflussen.
-- **CPU Priority for Games (Win32Priority)** — Gibt aktiven Spielen deutlich mehr CPU-Zeit.
-- **MMCSS Gaming Profile (High Priority)** — Priorisiert Audio und Timer-Interrupts.
-- **Disable Fullscreen Optimizations** — Reduziert Input-Lag im Vollbildmodus.
-- **Disable Windows Update During Gaming** — Verhindert Ressourcenverschwendung durch Windows Update.
-- **Disable Background App Throttling** — Verhindert FPS-Drops durch Windows Throttling.
-- **Enable DirectX 12 Optimization** — Aktiviert Registry-Optimierungen für bessere GPU-Nutzung in DX12-Spielen.
-
-### 🖥️ GPU and Driver (4 Tweaks)
-- **NVIDIA Low Latency Mode (Reflex)** — Ultra Low Latency Mode für NVIDIA GPUs. Render-Queue auf 1 Frame.
-- **Enable MSI Mode (Message Signaled Interrupts)** — Reduziert Interrupt-Latenz erheblich. Reboot empfohlen.
-- **Enable Hardware-Accelerated GPU Scheduling (HAGS)** — Benötigt NVIDIA RTX 2000+/AMD RX 5000+ und Windows 10 2004+.
-- **Clear Shader Cache** — Leert NVIDIA/AMD Shader-Cache. Sinnvoll nach Treiberupdates.
+### 🎵 Audio-Optimierungen
+- **6 Audio-Tweaks** — Professionelle Audiooptimierungen in eigenem Tab
+- Verbesserte Latenz und Wiedergabequalität
+- Dediziertes Fenster für Audio-Einstellungen
 
 ---
 
-## 🌐 Network Tab (12 Tweaks)
+## 🎮 GPU Tweaks Tab (F14) - 7 Tweaks
 
-### 📡 Latency (3 Tweaks)
-- **Disable Nagle's Algorithm (TCPNoDelay)** — Senkt Ping in Online-Spielen.
-- **Disable Large Send Offload (LSO)** — Hilft bei instabilem Ping.
-- **Disable Network Throttling Index** — Windows begrenzt Netzwerk-Durchsatz nicht mehr künstlich.
+### NVIDIA Optimierungen (4 Tweaks)
+- **NVIDIA GPU Detection** — Automatische Erkennung der GPU
+- **NVIDIA-spezifische Tweaks** — 4 Optimierungen für NVIDIA-Grafikkarten
 
-### 🔗 DNS (3 Tweaks)
-- **Set DNS to Cloudflare (1.1.1.1)** — Schnell und datenschutzfreundlich.
-- **Set DNS to Google (8.8.8.8)** — Sehr schnell und global verfügbar.
-- **Flush DNS Cache** — Sinnvoll nach DNS-Änderungen oder Verbindungsproblemen.
+### AMD Optimierungen (3 Tweaks)
+- **AMD-spezifische Tweaks** — 3 Optimierungen für AMD-Grafikkarten
+- **Automatische GPU-Erkennung** — Greyt-out von nicht-kompatiblen Tweaks
 
-### 🔌 TCP (2 Tweaks)
-- **Disable TCP Auto-Tuning** — Kann Latenz-Spikes reduzieren.
-- **Optimize TCP Settings (ECN and SACK)** — Deaktiviert ECN, SACK und TCP Timestamps für niedrigere Latenz.
-
-### 📊 QoS (1 Tweak)
-- **Disable QoS Packet Scheduler Limit** — Entfernt das 20%-Bandbreitenlimit das Windows reserviert.
+### Weitere GPU-Features
+- **Brand Grauausblendung** — Nur kompatible GPU-Tweaks werden angezeigt
 
 ---
 
-## 💾 RAM & Storage Tab (9 Tweaks)
+## ⚡ Power Plan Tab (F13) - 7 Tweaks
 
-### 🧠 Memory (3 Tweaks)
-- **Optimize PageFile (System Managed)** — Windows passt Auslagerungsdatei automatisch an.
-- **Clear PageFile on Shutdown** — Verbessert Datenschutz und verhindert Datenlecks.
-- **Disable Memory Compression** — Empfohlen ab 16 GB RAM. Reduziert CPU-Last.
+### 🔋 Systemenergie-Optimierungen
+- **USB Power Management** — USB-Energieverwaltung optimieren
+- **PCI-E Optimierungen** — PCIe-Latenz reduzieren
+- **HDD/SSD Tweaks** — Festplatte Energieverwaltung
+- **Display Power Tweaks** — Monitor-Energiesparen
+- **Sleep Mode Optimierungen** — Verbessertes Schlafverhalten
+- **CPU Min/Max Einstellungen** — CPU-Frequenz-Management
+- **Umfassende Power Plan Konfiguration** — 7 dedizierte Tweaks
 
-### 💿 Storage (5 Tweaks)
-- **Enable SSD TRIM** — Hält SSD-Leistung langfristig aufrecht.
-- **Disable Scheduled Defragmentation** — Für SSDs schädlich und unnötig.
-- **Disable Hibernation** — Spart Speicherplatz in RAM-Größe (hiberfil.sys wird gelöscht).
-- **Optimize NVMe Queue Depth** — Verbessert Lese- und Schreibdurchsatz.
-- **Disable Write-Cache Buffer Flushing** — Nur für Systeme mit UPS empfohlen.
+---
 
-### 🧹 Maintenance (1 Tweak)
-- **Clean Temp Files** — Löscht temporäre Dateien aus TEMP und Windows Temp-Ordner.
+## 🚀 Startup Manager (F10)
+
+### 🖥️ Startup-Programme verwalten
+- **Eigenes Fenster** — Dedizierte UI für Startup-Verwaltung
+- **Registry-Integration** — HKCU/HKLM/Run32-Einträge
+- **3-State-Management** — Disable/Enable/Refresh Funktionalität
+- **Schnelle Kontrolle** — Starten/Stoppen von Auto-Start-Programmen
+
+---
+
+## 🌍 Language Toggle (F15) - DE/EN
+
+### 🗣️ Mehrsprachigkeit
+- **80+ englische Beschreibungen** — Vollständige EN-Lokalisierung
+- **Toggle-Button** — Schneller Wechsel zwischen Deutsch und Englisch
+- **Live-Umschaltbar** — Keine Neustart erforderlich
+- **Alle Tweaks übersetzt** — Konsistente mehrsprachige UI
 
 ---
 
@@ -136,7 +110,7 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ✅ **System Restore Point** — Wird vor allen Tweaks automatisch erstellt  
 ✅ **Detailliertes Logging** — Alle Aktionen werden in `%TEMP%\GameOptimizerPro_*.log` protokolliert  
-✅ **Hardware Detection** — NVIDIA-only Tweaks werden auf AMD/Intel übersprungen  
+✅ **Hardware Detection** — GPU-spezifische Tweaks werden automatisch gefiltert  
 ✅ **Vollständig reversibel** — Alle Tweaks können über System Restore rückgängig gemacht werden  
 
 ---
@@ -145,10 +119,11 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 - **Moderne Dark-Mode UI** — Basierend auf WPF/XAML
 - **Info-Buttons (?)** — Hover über `?` für Erklärungen zu jedem Tweak
-- **Tabs für Kategorien** — Windows | Gaming | Network | RAM & Storage
+- **6 Tabs für Kategorien** — Windows 11 | Audio | GPU Tweaks | Power Plan | Startup Manager | Language
 - **Bulk Selektionen** — Select All / Deselect All Buttons
 - **Live Logging** — Log-Datei kann jederzeit geöffnet werden
 - **Hardware Info** — Zeigt GPU, CPU, RAM an
+- **Language Toggle** — Deutsch/Englisch Umschaltung
 
 ---
 
@@ -165,11 +140,14 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 ## 📜 Changelog
 
 ### v1.0
-- 🚀 Initial release mit Windows, Gaming, Network, RAM & Storage Tabs
-- ✨ 23 Windows Tweaks (Bloatware, Privacy, Performance, Mouse & UI)
-- 🎮 12 Gaming Tweaks (Game Mode, GPU, MMCSS, HAGS, MSI, Shader Cache, etc.)
-- 🌐 12 Network Tweaks (Nagle, DNS, TCP, LSO, QoS, Throttling Index)
-- 💾 9 RAM & Storage Tweaks (PageFile, TRIM, Hibernation, NVMe, Memory Compression)
+- 🚀 **Initial release** mit umfangreicher Feature-Liste
+- 🪟 **Windows 11 Tab (F9)** — 7 Tweaks für OS-Optimierung
+- 🔊 **Audio Tab (F11)** — 6 dedizierte Audio-Optimierungen
+- 🎮 **GPU Tweaks Tab (F14)** — 7 Tweaks (4 NVIDIA + 3 AMD) mit automatischer GPU-Erkennung
+- ⚡ **Power Plan Tab (F13)** — 7 Tweaks für Systemenergie-Optimierung
+- 🚀 **Startup Manager (F10)** — Verwaltung von Auto-Start-Programmen
+- 🌍 **Language Support (F15)** — 80+ Beschreibungen in EN, live umschaltbar
+- 🌐 **Mehrsprachige UI** — Deutsch und Englisch voll unterstützt
 
 ---
 
@@ -183,10 +161,12 @@ Ein System Restore Point wird automatisch vor Änderungen erstellt.
 ## 💡 Tipps für maximale Performance
 
 1. **Starte mit Safety** — Erst einige Tweaks testen, dann mehr hinzufügen
-2. **Game Mode aktivieren** — Das ist eine der wichtigsten Optimierungen
-3. **DNS optimieren** — Merkliche Verbesserung bei instabilem Internet
-4. **NVIDIA/AMD Treiber aktuell halten** — Macht mehr aus als die meisten Tweaks
-5. **Nach GPU Tweaks neustarten** — MSI Mode und HAGS brauchen einen Reboot
+2. **GPU-Tweaks aktivieren** — Automatische Erkennung deiner GPU für beste Ergebnisse
+3. **Power Plan optimieren** — Passe die Einstellungen nach deinen Bedürfnissen an
+4. **Audio-Tweaks für Gaming** — Reduziere Audio-Latenz in F11 Tab
+5. **Startup Manager nutzen** — Beschleunige den Boot durch Startup-Optimierung
+6. **NVIDIA/AMD Treiber aktuell halten** — Macht mehr aus als die meisten Tweaks
+7. **Nach GPU Tweaks neustarten** — GPU-Optimierungen brauchen einen Reboot
 
 ---
 
