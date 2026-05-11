@@ -21,7 +21,7 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 Or run directly:
 
 ```powershell
-irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/WinTweaker_v2.ps1 | iex
+irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/WinTweaker_v1.ps1 | iex
 ```
 
 ---
