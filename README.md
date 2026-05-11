@@ -12,7 +12,8 @@
 ## 🚀 One-Liner Install
 
 ```powershell
-irm "https://raw.githubusercontent.com/FloDePin/WinTweaker/main/WinTweaker.ps1" | iex
+irm "https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/WinTweaker.ps1" | iex
+
 ```
 
 > **Run PowerShell as Administrator!**
