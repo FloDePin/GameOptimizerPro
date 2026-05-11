@@ -1,4 +1,4 @@
-# ⚡ WinTweaker v2.0
+# ⚡ WinTweaker
 > Windows & Gaming Optimizer — by FloDePin
 
 <p align="center">
