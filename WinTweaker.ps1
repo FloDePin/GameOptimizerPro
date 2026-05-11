@@ -1,3 +1,4 @@
+
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
@@ -8,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.1.0
+    1.0.0
 #>
 
 Add-Type -AssemblyName PresentationFramework
@@ -46,24 +47,16 @@ function Write-Log {
 }
 
 # ─────────────────────────────────────────
-# COLOR HELPER
-# ─────────────────────────────────────────
-function New-Brush {
-    param([byte]$R, [byte]$G, [byte]$B)
-    $brush = New-Object Windows.Media.SolidColorBrush
-    $brush.Color = [Windows.Media.Color]::FromRgb($R, $G, $B)
-    return $brush
-}
-
-# ─────────────────────────────────────────
 # TWEAK DEFINITIONS
 # ─────────────────────────────────────────
+# Each tweak: Name, Description (for ? popup), Category, ScriptBlock
+
 $AllTweaks = @(
 
     # ── WINDOWS / DEBLOAT ──────────────────────────────────────────────
     [PSCustomObject]@{
         Name     = "Remove Cortana"
-        Desc     = "Deinstalliert Cortana vollstaendig. Cortana ist Microsofts Sprachassistent der Daten an Microsoft sendet. Fuer die meisten Nutzer nicht benoetigt."
+        Desc     = "Deinstalliert Cortana vollständig. Cortana ist Microsofts Sprachassistent der Daten an Microsoft sendet. Für die meisten Nutzer nicht benötigt."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
@@ -73,7 +66,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Remove Xbox Apps"
-        Desc     = "Entfernt Xbox Game Bar, Xbox Identity Provider und Xbox TCUI. Diese Apps laufen im Hintergrund und verbrauchen Ressourcen auch wenn du keine Xbox hast."
+        Desc     = "Entfernt Xbox Game Bar, Xbox Identity Provider und Xbox TCUI. Diese Apps laufen im Hintergrund und verbrauchen Ressourcen — auch wenn du keine Xbox hast."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
@@ -84,7 +77,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Remove Microsoft Teams (Personal)"
-        Desc     = "Entfernt Microsoft Teams (Consumer-Version). Blockiert automatische Neuinstallation."
+        Desc     = "Entfernt Microsoft Teams (die Consumer-Version). Nicht zu verwechseln mit Teams for Work. Blockiert automatische Neuinstallation."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
@@ -95,7 +88,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Remove Copilot"
-        Desc     = "Deaktiviert und entfernt Windows Copilot (KI-Assistent). Verhindert dass Copilot im Hintergrund laeuft und Daten sendet."
+        Desc     = "Deaktiviert und entfernt Windows Copilot (KI-Assistent). Verhindert dass Copilot im Hintergrund läuft und Daten sendet."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
@@ -121,7 +114,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Remove Windows Recall"
-        Desc     = "Deaktiviert Windows Recall das KI-Feature das Screenshots deiner Aktivitaeten macht und lokal speichert. Datenschutzkritisch."
+        Desc     = "Deaktiviert Windows Recall — das KI-Feature das Screenshots deiner Aktivitäten macht und lokal speichert. Datenschutzkritisch."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
@@ -132,7 +125,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Remove Other Bloatware"
-        Desc     = "Entfernt vorinstallierte Apps wie: Candy Crush, TikTok, Disney+, Facebook, Instagram, Spotify, News, Weather, Solitaire, Clipchamp, ToDo, Paint3D und weitere."
+        Desc     = "Entfernt vorinstallierte Apps wie: Candy Crush, TikTok, Disney+, Facebook, Instagram, Spotify, News, Weather, Solitaire, Clipchamp, ToDo, Paint3D und weitere Microsoft-Bloatware."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
@@ -153,7 +146,7 @@ $AllTweaks = @(
     # ── WINDOWS / PRIVACY ──────────────────────────────────────────────
     [PSCustomObject]@{
         Name     = "Disable Telemetry & Data Collection"
-        Desc     = "Deaktiviert alle Windows-Telemetriedienste (DiagTrack, dmwappushservice). Windows sendet dann keine Nutzungsdaten mehr an Microsoft. Empfohlen fuer alle Nutzer."
+        Desc     = "Deaktiviert alle Windows-Telemetriedienste (DiagTrack, dmwappushservice). Windows sendet dann keine Nutzungsdaten mehr an Microsoft. Empfohlen für alle Nutzer."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -168,7 +161,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Activity History"
-        Desc     = "Deaktiviert die Windows Aktivitaetsverlauf-Funktion (Timeline). Windows speichert dann nicht mehr welche Apps und Dateien du geoeffnet hast."
+        Desc     = "Deaktiviert die Windows Aktivitätsverlauf-Funktion (Timeline). Windows speichert dann nicht mehr welche Apps und Dateien du geöffnet hast."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -179,7 +172,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Advertising ID"
-        Desc     = "Deaktiviert die Werbe-ID die Windows jedem Nutzer zuweist. Apps koennen dich dann nicht mehr geraeteuebergreifend tracken um personalisierte Werbung zu schalten."
+        Desc     = "Deaktiviert die Werbe-ID die Windows jedem Nutzer zuweist. Apps können dich dann nicht mehr geräteübergreifend tracken um personalisierte Werbung zu schalten."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -190,7 +183,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Location Tracking"
-        Desc     = "Deaktiviert den Windows Standortdienst systemweit. Apps koennen deinen Standort nicht mehr abfragen."
+        Desc     = "Deaktiviert den Windows Standortdienst systemweit. Apps können deinen Standort nicht mehr abfragen — gut für Datenschutz und leicht besser für Performance."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -201,7 +194,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Block Telemetry Hosts (hosts file)"
-        Desc     = "Fuegt Microsoft Telemetrie-Server in die Windows hosts-Datei ein und blockt sie. Damit koennen diese Server nicht mehr erreicht werden."
+        Desc     = "Fügt Microsoft Telemetrie-Server in die Windows hosts-Datei ein und blockt sie. Damit können diese Server nicht mehr erreicht werden — auch wenn Telemetry-Services laufen sollten."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -249,7 +242,7 @@ $AllTweaks = @(
     # ── WINDOWS / PERFORMANCE ──────────────────────────────────────────
     [PSCustomObject]@{
         Name     = "Ultimate Performance Plan"
-        Desc     = "Aktiviert den Ultimative Leistung Energiesparplan. Windows drosselt dann keine CPU-Kerne mehr. Erhoehter Stromverbrauch."
+        Desc     = "Aktiviert den 'Ultimative Leistung' Energiesparplan. Windows drosselt dann keine CPU-Kerne mehr — maximale Performance zu jeder Zeit. Erhöht Stromverbrauch."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -261,7 +254,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable HPET (High Precision Event Timer)"
-        Desc     = "Deaktiviert den High Precision Event Timer. Kann die System-Latenz reduzieren und Gaming-Performance verbessern."
+        Desc     = "Deaktiviert den High Precision Event Timer. Kann die System-Latenz reduzieren und Gaming-Performance verbessern. Auf manchen Systemen sorgt dies für niedrigere Frame-Zeiten."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -273,7 +266,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Set 0.5ms Timer Resolution"
-        Desc     = "Setzt die Windows Timer-Aufloesung auf 0.5ms (statt Standard 15.6ms). Verbessert Frame-Timing und reduziert Input-Lag in Spielen."
+        Desc     = "Setzt die Windows Timer-Auflösung auf 0.5ms (statt Standard 15.6ms). Verbessert die Präzision von Frame-Timing und reduziert Input-Lag in Spielen spürbar."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -283,7 +276,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Prefetch & Superfetch"
-        Desc     = "Deaktiviert Prefetch und SysMain (Superfetch). Sinnvoll bei SSDs. Auf HDDs nicht empfohlen."
+        Desc     = "Deaktiviert Prefetch und SysMain (Superfetch). Sinnvoll bei SSDs — auf HDDs nicht empfohlen. Reduziert Hintergrund-Schreibzugriffe und leichten RAM-Verbrauch."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -296,7 +289,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Optimize Visual Effects (Performance Mode)"
-        Desc     = "Schaltet alle Windows-Animationen und visuelle Effekte aus. Windows reagiert dadurch spuerbar schneller."
+        Desc     = "Schaltet alle Windows-Animationen und visuelle Effekte aus. Windows reagiert dadurch spürbar schneller — besonders auf schwächeren Systemen oder beim Gaming."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -309,7 +302,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Windows Search Indexing"
-        Desc     = "Deaktiviert den Windows Search Indexer (WSearch). Reduziert staendige Festplattenzugriffe im Hintergrund."
+        Desc     = "Deaktiviert den Windows Search Indexer (WSearch). Reduziert ständige Festplattenzugriffe im Hintergrund. Suche in Explorer funktioniert weiterhin, aber langsamer ohne Index."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -322,7 +315,7 @@ $AllTweaks = @(
     # ── WINDOWS / MOUSE & UI ───────────────────────────────────────────
     [PSCustomObject]@{
         Name     = "Disable Mouse Acceleration"
-        Desc     = "Deaktiviert die Mausbeschleunigung (Enhance Pointer Precision). Wichtig fuer FPS-Spiele: Mausbewegung wird 1:1 uebertragen."
+        Desc     = "Deaktiviert die Mausbeschleunigung (Enhance Pointer Precision). Wichtig für FPS-Spiele: Deine Mausbewegung wird 1:1 übertragen ohne dynamische Verstärkung."
         Category = "Windows"
         Group    = "Mouse & UI"
         Action   = {
@@ -334,7 +327,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Sticky Keys"
-        Desc     = "Deaktiviert den Sticky Keys Dialog (beim 5x Shift-Druecken). Verhindert ungewollte Unterbrechungen mitten im Spiel."
+        Desc     = "Deaktiviert den Sticky Keys Dialog (der beim 5x Shift-Drücken aufpoppt). Verhindert ungewollte Unterbrechungen mitten im Spiel."
         Category = "Windows"
         Group    = "Mouse & UI"
         Action   = {
@@ -346,7 +339,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Enable Dark Mode"
-        Desc     = "Aktiviert den dunklen Modus fuer Windows und Apps systemweit. Schont die Augen bei langen Sessions."
+        Desc     = "Aktiviert den dunklen Modus für Windows und Apps systemweit. Schont die Augen bei langen Sessions — besonders nachts beim Gaming."
         Category = "Windows"
         Group    = "Mouse & UI"
         Action   = {
@@ -357,7 +350,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Transparency Effects"
-        Desc     = "Deaktiviert die Transparenz-Effekte in Taskleiste und Startmenue. Spart GPU-Ressourcen."
+        Desc     = "Deaktiviert die Transparenz-Effekte in Taskleiste und Startmenü. Spart GPU-Ressourcen und reduziert leicht den RAM-Verbrauch."
         Category = "Windows"
         Group    = "Mouse & UI"
         Action   = {
@@ -369,7 +362,7 @@ $AllTweaks = @(
     # ── GAMING ────────────────────────────────────────────────────────
     [PSCustomObject]@{
         Name     = "Enable Game Mode"
-        Desc     = "Aktiviert den Windows Game Mode. Windows priorisiert CPU/GPU-Ressourcen fuer das aktive Spiel und unterdrueckt Windows Update Neustarts."
+        Desc     = "Aktiviert den Windows Game Mode. Windows priorisiert dann CPU/GPU-Ressourcen für das aktive Spiel und unterdrückt Windows Update Neustarts während du spielst."
         Category = "Gaming"
         Group    = "In-Game Boosts"
         Action   = {
@@ -380,7 +373,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Xbox Game Bar"
-        Desc     = "Deaktiviert die Xbox Game Bar (Win+G Overlay). Verhindert dass die Game Bar im Hintergrund laeuft und Ressourcen verbraucht."
+        Desc     = "Deaktiviert die Xbox Game Bar (Win+G Overlay). Verhindert dass die Game Bar im Hintergrund läuft und Ressourcen verbraucht. Game Mode bleibt davon unberührt."
         Category = "Gaming"
         Group    = "In-Game Boosts"
         Action   = {
@@ -391,7 +384,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "CPU Priority for Games (Win32Priority)"
-        Desc     = "Setzt Win32PrioritySeparation auf 26. Windows gibt dann aktiven Spielen deutlich mehr CPU-Zeit. Spuerbar bei CPU-limitierten Spielen."
+        Desc     = "Setzt Win32PrioritySeparation auf 26 (Hex). Windows gibt dann aktiven Spielen deutlich mehr CPU-Zeit und reduziert Hintergrundprozesse. Spürbar bei CPU-limitierten Spielen."
         Category = "Gaming"
         Group    = "In-Game Boosts"
         Action   = {
@@ -401,7 +394,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "MMCSS Gaming Profile (High Priority)"
-        Desc     = "Setzt die Multimedia Class Scheduler Service Profile fuer Spiele auf High Priority. Besseres Audio und Timer-Handling beim Gaming."
+        Desc     = "Setzt die Multimedia Class Scheduler Service (MMCSS) Profile für Spiele auf High Priority. Windows priorisiert dann Audio und Timer-Interrupts für besseres Gaming-Erlebnis."
         Category = "Gaming"
         Group    = "In-Game Boosts"
         Action   = {
@@ -413,7 +406,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Fullscreen Optimizations"
-        Desc     = "Deaktiviert Windows Fullscreen Optimizations global. Erzwingt echtes Fullscreen fuer niedrigeren Input-Lag statt Borderless Windowed."
+        Desc     = "Deaktiviert die Windows Fullscreen Optimizations global. Manche Spiele laufen im 'Borderless Windowed' statt echtem Fullscreen — dieser Tweak erzwingt echtes Fullscreen für niedrigeren Input-Lag."
         Category = "Gaming"
         Group    = "In-Game Boosts"
         Action   = {
@@ -425,7 +418,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "NVIDIA Low Latency Mode (Reflex)"
-        Desc     = "Aktiviert NVIDIA Ultra Low Latency Mode. Reduziert den Render-Queue auf 1 Frame weniger Input-Lag. Nur auf NVIDIA GPUs wirksam. Wird automatisch uebersprungen wenn keine NVIDIA GPU erkannt."
+        Desc     = "Aktiviert NVIDIA Ultra Low Latency Mode via Registry. Reduziert den Render-Queue auf 1 Frame — weniger Input-Lag. Nur wirksam auf NVIDIA GPUs. Wird automatisch übersprungen wenn keine NVIDIA GPU erkannt."
         Category = "Gaming"
         Group    = "GPU & Driver"
         Action   = {
@@ -440,7 +433,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Enable MSI Mode (Message Signaled Interrupts)"
-        Desc     = "Aktiviert MSI-Modus fuer GPU und NVMe. Reduziert Interrupt-Latenz erheblich. Reboot empfohlen."
+        Desc     = "Aktiviert MSI-Modus für GPU und NVMe. Reduziert Interrupt-Latenz erheblich. Standard-Windows nutzt Line-Based Interrupts — MSI ist moderner und schneller. Reboot empfohlen."
         Category = "Gaming"
         Group    = "GPU & Driver"
         Action   = {
@@ -455,7 +448,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Enable Hardware-Accelerated GPU Scheduling (HAGS)"
-        Desc     = "Aktiviert HAGS. Windows uebergibt GPU-Scheduling direkt an die Hardware. Reduziert CPU-Overhead und leicht den Input-Lag. Erfordert NVIDIA RTX 2000+ oder AMD RX 5000+ und Windows 10 2004+."
+        Desc     = "Aktiviert HAGS — Windows übergibt GPU-Scheduling direkt an die Hardware statt Software. Reduziert CPU-Overhead und leicht den Input-Lag. Erfordert NVIDIA RTX 2000+ oder AMD RX 5000+ und Windows 10 2004+."
         Category = "Gaming"
         Group    = "GPU & Driver"
         Action   = {
@@ -465,7 +458,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Clear Shader Cache"
-        Desc     = "Leert den NVIDIA bzw. AMD Shader-Cache auf der Festplatte. Sinnvoll nach Treiberupdates oder bei Grafikfehlern."
+        Desc     = "Leert den NVIDIA bzw. AMD Shader-Cache auf der Festplatte. Erzwingt beim nächsten Spielstart eine frische Kompilierung der Shader. Sinnvoll nach Treiberupdates oder bei Grafikfehlern."
         Category = "Gaming"
         Group    = "GPU & Driver"
         Action   = {
@@ -488,7 +481,7 @@ $AllTweaks = @(
     # ── NETWORK ───────────────────────────────────────────────────────
     [PSCustomObject]@{
         Name     = "Disable Nagle's Algorithm (TCPNoDelay)"
-        Desc     = "Deaktiviert Nagles Algorithmus auf allen Netzwerkadaptern. Senkt Ping in Online-Spielen spuerbar da Pakete nicht mehr gebundelt werden."
+        Desc     = "Deaktiviert Nagles Algorithmus auf allen Netzwerkadaptern. Nagle bündelt kleine Datenpakete um Effizienz zu steigern — auf Kosten von Latenz. Deaktivieren senkt Ping in Online-Spielen spürbar."
         Category = "Network"
         Group    = "Latency"
         Action   = {
@@ -503,7 +496,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Set DNS to Cloudflare (1.1.1.1)"
-        Desc     = "Setzt den DNS-Server auf Cloudflare 1.1.1.1 (Primary) und 1.0.0.1 (Secondary). Einer der schnellsten und datenschutzfreundlichsten DNS-Anbieter."
+        Desc     = "Setzt den DNS-Server auf Cloudflare 1.1.1.1 (Primary) und 1.0.0.1 (Secondary). Cloudflare DNS ist einer der schnellsten und datenschutzfreundlichsten DNS-Anbieter weltweit."
         Category = "Network"
         Group    = "DNS"
         Action   = {
@@ -516,7 +509,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable TCP Auto-Tuning"
-        Desc     = "Deaktiviert die automatische TCP-Empfangsfenstergroesse. Kann Latenz-Spikes reduzieren. Bei 1 Gbit+ kann Durchsatz leicht sinken."
+        Desc     = "Deaktiviert die automatische TCP-Empfangsfenstergröße. Kann auf manchen Systemen Latenz-Spikes reduzieren. Bei Highspeed-Internet (1 Gbit+) kann dies den Durchsatz leicht verringern."
         Category = "Network"
         Group    = "TCP"
         Action   = {
@@ -526,7 +519,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable QoS Packet Scheduler Limit"
-        Desc     = "Entfernt das Standard-Limit von 20% Bandbreite das Windows fuer QoS reserviert. Gibt die volle verfuegbare Bandbreite."
+        Desc     = "Entfernt das Standard-Limit von 20% Bandbreite das Windows für QoS reserviert. Gibt dir die volle verfügbare Bandbreite — relevant besonders in Netzwerken mit hohem Traffic."
         Category = "Network"
         Group    = "QoS"
         Action   = {
@@ -536,7 +529,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Large Send Offload (LSO)"
-        Desc     = "Deaktiviert Large Send Offload auf allen aktiven Netzwerkadaptern. Hilft bei instabilem Ping in Online-Spielen."
+        Desc     = "Deaktiviert Large Send Offload auf allen aktiven Netzwerkadaptern. LSO kann auf manchen Systemen zu Ping-Spikes führen. Deaktivieren hilft bei instabilem Ping in Online-Spielen."
         Category = "Network"
         Group    = "Latency"
         Action   = {
@@ -549,7 +542,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Flush DNS Cache"
-        Desc     = "Leert den lokalen DNS-Cache. Sinnvoll nach DNS-Aenderungen oder bei Verbindungsproblemen. Schnell und ohne Nebenwirkungen."
+        Desc     = "Leert den lokalen DNS-Cache. Sinnvoll nach DNS-Änderungen oder bei Verbindungsproblemen. Schnell und ohne Nebenwirkungen."
         Category = "Network"
         Group    = "DNS"
         Action   = {
@@ -565,7 +558,7 @@ $AllTweaks = @(
 [xml]$XAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="WinTweaker v1.1 -- by FloDePin"
+        Title="WinTweaker v1.0 — by FloDePin"
         Height="700" Width="820"
         ResizeMode="CanMinimize"
         WindowStartupLocation="CenterScreen"
@@ -591,6 +584,34 @@ $AllTweaks = @(
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter Property="Background" Value="#c73652"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="Button" x:Key="InfoBtn">
+            <Setter Property="Background" Value="#16213e"/>
+            <Setter Property="Foreground" Value="#aaaaaa"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Width" Value="22"/>
+            <Setter Property="Height" Value="22"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="#444"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="ToolTipService.InitialShowDelay" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="11"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#e94560"/>
+                                <Setter Property="BorderBrush" Value="#e94560"/>
+                                <Setter Property="Foreground" Value="White"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -630,6 +651,9 @@ $AllTweaks = @(
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style TargetType="ScrollViewer">
+            <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+        </Style>
     </Window.Resources>
 
     <Grid Margin="16">
@@ -643,8 +667,8 @@ $AllTweaks = @(
 
         <!-- HEADER -->
         <StackPanel Grid.Row="0" Margin="0,0,0,12">
-            <TextBlock Text="WinTweaker" FontSize="26" FontWeight="Bold" Foreground="#e94560"/>
-            <TextBlock Text="Windows and Gaming Optimizer -- by FloDePin" FontSize="12" Foreground="#888" Margin="2,2,0,0"/>
+            <TextBlock Text="⚡ WinTweaker" FontSize="26" FontWeight="Bold" Foreground="#e94560"/>
+            <TextBlock Text="Windows &amp; Gaming Optimizer — by FloDePin" FontSize="12" Foreground="#888" Margin="2,2,0,0"/>
         </StackPanel>
 
         <!-- HW INFO -->
@@ -654,34 +678,41 @@ $AllTweaks = @(
 
         <!-- TABS -->
         <TabControl Grid.Row="2" Background="#16213e" BorderBrush="#333" Padding="0">
-            <TabItem Header="Windows">
+
+            <!-- WINDOWS TAB -->
+            <TabItem Header="🪟  Windows">
                 <ScrollViewer Background="#1a1a2e" Padding="8">
                     <StackPanel Name="WindowsPanel" Margin="4"/>
                 </ScrollViewer>
             </TabItem>
-            <TabItem Header="Gaming">
+
+            <!-- GAMING TAB -->
+            <TabItem Header="🎮  Gaming">
                 <ScrollViewer Background="#1a1a2e" Padding="8">
                     <StackPanel Name="GamingPanel" Margin="4"/>
                 </ScrollViewer>
             </TabItem>
-            <TabItem Header="Network">
+
+            <!-- NETWORK TAB -->
+            <TabItem Header="🌐  Network">
                 <ScrollViewer Background="#1a1a2e" Padding="8">
                     <StackPanel Name="NetworkPanel" Margin="4"/>
                 </ScrollViewer>
             </TabItem>
+
         </TabControl>
 
         <!-- BUTTONS -->
         <WrapPanel Grid.Row="3" Margin="0,12,0,0" HorizontalAlignment="Center">
-            <Button Name="BtnSelectAll"   Content="Select All"     Style="{StaticResource PrimaryBtn}" Margin="6,0"/>
-            <Button Name="BtnDeselectAll" Content="Deselect All"   Style="{StaticResource PrimaryBtn}" Margin="6,0"/>
-            <Button Name="BtnApply"       Content="Apply Selected" Style="{StaticResource PrimaryBtn}" Margin="6,0" Background="#e94560"/>
-            <Button Name="BtnOpenLog"     Content="Open Log"       Style="{StaticResource PrimaryBtn}" Margin="6,0"/>
+            <Button Name="BtnSelectAll"    Content="☑ Select All"     Style="{StaticResource PrimaryBtn}" Margin="6,0"/>
+            <Button Name="BtnDeselectAll"  Content="☐ Deselect All"   Style="{StaticResource PrimaryBtn}" Margin="6,0"/>
+            <Button Name="BtnApply"        Content="✅ Apply Selected" Style="{StaticResource PrimaryBtn}" Margin="6,0" Background="#e94560"/>
+            <Button Name="BtnOpenLog"      Content="📋 Open Log"       Style="{StaticResource PrimaryBtn}" Margin="6,0"/>
         </WrapPanel>
 
         <!-- STATUS -->
         <Border Grid.Row="4" Background="#16213e" CornerRadius="6" Padding="10,6" Margin="0,10,0,0">
-            <TextBlock Name="StatusText" Text="Ready -- select tweaks and click Apply Selected." Foreground="#aaaaaa" FontSize="12" FontFamily="Consolas"/>
+            <TextBlock Name="StatusText" Text="Ready — select tweaks and click Apply Selected." Foreground="#aaaaaa" FontSize="12" FontFamily="Consolas"/>
         </Border>
     </Grid>
 </Window>
@@ -702,20 +733,21 @@ $BtnDeselect  = $Window.FindName("BtnDeselectAll")
 $BtnOpenLog   = $Window.FindName("BtnOpenLog")
 $StatusText   = $Window.FindName("StatusText")
 
+# Set HW info
 $HwInfoText.Text = $HWInfo
 
 # ─────────────────────────────────────────
-# BUILD TWEAK ROWS
+# BUILD TWEAK ROWS DYNAMICALLY
 # ─────────────────────────────────────────
-$CheckBoxMap = @{}
+$CheckBoxMap = @{}  # Name -> CheckBox
 
 function New-GroupHeader {
     param([string]$Title)
-    $tb            = New-Object Windows.Controls.TextBlock
-    $tb.Text       = "-- $Title"
+    $tb = New-Object Windows.Controls.TextBlock
+    $tb.Text       = $Title
     $tb.FontSize   = 12
     $tb.FontWeight = "SemiBold"
-    $tb.Foreground = New-Brush 0 212 170
+    $tb.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0,212,170))
     $tb.Margin     = New-Object Windows.Thickness(0,14,0,4)
     return $tb
 }
@@ -723,72 +755,53 @@ function New-GroupHeader {
 function New-TweakRow {
     param($Tweak)
 
-    $row             = New-Object Windows.Controls.StackPanel
-    $row.Orientation = "Horizontal"
-    $row.Margin      = New-Object Windows.Thickness(0,3,0,3)
+    $panel = New-Object Windows.Controls.StackPanel
+    $panel.Orientation = "Horizontal"
+    $panel.Margin      = New-Object Windows.Thickness(0,3,0,3)
 
     # Checkbox
-    $cb                       = New-Object Windows.Controls.CheckBox
-    $cb.Content               = $Tweak.Name
-    $cb.Tag                   = $Tweak.Name
-    $cb.VerticalAlignment     = "Center"
-    $cb.Foreground            = New-Brush 221 221 221
-    $cb.FontSize              = 13
-    $cb.Margin                = New-Object Windows.Thickness(0,0,8,0)
+    $cb = New-Object Windows.Controls.CheckBox
+    $cb.Content            = $Tweak.Name
+    $cb.Tag                = $Tweak.Name
+    $cb.VerticalAlignment  = "Center"
+    $cb.Foreground         = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(221,221,221))
+    $cb.FontSize           = 13
+    $cb.Margin             = New-Object Windows.Thickness(0,0,8,0)
     $CheckBoxMap[$Tweak.Name] = $cb
 
-    # Info button — using Style defined inline via XAML to avoid property errors
-    $btn                  = New-Object Windows.Controls.Button
-    $btn.Content          = "?"
-    $btn.Width            = 22
-    $btn.Height           = 22
-    $btn.FontSize         = 11
-    $btn.Cursor           = [System.Windows.Input.Cursors]::Hand
+    # Info button
+    $btn = New-Object Windows.Controls.Button
+    $btn.Content    = "?"
+    $btn.Width      = 22
+    $btn.Height     = 22
+    $btn.FontSize   = 11
+    $btn.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(22,33,62))
+    $btn.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(170,170,170))
+    $btn.BorderBrush     = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(68,68,68))
+    $btn.BorderThickness = New-Object Windows.Thickness(1)
+    $btn.Cursor     = [System.Windows.Input.Cursors]::Hand
     $btn.VerticalAlignment = "Center"
-    $btn.BorderThickness  = New-Object Windows.Thickness(1)
 
-    # Set colors safely via the dispatcher-safe method
-    $btn.SetValue([Windows.Controls.Control]::BackgroundProperty, (New-Brush 22 33 62))
-    $btn.SetValue([Windows.Controls.Control]::ForegroundProperty, (New-Brush 170 170 170))
-    $btn.SetValue([Windows.Controls.Control]::BorderBrushProperty, (New-Brush 68 68 68))
-
-    # Round corners via a simple style
-    $btnStyle = New-Object Windows.Style ([Windows.Controls.Button])
-    $tpl = [Windows.Markup.XamlReader]::Parse(@"
-<ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" TargetType="Button">
-    <Border Background="{TemplateBinding Background}" CornerRadius="11"
-            BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
-        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-    </Border>
-</ControlTemplate>
-"@)
-    $setter = New-Object Windows.Setter ([Windows.Controls.Control]::TemplateProperty, $tpl)
-    $btnStyle.Setters.Add($setter)
-    $btn.Style = $btnStyle
-
-    # Capture variables for closure
     $desc = $Tweak.Desc
     $name = $Tweak.Name
-
+    $btn.Tag = "$desc|||$name"
     $btn.Add_Click({
-        [System.Windows.MessageBox]::Show($desc, "Info: $name", "OK", "Information")
+        $parts = $this.Tag -split '\|\|\|'
+        [System.Windows.MessageBox]::Show($parts[0], ("ℹ️  " + $parts[1]), "OK", "Information")
     })
 
     $btn.Add_MouseEnter({
-        $btn.SetValue([Windows.Controls.Control]::BackgroundProperty, (New-Brush 233 69 96))
-        $btn.SetValue([Windows.Controls.Control]::ForegroundProperty, (New-Brush 255 255 255))
-        $btn.SetValue([Windows.Controls.Control]::BorderBrushProperty, (New-Brush 233 69 96))
+        $this.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(233,69,96))
+        $this.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(255,255,255))
     })
-
     $btn.Add_MouseLeave({
-        $btn.SetValue([Windows.Controls.Control]::BackgroundProperty, (New-Brush 22 33 62))
-        $btn.SetValue([Windows.Controls.Control]::ForegroundProperty, (New-Brush 170 170 170))
-        $btn.SetValue([Windows.Controls.Control]::BorderBrushProperty, (New-Brush 68 68 68))
+        $this.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(22,33,62))
+        $this.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(170,170,170))
     })
 
-    $row.Children.Add($cb)  | Out-Null
-    $row.Children.Add($btn) | Out-Null
-    return $row
+    $panel.Children.Add($cb)  | Out-Null
+    $panel.Children.Add($btn) | Out-Null
+    return $panel
 }
 
 # Fill panels
@@ -797,7 +810,7 @@ foreach ($cat in @("Windows","Gaming","Network")) {
     $panel  = $categories[$cat]
     $groups = $AllTweaks | Where-Object { $_.Category -eq $cat } | Select-Object -ExpandProperty Group -Unique
     foreach ($group in $groups) {
-        $panel.Children.Add((New-GroupHeader $group)) | Out-Null
+        $panel.Children.Add((New-GroupHeader "── $group")) | Out-Null
         $tweaks = $AllTweaks | Where-Object { $_.Category -eq $cat -and $_.Group -eq $group }
         foreach ($tweak in $tweaks) {
             $panel.Children.Add((New-TweakRow $tweak)) | Out-Null
@@ -831,12 +844,13 @@ $BtnApply.Add_Click({
 
     $confirm = [System.Windows.MessageBox]::Show(
         "Apply $($selected.Count) selected tweak(s)?`n`nA system restore point will be created first.",
-        "WinTweaker -- Confirm",
+        "WinTweaker — Confirm",
         "YesNo",
         "Question"
     )
     if ($confirm -ne "Yes") { return }
 
+    # Create Restore Point
     $StatusText.Text = "Creating restore point..."
     try {
         Checkpoint-Computer -Description "WinTweaker Backup" -RestorePointType "MODIFY_SETTINGS" -ErrorAction Stop
@@ -845,6 +859,7 @@ $BtnApply.Add_Click({
         Write-Log "Restore point failed (may already exist): $_"
     }
 
+    # Apply tweaks
     $done  = 0
     $total = $selected.Count
     foreach ($tweak in $selected) {
@@ -854,15 +869,15 @@ $BtnApply.Add_Click({
             & $tweak.Action
             Write-Log "OK: $($tweak.Name)"
         } catch {
-            Write-Log "FAILED: $($tweak.Name) -- $_"
+            Write-Log "FAILED: $($tweak.Name) — $_"
         }
         $done++
     }
 
-    $StatusText.Text = "Done! $done tweak(s) applied. Log: $LogFile"
+    $StatusText.Text = "✅ Done! $done tweak(s) applied. Log: $LogFile"
     [System.Windows.MessageBox]::Show(
-        "$done tweak(s) applied successfully!`n`nSome changes require a restart to take effect.`nLog saved to:`n$LogFile",
-        "WinTweaker -- Done",
+        "✅ $done tweak(s) applied successfully!`n`nSome changes require a restart to take effect.`nLog saved to:`n$LogFile",
+        "WinTweaker — Done",
         "OK",
         "Information"
     )
