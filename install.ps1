@@ -30,7 +30,7 @@ $oldPolicy = Get-ExecutionPolicy -Scope Process
 Set-ExecutionPolicy Bypass -Scope Process -Force
 
 # Download script
-$url    = "https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/WinTweaker_v2.ps1"
+$url    = "https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/WinTweaker_v1.ps1"
 $outDir = "$env:TEMP\WinTweaker"
 $outFile= "$outDir\WinTweaker_v2.ps1"
 
