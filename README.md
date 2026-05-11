@@ -1,11 +1,11 @@
-# ⚡ GameOptimizerPro v3.0
+# ⚡ GameOptimizerPro
 
 > **Windows & Gaming Optimizer** — by FloDePin
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-3.0-red)
+![Version](https://img.shields.io/badge/Version-1.0-red)
 
 ---
 
@@ -164,22 +164,18 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ## 📜 Changelog
 
-### v3.0
+### v1.0
 - 💾 **Added:** RAM & Storage Tab (9 Tweaks) — PageFile, TRIM, Hibernation, NVMe, Memory Compression, Temp Cleanup
 - 🎮 **Added:** 3 neue Gaming Tweaks — Disable WU during Gaming, BG App Throttling, DirectX 12 Optimization
 - 🌐 **Added:** 3 neue Network Tweaks — Throttling Index, TCP ECN/SACK, Google DNS
 - 🐛 **Fixed:** `install.ps1` iex-Crash (führendes `#` Comment verursachte CommandNotFoundException)
 - 🪟 **Fixed:** Konsolenfenster wird über Win32 API versteckt (Kernel32 + User32)
 - ✅ **Fixed:** `?` InfoButtons — Hover-Effekte vollständig zu XAML ControlTemplate.Triggers verschoben
-
-### v2.0
 - ✅ **Fixed:** MessageBox enum bug (`"OK"` → `[MessageBoxButton]::OK`)
 - 🎮 **Added:** MMCSS Gaming Profile, Fullscreen Optimizations, HAGS, MSI Mode, Shader Cache
 - 🌐 **Added:** LSO, QoS Limit, TCP Auto-Tuning
 - 🎨 **Improved:** XAML `ControlTemplate.Triggers` für Buttons und Tabs
 - 📋 **Enhanced:** Logging-System
-
-### v1.0
 - 🚀 Initial release mit Windows, Gaming, Network Tabs
 
 ---
