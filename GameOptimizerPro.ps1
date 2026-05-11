@@ -12,10 +12,10 @@
 #>
 # Force STA apartment state for WPF compatibility
 if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne [System.Threading.ApartmentState]::STA) {
-    $scriptPath = $MyInvocation.MyCommand.Path
-    if (-not $scriptPath) { $scriptPath = $PSCommandPath }
-    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -STA -File `"$scriptPath`"" -Verb RunAs
+    Write-Host "ERROR: Script must run in STA mode. Launch via install.ps1 or add -STA flag." -ForegroundColor Red
+    Read-Host "Press Enter to exit"
     exit
+}
 }
 
 try {
