@@ -11,7 +11,7 @@ Write-Host "  Downloading..." -ForegroundColor Cyan
 try {
     Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
     Write-Host "  Done! Launching..." -ForegroundColor Green
-    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -STA -File `"$dest`"" -Verb RunAs
+    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -STA -NonInteractive -File `"$dest`"" -Verb RunAs -WindowStyle Normal
 } catch {
     Write-Host "  [ERROR] $_" -ForegroundColor Red
     Read-Host "  Press Enter to exit"
