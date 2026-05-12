@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     GameOptimizerPro v1.0 - Windows & Gaming Optimizer
 .DESCRIPTION
@@ -16,9 +16,7 @@ $ErrorActionPreference = "Continue"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
-    "$env:TEMP\GameOptimizerPro_Startup.txt",
-    "$env:USERPROFILE\Desktop\GameOptimizerPro_Startup.txt",
-    "C:\GameOptimizerPro_Startup.txt"
+    "$env:TEMP\GameOptimizerPro_Startup.txt"
 )
 $startupLog = $logPaths[0]
 $logMsg = "[$(Get-Date -f 'HH:mm:ss')] Script gestartet - PS $($PSVersionTable.PSVersion) - User: $env:USERNAME - IsAdmin: $((([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)))"
