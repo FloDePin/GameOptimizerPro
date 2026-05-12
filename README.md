@@ -23,7 +23,7 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 | Tab | Tweaks | Description |
 |-----|--------|-------------|
-| 🪟 Windows 11 | 7 Tweaks | OS-Scan, Win11-Tweaks, Win10-Grauausblendung + Banner |
+| 🪟 Windows | 7 Tweaks | Debloat, Win11-Tweaks, Win10-Grauausblendung + Banner |
 | 🔊 Audio | 6 Tweaks | Audio-Tweaks, eigener Tab |
 | 🎮 GPU Tweaks | 7 Tweaks | 4 NVIDIA + 3 AMD Tweaks, GPU-Erkennung, Brand-Grauausblendung |
 | ⚡ Power Plan | 7 Tweaks | USB, PCI-E, HDD, Display, Sleep, CPU Min/Max |
@@ -32,7 +32,20 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ---
 
-## 🪟 Windows 11 Tab - 7 Tweaks
+## 🪟 Windows Tab - 7 Tweaks
+
+### 🧹 Debloat & System Cleanup
+- **Remove Cortana** — Entfernt den Windows Sprachassistenten
+- **Remove Xbox Apps** — Deaktiviert Xbox und Gaming-bezogene Apps
+- **Remove Microsoft Teams (Personal)** — Entfernt die persönliche Teams-Installation
+- **Remove Copilot** — Deaktiviert Windows Copilot
+- **Remove OneDrive** — Entfernt die OneDrive-Integration
+- **Remove Windows Recall** — Deaktiviert Windows Recall Feature
+- **Remove Other Bloatware** — Entfernt zusätzliche vorinstallierte Bloatware
+
+### 🔐 Privacy-Einstellungen
+- **Disable Telemetry & Data Collection** — Deaktiviert Datenerfassung
+- **Disable Activity History** — Deaktiviert die Aktivitätsverlauf-Speicherung
 
 ### 📦 Windows 11 & 10 Optimization
 - **OS-Scan** — Scannt das Betriebssystem auf Optimierungspotenziale
@@ -119,7 +132,7 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 - **Moderne Dark-Mode UI** — Basierend auf WPF/XAML
 - **Info-Buttons (?)** — Hover über `?` für Erklärungen zu jedem Tweak
-- **6 Tabs für Kategorien** — Windows 11 | Audio | GPU Tweaks | Power Plan | Startup Manager | Language
+- **6 Tabs für Kategorien** — Windows | Audio | GPU Tweaks | Power Plan | Startup Manager | Language
 - **Bulk Selektionen** — Select All / Deselect All Buttons
 - **Live Logging** — Log-Datei kann jederzeit geöffnet werden
 - **Hardware Info** — Zeigt GPU, CPU, RAM an
@@ -141,7 +154,7 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ### v1.0
 - 🚀 **Initial release** mit umfangreicher Feature-Liste
-- 🪟 **Windows 11 Tab** — 7 Tweaks für OS-Optimierung
+- 🪟 **Windows Tab** — 7 Tweaks für OS-Optimierung & Debloat
 - 🔊 **Audio Tab** — 6 dedizierte Audio-Optimierungen
 - 🎮 **GPU Tweaks Tab** — 7 Tweaks (4 NVIDIA + 3 AMD) mit automatischer GPU-Erkennung
 - ⚡ **Power Plan Tab** — 7 Tweaks für Systemenergie-Optimierung
@@ -161,12 +174,13 @@ Ein System Restore Point wird automatisch vor Änderungen erstellt.
 ## 💡 Tipps für maximale Performance
 
 1. **Starte mit Safety** — Erst einige Tweaks testen, dann mehr hinzufügen
-2. **GPU-Tweaks aktivieren** — Automatische Erkennung deiner GPU für beste Ergebnisse
-3. **Power Plan optimieren** — Passe die Einstellungen nach deinen Bedürfnissen an
-4. **Audio-Tweaks für Gaming** — Reduziere Audio-Latenz in F11 Tab
-5. **Startup Manager nutzen** — Beschleunige den Boot durch Startup-Optimierung
-6. **NVIDIA/AMD Treiber aktuell halten** — Macht mehr aus als die meisten Tweaks
-7. **Nach GPU Tweaks neustarten** — GPU-Optimierungen brauchen einen Reboot
+2. **Debloat aktivieren** — Entferne unnötige vorinstallierte Apps für schnelleres System
+3. **GPU-Tweaks aktivieren** — Automatische Erkennung deiner GPU für beste Ergebnisse
+4. **Power Plan optimieren** — Passe die Einstellungen nach deinen Bedürfnissen an
+5. **Audio-Tweaks für Gaming** — Reduziere Audio-Latenz
+6. **Startup Manager nutzen** — Beschleunige den Boot durch Startup-Optimierung
+7. **NVIDIA/AMD Treiber aktuell halten** — Macht mehr aus als die meisten Tweaks
+8. **Nach GPU Tweaks neustarten** — GPU-Optimierungen brauchen einen Reboot
 
 ---
 
