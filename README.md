@@ -23,7 +23,7 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 | Tab | Tweaks | Description |
 |-----|--------|-------------|
-| 🪟 Windows | 7 Tweaks | Debloat, Win11-Tweaks, Win10-Grauausblendung + Banner |
+| 🪟 Windows | 12 Tweaks | Debloat, Datenschutz, Win11-Tweaks, Win10-Grauausblendung + Banner |
 | 🔊 Audio | 6 Tweaks | Audio-Tweaks, eigener Tab |
 | 🎮 GPU Tweaks | 7 Tweaks | 4 NVIDIA + 3 AMD Tweaks, GPU-Erkennung, Brand-Grauausblendung |
 | ⚡ Power Plan | 7 Tweaks | USB, PCI-E, HDD, Display, Sleep, CPU Min/Max |
@@ -32,9 +32,9 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ---
 
-## 🪟 Windows Tab - 7 Tweaks
+## 🪟 Windows Tab - 12 Tweaks
 
-### 🧹 Debloat & System Cleanup
+### 🧹 Debloat & System Cleanup (7 Tweaks)
 - **Remove Cortana** — Entfernt den Windows Sprachassistenten
 - **Remove Xbox Apps** — Deaktiviert Xbox und Gaming-bezogene Apps
 - **Remove Microsoft Teams (Personal)** — Entfernt die persönliche Teams-Installation
@@ -43,11 +43,11 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 - **Remove Windows Recall** — Deaktiviert Windows Recall Feature
 - **Remove Other Bloatware** — Entfernt zusätzliche vorinstallierte Bloatware
 
-### 🔐 Privacy-Einstellungen
+### 🔐 Privacy-Einstellungen (2 Tweaks)
 - **Disable Telemetry & Data Collection** — Deaktiviert Datenerfassung
 - **Disable Activity History** — Deaktiviert die Aktivitätsverlauf-Speicherung
 
-### 📦 Windows 11 & 10 Optimization
+### 📦 Windows 11 & 10 Optimization (3 Tweaks)
 - **OS-Scan** — Scannt das Betriebssystem auf Optimierungspotenziale
 - **Win11 Tweaks** — 7 spezialisierte Optimierungen für Windows 11
 - **Win10 Grauausblendung + Banner** — Optimierte Darstellung für Windows 10-Kompatibilität
@@ -154,7 +154,7 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ### v1.0
 - 🚀 **Initial release** mit umfangreicher Feature-Liste
-- 🪟 **Windows Tab** — 7 Tweaks für OS-Optimierung & Debloat
+- 🪟 **Windows Tab** — 12 Tweaks für OS-Optimierung, Debloat & Datenschutz
 - 🔊 **Audio Tab** — 6 dedizierte Audio-Optimierungen
 - 🎮 **GPU Tweaks Tab** — 7 Tweaks (4 NVIDIA + 3 AMD) mit automatischer GPU-Erkennung
 - ⚡ **Power Plan Tab** — 7 Tweaks für Systemenergie-Optimierung
