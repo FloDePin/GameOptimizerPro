@@ -1,12 +1,3 @@
-# -----------------------------------------
-# STA SELF-RESTART (required for WPF GUI)
-# -----------------------------------------
-if ([System.Threading.Thread]::CurrentThread.ApartmentState -ne [System.Threading.ApartmentState]::STA) {
-    Write-Host "Restarting in STA mode for WPF GUI..." -ForegroundColor Yellow
-    Start-Process powershell -ArgumentList "-STA -ExecutionPolicy Bypass -NoExit -File `"$PSCommandPath`"" -Verb RunAs
-    exit
-}
-
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
@@ -22,7 +13,11 @@ if ([System.Threading.Thread]::CurrentThread.ApartmentState -ne [System.Threadin
     1.0.0
 #>
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
+
+# Startup-Log für Diagnose bei Crash
+$startupLog = "$env:TEMP\GameOptimizerPro_Startup.txt"
+"[$(Get-Date -f 'HH:mm:ss')] Script gestartet" | Out-File $startupLog -Force
 
 try {
 
@@ -30,20 +25,19 @@ Add-Type -AssemblyName PresentationFramework  -ErrorAction SilentlyContinue
 Add-Type -AssemblyName PresentationCore       -ErrorAction SilentlyContinue
 Add-Type -AssemblyName WindowsBase            -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Windows.Forms   -ErrorAction SilentlyContinue
+"[$(Get-Date -f 'HH:mm:ss')] Assemblies geladen" | Out-File $startupLog -Append
 
 # -----------------------------------------
 # HIDE CONSOLE WINDOW (Win32 API)
+# Console wird erst NACH dem Fenster-Start versteckt
 # -----------------------------------------
 if (-not ([System.Management.Automation.PSTypeName]'Native.Win32Console').Type) {
     Add-Type -Name Win32Console -Namespace Native -MemberDefinition @"
         [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
         [DllImport("user32.dll")]   public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-"@
+"@ -ErrorAction SilentlyContinue
 }
-$consoleHwnd = [Native.Win32Console]::GetConsoleWindow()
-if ($consoleHwnd -ne [IntPtr]::Zero) {
-    [Native.Win32Console]::ShowWindow($consoleHwnd, 0) | Out-Null
-}
+# Console bleibt sichtbar bis Fenster geladen — wird unten versteckt
 
 # -----------------------------------------
 # ADMIN CHECK
@@ -52,6 +46,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     [System.Windows.MessageBox]::Show("Please run this script as Administrator!", "GameOptimizerPro - Admin Required", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     exit
 }
+"[$(Get-Date -f 'HH:mm:ss')] Admin-Check OK" | Out-File $startupLog -Append
 
 # -----------------------------------------
 # HARDWARE DETECTION
@@ -90,6 +85,7 @@ $IsWin10 = $OSBuild -ge 10240 -and -not $IsWin11
 $OSShort = if ($IsWin11) { "Win11 (Build $OSBuild)" } elseif ($IsWin10) { "Win10 (Build $OSBuild)" } else { $OSName }
 
 $HWInfo  = "GPU: $GPU   |   CPU: $CPU   |   RAM: $RAM GB   |   $NVMeInfo   |   $OSShort"
+"[$(Get-Date -f 'HH:mm:ss')] Hardware erkannt: $HWInfo" | Out-File $startupLog -Append
 
 # -----------------------------------------
 # LOGGING
@@ -1812,6 +1808,9 @@ $TweakDescEN = @{
     "CPU Maximum Processor State = 100%"          = "Sets maximum CPU state to 100%. Ensures Windows never artificially caps the CPU. Relevant on laptops and systems with aggressive thermal policies."
 }
 # -----------------------------------------
+"[$(Get-Date -f 'HH:mm:ss')] Tweaks definiert ($($AllTweaks.Count) Stueck)" | Out-File $startupLog -Append
+"[$(Get-Date -f 'HH:mm:ss')] XAML wird geladen..." | Out-File $startupLog -Append
+
 [xml]$XAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -2014,8 +2013,21 @@ $TweakDescEN = @{
 "@
 
 # Parse XAML
-$Reader = New-Object System.Xml.XmlNodeReader $XAML
-$Window = [Windows.Markup.XamlReader]::Load($Reader)
+# Parse XAML — eigener try/catch damit Fehler sichtbar bleibt
+try {
+    $Reader = New-Object System.Xml.XmlNodeReader $XAML
+    $Window = [Windows.Markup.XamlReader]::Load($Reader)
+    "[$(Get-Date -f 'HH:mm:ss')] XAML geladen, Fenster erstellt" | Out-File $startupLog -Append
+} catch {
+    "[$(Get-Date -f 'HH:mm:ss')] XAML FEHLER: $_" | Out-File $startupLog -Append
+    [System.Windows.Forms.MessageBox]::Show(
+        "XAML-Ladefehler:`n$_`n`nDetails: $startupLog",
+        "GameOptimizerPro - XAML Error",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error
+    )
+    exit
+}
 
 # Get controls
 $HwInfoText     = $Window.FindName("HwInfoText")
@@ -2154,7 +2166,7 @@ foreach ($cat in @("Windows","Gaming","Network","RAM & Storage","Windows 11","Au
         $noticeBlock.FontSize     = 12
         $noticeBlock.FontWeight   = "SemiBold"
         $noticeBlock.Margin       = New-Object Windows.Thickness(0,4,0,10)
-        $noticeBlock.TextWrapping = "Wrap"
+        $noticeBlock.TextWrapping = [Windows.TextWrapping]::Wrap
         $panel.Children.Add($noticeBlock) | Out-Null
     }
 
@@ -2174,7 +2186,7 @@ foreach ($cat in @("Windows","Gaming","Network","RAM & Storage","Windows 11","Au
         $gpuNotice.FontSize     = 12
         $gpuNotice.FontWeight   = "SemiBold"
         $gpuNotice.Margin       = New-Object Windows.Thickness(0,4,0,10)
-        $gpuNotice.TextWrapping = "Wrap"
+        $gpuNotice.TextWrapping = [Windows.TextWrapping]::Wrap
         $panel.Children.Add($gpuNotice) | Out-Null
     }
 
@@ -2608,6 +2620,16 @@ $BtnStartup.Add_Click({
 # LAUNCH
 # -----------------------------------------
 Write-Log "GameOptimizerPro v1.0 started | $HWInfo"
+"[$(Get-Date -f 'HH:mm:ss')] Alles OK — ShowDialog wird aufgerufen" | Out-File $startupLog -Append
+
+# Console JETZT verstecken — erst nachdem alles geladen ist
+try {
+    $consoleHwnd = [Native.Win32Console]::GetConsoleWindow()
+    if ($consoleHwnd -ne [IntPtr]::Zero) {
+        [Native.Win32Console]::ShowWindow($consoleHwnd, 0) | Out-Null
+    }
+} catch { }
+
 $Window.ShowDialog() | Out-Null
 
 } catch {
@@ -2625,6 +2647,4 @@ $Window.ShowDialog() | Out-Null
     } catch { }
     "$((Get-Date).ToString()) STARTUP ERROR Line $errLine : $errMsg" |
         Out-File "$env:TEMP\GameOptimizerPro_Error.txt" -Append
-    # Keep the console open so the user can read the error
-    try { Read-Host "Druecke Enter zum Beenden / Press Enter to exit" } catch {}
 }
