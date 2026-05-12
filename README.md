@@ -23,16 +23,16 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 | Tab | Tweaks | Description |
 |-----|--------|-------------|
-| 🪟 Windows 11 (F9) | 7 Tweaks | OS-Scan, Win11-Tweaks, Win10-Grauausblendung + Banner |
-| 🔊 Audio (F11) | 6 Tweaks | Audio-Tweaks, eigener Tab |
-| 🎮 GPU Tweaks (F14) | 7 Tweaks | 4 NVIDIA + 3 AMD Tweaks, GPU-Erkennung, Brand-Grauausblendung |
-| ⚡ Power Plan (F13) | 7 Tweaks | USB, PCI-E, HDD, Display, Sleep, CPU Min/Max |
-| 🚀 Startup Manager (F10) | ✅ | Eigenes Fenster, HKCU/HKLM/Run32, Disable/Enable/Refresh |
-| 🌍 Language DE/EN (F15) | ✅ | 80 EN-Beschreibungen, Toggle-Button, live umschaltbar |
+| 🪟 Windows 11 | 7 Tweaks | OS-Scan, Win11-Tweaks, Win10-Grauausblendung + Banner |
+| 🔊 Audio | 6 Tweaks | Audio-Tweaks, eigener Tab |
+| 🎮 GPU Tweaks | 7 Tweaks | 4 NVIDIA + 3 AMD Tweaks, GPU-Erkennung, Brand-Grauausblendung |
+| ⚡ Power Plan | 7 Tweaks | USB, PCI-E, HDD, Display, Sleep, CPU Min/Max |
+| 🚀 Startup Manager | ✅ | Eigenes Fenster, HKCU/HKLM/Run32, Disable/Enable/Refresh |
+| 🌍 Language DE/EN | ✅ | 80 EN-Beschreibungen, Toggle-Button, live umschaltbar |
 
 ---
 
-## 🪟 Windows 11 Tab (F9) - 7 Tweaks
+## 🪟 Windows 11 Tab - 7 Tweaks
 
 ### 📦 Windows 11 & 10 Optimization
 - **OS-Scan** — Scannt das Betriebssystem auf Optimierungspotenziale
@@ -41,7 +41,7 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ---
 
-## 🔊 Audio Tab (F11) - 6 Tweaks
+## 🔊 Audio Tab - 6 Tweaks
 
 ### 🎵 Audio-Optimierungen
 - **6 Audio-Tweaks** — Professionelle Audiooptimierungen in eigenem Tab
@@ -50,7 +50,7 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ---
 
-## 🎮 GPU Tweaks Tab (F14) - 7 Tweaks
+## 🎮 GPU Tweaks Tab - 7 Tweaks
 
 ### NVIDIA Optimierungen (4 Tweaks)
 - **NVIDIA GPU Detection** — Automatische Erkennung der GPU
@@ -65,7 +65,7 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ---
 
-## ⚡ Power Plan Tab (F13) - 7 Tweaks
+## ⚡ Power Plan Tab - 7 Tweaks
 
 ### 🔋 Systemenergie-Optimierungen
 - **USB Power Management** — USB-Energieverwaltung optimieren
@@ -78,7 +78,7 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ---
 
-## 🚀 Startup Manager (F10)
+## 🚀 Startup Manager
 
 ### 🖥️ Startup-Programme verwalten
 - **Eigenes Fenster** — Dedizierte UI für Startup-Verwaltung
@@ -88,7 +88,7 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ---
 
-## 🌍 Language Toggle (F15) - DE/EN
+## 🌍 Language Toggle - DE/EN
 
 ### 🗣️ Mehrsprachigkeit
 - **80+ englische Beschreibungen** — Vollständige EN-Lokalisierung
@@ -141,12 +141,12 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ### v1.0
 - 🚀 **Initial release** mit umfangreicher Feature-Liste
-- 🪟 **Windows 11 Tab (F9)** — 7 Tweaks für OS-Optimierung
-- 🔊 **Audio Tab (F11)** — 6 dedizierte Audio-Optimierungen
-- 🎮 **GPU Tweaks Tab (F14)** — 7 Tweaks (4 NVIDIA + 3 AMD) mit automatischer GPU-Erkennung
-- ⚡ **Power Plan Tab (F13)** — 7 Tweaks für Systemenergie-Optimierung
-- 🚀 **Startup Manager (F10)** — Verwaltung von Auto-Start-Programmen
-- 🌍 **Language Support (F15)** — 80+ Beschreibungen in EN, live umschaltbar
+- 🪟 **Windows 11 Tab** — 7 Tweaks für OS-Optimierung
+- 🔊 **Audio Tab** — 6 dedizierte Audio-Optimierungen
+- 🎮 **GPU Tweaks Tab** — 7 Tweaks (4 NVIDIA + 3 AMD) mit automatischer GPU-Erkennung
+- ⚡ **Power Plan Tab** — 7 Tweaks für Systemenergie-Optimierung
+- 🚀 **Startup Manager** — Verwaltung von Auto-Start-Programmen
+- 🌍 **Language Support** — 80+ Beschreibungen in EN, live umschaltbar
 - 🌐 **Mehrsprachige UI** — Deutsch und Englisch voll unterstützt
 
 ---
