@@ -33,8 +33,8 @@ Add-Type -AssemblyName PresentationFramework  -ErrorAction SilentlyContinue
 Add-Type -AssemblyName PresentationCore       -ErrorAction SilentlyContinue
 Add-Type -AssemblyName WindowsBase            -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Windows.Forms   -ErrorAction SilentlyContinue
-foreach ($p in $logPaths) { try { [$(Get-Date -f 'HH:mm:ss')] Assemblies geladen | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
-Write-Host [$(Get-Date -f 'HH:mm:ss')] Assemblies geladen -ForegroundColor DarkGray
+foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] Assemblies geladen" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
+Write-Host "[$(Get-Date -f 'HH:mm:ss')] Assemblies geladen" -ForegroundColor DarkGray
 
 # -----------------------------------------
 # HIDE CONSOLE WINDOW (Win32 API)
@@ -55,8 +55,8 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     [System.Windows.MessageBox]::Show("Please run this script as Administrator!", "GameOptimizerPro - Admin Required", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     exit
 }
-foreach ($p in $logPaths) { try { [$(Get-Date -f 'HH:mm:ss')] Admin-Check OK | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
-Write-Host [$(Get-Date -f 'HH:mm:ss')] Admin-Check OK -ForegroundColor DarkGray
+foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] Admin-Check OK" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
+Write-Host "[$(Get-Date -f 'HH:mm:ss')] Admin-Check OK" -ForegroundColor DarkGray
 
 # -----------------------------------------
 # HARDWARE DETECTION
@@ -95,8 +95,8 @@ $IsWin10 = $OSBuild -ge 10240 -and -not $IsWin11
 $OSShort = if ($IsWin11) { "Win11 (Build $OSBuild)" } elseif ($IsWin10) { "Win10 (Build $OSBuild)" } else { $OSName }
 
 $HWInfo  = "GPU: $GPU   |   CPU: $CPU   |   RAM: $RAM GB   |   $NVMeInfo   |   $OSShort"
-foreach ($p in $logPaths) { try { [$(Get-Date -f 'HH:mm:ss')] Hardware erkannt: $HWInfo | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
-Write-Host [$(Get-Date -f 'HH:mm:ss')] Hardware erkannt: $HWInfo -ForegroundColor DarkGray
+foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] Hardware erkannt: $HWInfo" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
+Write-Host "[$(Get-Date -f 'HH:mm:ss')] Hardware erkannt: $HWInfo" -ForegroundColor DarkGray
 
 # -----------------------------------------
 # LOGGING
@@ -1819,10 +1819,10 @@ $TweakDescEN = @{
     "CPU Maximum Processor State = 100%"          = "Sets maximum CPU state to 100%. Ensures Windows never artificially caps the CPU. Relevant on laptops and systems with aggressive thermal policies."
 }
 # -----------------------------------------
-foreach ($p in $logPaths) { try { [$(Get-Date -f 'HH:mm:ss')] Tweaks definiert ($($AllTweaks.Count) Stueck) | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
-Write-Host [$(Get-Date -f 'HH:mm:ss')] Tweaks definiert ($($AllTweaks.Count) Stueck) -ForegroundColor DarkGray
-foreach ($p in $logPaths) { try { [$(Get-Date -f 'HH:mm:ss')] XAML wird geladen... | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
-Write-Host [$(Get-Date -f 'HH:mm:ss')] XAML wird geladen... -ForegroundColor DarkGray
+foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] Tweaks definiert ($($AllTweaks.Count) Stueck)" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
+Write-Host "[$(Get-Date -f 'HH:mm:ss')] Tweaks definiert ($($AllTweaks.Count) Stueck)" -ForegroundColor DarkGray
+foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] XAML wird geladen..." | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
+Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML wird geladen..." -ForegroundColor DarkGray
 
 [xml]$XAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -2030,11 +2030,11 @@ Write-Host [$(Get-Date -f 'HH:mm:ss')] XAML wird geladen... -ForegroundColor Dar
 try {
     $Reader = New-Object System.Xml.XmlNodeReader $XAML
     $Window = [Windows.Markup.XamlReader]::Load($Reader)
-    foreach ($p in $logPaths) { try { [$(Get-Date -f 'HH:mm:ss')] XAML geladen, Fenster erstellt | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
-Write-Host [$(Get-Date -f 'HH:mm:ss')] XAML geladen, Fenster erstellt -ForegroundColor DarkGray
+    foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] XAML geladen, Fenster erstellt" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
+Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML geladen, Fenster erstellt" -ForegroundColor DarkGray
 } catch {
-    foreach ($p in $logPaths) { try { [$(Get-Date -f 'HH:mm:ss')] XAML FEHLER: $_ | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
-Write-Host [$(Get-Date -f 'HH:mm:ss')] XAML FEHLER: $_ -ForegroundColor DarkGray
+    foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] XAML FEHLER: $_" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
+Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML FEHLER: $_" -ForegroundColor DarkGray
     [System.Windows.Forms.MessageBox]::Show(
         "XAML-Ladefehler:`n$_`n`nDetails: $startupLog",
         "GameOptimizerPro - XAML Error",
@@ -2635,8 +2635,8 @@ $BtnStartup.Add_Click({
 # LAUNCH
 # -----------------------------------------
 Write-Log "GameOptimizerPro v1.0 started | $HWInfo"
-foreach ($p in $logPaths) { try { [$(Get-Date -f 'HH:mm:ss')] Alles OK — ShowDialog wird aufgerufen | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
-Write-Host [$(Get-Date -f 'HH:mm:ss')] Alles OK — ShowDialog wird aufgerufen -ForegroundColor DarkGray
+foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] Alles OK — ShowDialog wird aufgerufen" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
+Write-Host "[$(Get-Date -f 'HH:mm:ss')] Alles OK — ShowDialog wird aufgerufen" -ForegroundColor DarkGray
 
 # Console JETZT verstecken — erst nachdem alles geladen ist
 try {
