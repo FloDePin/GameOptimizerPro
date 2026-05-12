@@ -786,7 +786,7 @@ $AllTweaks = @(
                 }
                 # Global stornvme driver: disable idle power management for lower latency
                 reg add "HKLM\SYSTEM\CurrentControlSet\Services\stornvme\Parameters\Device" /v IdlePowerEnabled /t REG_DWORD /d 0 /f 2>$null | Out-Null
-                Write-Log "NVMe Queue Depth optimized ($($NVMeDisks.Count) drive(s))"
+                Write-Log ("NVMe Queue Depth optimized (" + $NVMeDisks.Count + " drive(s))")
             } else {
                 Write-Log "NVMe Queue Depth skipped (no NVMe drive detected)"
             }
@@ -817,7 +817,7 @@ $AllTweaks = @(
                     reg add $regPath /v UserWriteCacheSetting /t REG_DWORD /d 1 /f | Out-Null
                     $count++
                 }
-                Write-Log "Write-Cache Buffer Flushing disabled ($count disk(s) updated)"
+                Write-Log ("Write-Cache Buffer Flushing disabled (" + $count + " disk(s) updated)")
             }
         }
     },
@@ -945,7 +945,7 @@ $AllTweaks = @(
                         -Value 1 -Type DWord -ErrorAction SilentlyContinue
                     $count++
                 }
-                Write-Log "Audio Enhancements disabled ($count device(s))"
+                Write-Log ("Audio Enhancements disabled (" + $count + " device(s))")
             } else {
                 Write-Log "Audio Enhancements: no render devices found"
             }
