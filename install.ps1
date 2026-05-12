@@ -13,14 +13,10 @@ try {
     Write-Host "  Download complete!" -ForegroundColor Green
     Write-Host "  Launching as Administrator..." -ForegroundColor Yellow
     Write-Host ""
-    # -STA ist PFLICHT fuer WPF-GUIs; -NoProfile beschleunigt den Start
-    Start-Process powershell -ArgumentList "-STA -ExecutionPolicy Bypass -NoProfile -File `"$dest`"" -Verb RunAs
-    Write-Host "  GameOptimizerPro wurde gestartet!" -ForegroundColor Green
+    Start-Process powershell.exe -ArgumentList "-STA -ExecutionPolicy Bypass -File `"$dest`"" -Verb RunAs
 } catch {
-    Write-Host "  [ERROR] Download fehlgeschlagen: $_" -ForegroundColor Red
-    Write-Host "  Stelle sicher dass du mit dem Internet verbunden bist." -ForegroundColor Gray
+    Write-Host "  [ERROR] Download failed: $_" -ForegroundColor Red
+    Write-Host "  Make sure you have internet access and the file exists on GitHub." -ForegroundColor Gray
     Write-Host ""
+    Read-Host "  Press Enter to exit"
 }
-
-# Fenster offen halten damit Meldungen lesbar bleiben
-Read-Host "`n  Druecke Enter zum Beenden"
