@@ -19,6 +19,25 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ---
 
+## 📥 Downloads
+
+- **Latest Release:** [v1.0](https://github.com/FloDePin/GameOptimizerPro/releases/tag/v1.0)
+- **Installation Guide:** See Quick Start above
+- **Fully Portable** — No installation required!
+
+---
+
+## 📸 Visual Preview
+
+### GUI Übersicht
+Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
+- 🎨 **Dark-Mode UI** — Moderne WPF/XAML Oberfläche
+- 🖱️ **Intuitive Navigation** — 6 Tabs für alle Funktionen
+- ℹ️ **Info-Buttons** — Detaillierte Erklärungen für jeden Tweak
+- 📊 **System Info** — GPU, CPU, RAM Status in Echtzeit
+
+---
+
 ## ✨ Features
 
 | Tab | Tweaks | Description |
@@ -34,7 +53,7 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ## 🪟 Windows Tab - 12 Tweaks
 
-### 🧹 Debloat & System Cleanup (7 Tweaks)
+### 🧹 Debloat & System Cleanup
 - **Remove Cortana** — Entfernt den Windows Sprachassistenten
 - **Remove Xbox Apps** — Deaktiviert Xbox und Gaming-bezogene Apps
 - **Remove Microsoft Teams (Personal)** — Entfernt die persönliche Teams-Installation
@@ -43,13 +62,13 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 - **Remove Windows Recall** — Deaktiviert Windows Recall Feature
 - **Remove Other Bloatware** — Entfernt zusätzliche vorinstallierte Bloatware
 
-### 🔐 Privacy-Einstellungen (2 Tweaks)
+### 🔐 Privacy-Einstellungen
 - **Disable Telemetry & Data Collection** — Deaktiviert Datenerfassung
 - **Disable Activity History** — Deaktiviert die Aktivitätsverlauf-Speicherung
 
-### 📦 Windows 11 & 10 Optimization (3 Tweaks)
+### 📦 Windows 11 & 10 Optimization
 - **OS-Scan** — Scannt das Betriebssystem auf Optimierungspotenziale
-- **Win11 Tweaks** — 7 spezialisierte Optimierungen für Windows 11
+- **Win11 Tweaks** — Spezialisierte Optimierungen für Windows 11
 - **Win10 Grauausblendung + Banner** — Optimierte Darstellung für Windows 10-Kompatibilität
 
 ---
@@ -116,6 +135,22 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 - **Windows 10 / 11**
 - **PowerShell 5.1+**
 - **Run as Administrator** (erforderlich!)
+- **Internet Connection** — Für Download (nur beim ersten Start)
+
+---
+
+## ✅ Kompatibilität
+
+### Getestete Windows Versionen
+- ✅ **Windows 11 21H2+** — Vollständig getestet
+- ✅ **Windows 11 22H2+** — Vollständig getestet
+- ✅ **Windows 10 20H2** — Vollständig kompatibel
+- ✅ **Windows 10 21H2** — Vollständig kompatibel
+
+### GPU Kompatibilität
+- ✅ **NVIDIA** — GeForce RTX Serie (alle modernen GPUs)
+- ✅ **AMD** — Radeon RX Serie (alle modernen GPUs)
+- ⚠️ **Intel Arc** — Begrenzte Unterstützung (nutzt AMD-Tweaks)
 
 ---
 
@@ -125,6 +160,7 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 ✅ **Detailliertes Logging** — Alle Aktionen werden in `%TEMP%\GameOptimizerPro_*.log` protokolliert  
 ✅ **Hardware Detection** — GPU-spezifische Tweaks werden automatisch gefiltert  
 ✅ **Vollständig reversibel** — Alle Tweaks können über System Restore rückgängig gemacht werden  
+✅ **Keine Malware** — Open-Source, vollständig überprüfbar
 
 ---
 
@@ -150,6 +186,38 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ---
 
+## 🆘 Troubleshooting
+
+### Problem: "Execution of scripts is disabled"
+**Lösung:**
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+### Problem: Script startet nicht
+**Lösung:**
+- Stelle sicher, dass du **Administrator-Rechte** hast
+- Versuche: `powershell -ExecutionPolicy Bypass -File GameOptimizerPro.ps1`
+
+### Problem: GPU-Tweaks funktionieren nicht
+**Lösung:**
+- Stelle sicher, dass deine GPU-Treiber aktuell sind
+- Neustarten nach GPU-Tweaks erforderlich!
+- Überprüfe die Log-Datei: `%TEMP%\GameOptimizerPro_*.log`
+
+### Problem: Tweaks wurden nicht angewendet
+**Lösung:**
+- Neustarten erforderlich für viele Tweaks
+- Überprüfe, ob du die Tweaks wirklich aktiviert hast
+- Schaue in die Log-Datei für Fehlerdetails
+
+### Problem: System läuft langsamer nach Tweaks
+**Lösung:**
+- Nutze System Restore um alle Änderungen rückgängig zu machen
+- Starte mit weniger Tweaks und teste dann mehr
+
+---
+
 ## 📜 Changelog
 
 ### v1.0
@@ -167,7 +235,8 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 ## ⚠️ Disclaimer
 
 **Use at your own risk.** Bitte überprüfe das Script vor der Ausführung.  
-Ein System Restore Point wird automatisch vor Änderungen erstellt.
+Ein System Restore Point wird automatisch vor Änderungen erstellt.  
+Der Autor haftet nicht für Systemschäden durch unsachgemäße Verwendung.
 
 ---
 
@@ -181,6 +250,45 @@ Ein System Restore Point wird automatisch vor Änderungen erstellt.
 6. **Startup Manager nutzen** — Beschleunige den Boot durch Startup-Optimierung
 7. **NVIDIA/AMD Treiber aktuell halten** — Macht mehr aus als die meisten Tweaks
 8. **Nach GPU Tweaks neustarten** — GPU-Optimierungen brauchen einen Reboot
+9. **Logs überprüfen** — Bei Problemen die Log-Datei ansehen für Fehlerdetails
+10. **System Restore nutzen** — Alle Tweaks können jederzeit rückgängig gemacht werden
+
+---
+
+## 🤝 Beitrag & Feedback
+
+### Bugs melden
+Falls du einen Bug findest, erstelle bitte einen [Issue](https://github.com/FloDePin/GameOptimizerPro/issues)
+
+### Feature-Wünsche
+Hast du eine Idee für ein neues Feature? [Teile es mit uns!](https://github.com/FloDePin/GameOptimizerPro/issues)
+
+### Support
+- 📧 E-Mail: sixtplage@googlemail.com
+- 🐛 GitHub Issues: [Issues](https://github.com/FloDePin/GameOptimizerPro/issues)
+
+---
+
+## 📋 Geplante Features für zukünftige Versionen
+
+- 🎮 **Gaming Boost Profile** — Vordefinierte Optimierungsprofile für beliebte Games
+- 🌐 **Network Optimization** — Netzwerk-Latenz reduzieren
+- 💾 **Disk Cleanup** — Automatische Speicherbereinigung
+- 🔄 **Backup & Restore** — Registry-Backups vor Tweaks
+- 🌙 **Auto-Scheduler** — Zeitgesteuerte Optimierungen
+
+---
+
+## 📄 Lizenz
+
+Dieses Projekt ist unter der **MIT License** lizenziert. Siehe [LICENSE](LICENSE) für Details.
+
+---
+
+## 👨‍💻 Über den Autor
+
+**FloDePin** — Windows & Gaming Enthusiast  
+Leidenschaft für System-Optimierung und Performance-Tuning
 
 ---
 
