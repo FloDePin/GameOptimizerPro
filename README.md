@@ -19,13 +19,7 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 
 ---
 
-## 📥 Downloads
 
-- **Latest Release:** [v1.0](https://github.com/FloDePin/GameOptimizerPro/releases/tag/v1.0)
-- **Installation Guide:** See Quick Start above
-- **Fully Portable** — No installation required!
-
----
 
 ## 📸 Visual Preview
 
