@@ -249,7 +249,7 @@ Falls du einen Bug findest, erstelle bitte einen [Issue](https://github.com/FloD
 Hast du eine Idee für ein neues Feature? [Teile es mit uns!](https://github.com/FloDePin/GameOptimizerPro/issues)
 
 ### Support
-- 📧 E-Mail: sixtplage@googlemail.com
+- 📧 E-Mail: flodepin@googlemail.com
 - 🐛 GitHub Issues: [Issues](https://github.com/FloDePin/GameOptimizerPro/issues)
 
 ---
