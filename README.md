@@ -170,15 +170,6 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 
 ---
 
-## 📁 Files
-
-| File | Description |
-|------|-------------|
-| `GameOptimizerPro.ps1` | Hauptscript — GUI-Optimizer mit allen Tweaks |
-| `install.ps1` | One-Liner Installer / Launcher |
-| `README.md` | Diese Datei |
-
----
 
 ## 🆘 Troubleshooting
 
