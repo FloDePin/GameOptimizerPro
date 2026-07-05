@@ -5,7 +5,7 @@
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.1-red)
+![Version](https://img.shields.io/badge/Version-1.1.1-red)
 
 ---
 
@@ -256,7 +256,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 📜 Changelog
 
-### v1.1.1 (lokaler Patch, noch nicht veröffentlicht)
+### v1.1.1 ⭐ **CURRENT**
 - 🐛 **Bugfix:** 3 Tweaks (Power Throttling, Bing-Suche, Svchost-Reduktion) wurden durch einen Copy-Paste-Fehler bei jedem Programmstart automatisch wieder rückgängig gemacht — behoben
 - 🌍 **Bugfix (Sprache):** Auf nicht-englischem Windows (z.B. Deutsch) lieferte der Status-Check für "Disable TCP Auto-Tuning" immer "unbekannt" statt des echten Status (netsh-Textsuche war auf Englisch hartkodiert) — jetzt sprachunabhängig via `Get-NetTCPSetting`
 - 🌍 **Bugfix (Sprache):** "Revert All" konnte den Energiesparplan "Balanced" auf deutschem Windows nie finden ("Ausbalanciert") und hat den Revert fälschlich als erfolgreich geloggt, obwohl nichts passiert ist — jetzt über die feste, sprachunabhängige Windows-GUID gelöst
@@ -267,7 +267,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 - 📶 **Live Netzwerk-Info + Ping-Test** im Network-Tab (Adapter, Gateway, DNS, Ping zu Gateway/1.1.1.1)
 - 📊 **Neuer [DASH] Dashboard Tab** — Live-Systemstatus (Power Plan, Timer-Auflösung, aktive Tweaks) sowie Snapshot/Vergleich für Vorher-Nachher-Auswertung
 
-### v1.1 ⭐ **CURRENT**
+### v1.1
 - ✨ **3 neue Performance-Tweaks** im Windows-Tab:
   - **Disable Power Throttling** — Verhindert EcoQoS-Drosselung bei Gaming
   - **Disable Bing in Windows Search** — Nur lokale Suche, kein Datenaustausch
