@@ -1,0 +1,12 @@
+# Enforce LF line endings for all text files in this repo.
+#
+# The install.ps1 integrity check compares the downloaded GameOptimizerPro.ps1
+# against a fixed SHA256 hash (see CHECKSUMS.txt). That hash is line-ending
+# sensitive: if the file were ever committed with CRLF, raw.githubusercontent
+# would serve different bytes and the checksum would fail for every user.
+# Pinning LF here keeps the published hash stable no matter which OS commits.
+
+* text=auto eol=lf
+*.ps1 text eol=lf
+*.md  text eol=lf
+*.txt text eol=lf
