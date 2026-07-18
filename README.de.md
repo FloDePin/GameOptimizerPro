@@ -5,7 +5,7 @@
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.1.1-red)
+![Version](https://img.shields.io/badge/Version-1.2.0-red)
 
 🇬🇧 [English](README.md) | 🇩🇪 **Deutsch**
 
@@ -39,7 +39,7 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 
 | Tab | Features | Description |
 |-----|----------|-------------|
-| 🪟 Windows | 15 Tweaks | Debloat, Datenschutz, Win11-Tweaks, Performance-Tweaks |
+| 🪟 Windows | 22 Tweaks | Debloat, Datenschutz, Win11-Tweaks, Performance-Tweaks + CTT Essentials |
 | 🌐 Network | 10 Tweaks | Nagle, LSO, DNS, TCP-Tuning, QoS, Adapter Power Saving, Delivery Optimization + Live Ping-Test |
 | 🔊 Audio | 6 Tweaks | Audio-Tweaks, eigener Tab |
 | 🎮 GPU Tweaks | 7 Tweaks | 4 NVIDIA + 3 AMD Tweaks, GPU-Erkennung, Brand-Grauausblendung |
@@ -258,7 +258,18 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 📜 Changelog
 
-### v1.1.1 ⭐ **CURRENT**
+### v1.2.0 ⭐ **CURRENT**
+- 🧰 **7 neue „CTT Essentials"-Tweaks** im Windows-Tab (Parität zu Chris Titus Tech WinUtil), jeder mit Apply/Revert/Status-Check:
+  - **Prevent Device Companion Apps** — blockiert Geräte-Metadaten-Downloads + automatisch vorgeschlagene Companion-Apps
+  - **Disable Consumer Features** — stoppt automatisch installierte Vorschlags-Apps/Spiele im Startmenü
+  - **Disable Windows Platform Binary Table (WPBT)** — verhindert, dass OEM-Firmware beim Boot Programme einschleust
+  - **Disable Store Recommended Search Results** — entfernt gesponserte Ergebnisse im Microsoft Store
+  - **Enable Start Menu Previous Layout** — klassisches Startmenü auf unterstützten Win11-Builds
+  - **Disable File Explorer Automatic Folder Discovery** — öffnet große Ordner schneller
+  - **Run Disk Cleanup** — automatisierte cleanmgr- + DISM-Komponentenbereinigung
+- 📇 Registry-Keys 1:1 aus der originalen CTT-WinUtil-Config übernommen (Genauigkeit)
+
+### v1.1.1
 - 🐛 **Bugfix:** 3 Tweaks (Power Throttling, Bing-Suche, Svchost-Reduktion) wurden durch einen Copy-Paste-Fehler bei jedem Programmstart automatisch wieder rückgängig gemacht — behoben
 - 🌍 **Bugfix (Sprache):** Auf nicht-englischem Windows (z.B. Deutsch) lieferte der Status-Check für "Disable TCP Auto-Tuning" immer "unbekannt" statt des echten Status (netsh-Textsuche war auf Englisch hartkodiert) — jetzt sprachunabhängig via `Get-NetTCPSetting`
 - 🌍 **Bugfix (Sprache):** "Revert All" konnte den Energiesparplan "Balanced" auf deutschem Windows nie finden ("Ausbalanciert") und hat den Revert fälschlich als erfolgreich geloggt, obwohl nichts passiert ist — jetzt über die feste, sprachunabhängige Windows-GUID gelöst

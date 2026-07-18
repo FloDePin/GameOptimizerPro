@@ -5,7 +5,7 @@
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.1.1-red)
+![Version](https://img.shields.io/badge/Version-1.2.0-red)
 
 🇬🇧 **English** | 🇩🇪 [Deutsch](README.de.md)
 
@@ -39,7 +39,7 @@ The tool offers a modern, user-friendly interface with:
 
 | Tab | Features | Description |
 |-----|----------|-------------|
-| 🪟 Windows | 15 Tweaks | Debloat, privacy, Win11 tweaks, performance tweaks |
+| 🪟 Windows | 22 Tweaks | Debloat, privacy, Win11 tweaks, performance tweaks + CTT Essentials |
 | 🌐 Network | 10 Tweaks | Nagle, LSO, DNS, TCP tuning, QoS, adapter power saving, delivery optimization + live ping test |
 | 🔊 Audio | 6 Tweaks | Audio tweaks, dedicated tab |
 | 🎮 GPU Tweaks | 7 Tweaks | 4 NVIDIA + 3 AMD tweaks, GPU detection, brand grey-out |
@@ -258,7 +258,18 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 📜 Changelog
 
-### v1.1.1 ⭐ **CURRENT**
+### v1.2.0 ⭐ **CURRENT**
+- 🧰 **7 new "CTT Essentials" tweaks** in the Windows tab (parity with Chris Titus Tech WinUtil), each with Apply/Revert/status-check:
+  - **Prevent Device Companion Apps** — blocks device metadata downloads + auto-suggested companion apps
+  - **Disable Consumer Features** — stops auto-installed suggested apps/games in the Start menu
+  - **Disable Windows Platform Binary Table (WPBT)** — blocks OEM firmware from injecting programs at boot
+  - **Disable Store Recommended Search Results** — removes sponsored results in the Microsoft Store
+  - **Enable Start Menu Previous Layout** — classic Start layout on supported Win11 builds
+  - **Disable File Explorer Automatic Folder Discovery** — opens large folders faster
+  - **Run Disk Cleanup** — automated cleanmgr + DISM component cleanup
+- 📇 Registry keys sourced 1:1 from the upstream CTT WinUtil config for accuracy
+
+### v1.1.1
 - 🐛 **Bugfix:** 3 tweaks (Power Throttling, Bing Search, Svchost Reduction) were silently undone automatically on every program start due to a copy-paste error — fixed
 - 🌍 **Bugfix (Localization):** On non-English Windows (e.g. German), the status check for "Disable TCP Auto-Tuning" always returned "unknown" instead of the real status (the netsh text search was hardcoded to English) — now locale-independent via `Get-NetTCPSetting`
 - 🌍 **Bugfix (Localization):** "Revert All" could never find the "Balanced" power plan on German Windows ("Ausbalanciert") and logged the revert as successful even though nothing happened — now resolved via the fixed, locale-independent Windows GUID

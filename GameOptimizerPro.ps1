@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.1.1
+    1.2.0
 #>
 
 $ErrorActionPreference = "Continue"
@@ -491,6 +491,90 @@ $AllTweaks = @(
             $ramKB = [math]::Round((Get-WmiObject Win32_ComputerSystem).TotalPhysicalMemory / 1024)
             reg add "HKLM\SYSTEM\CurrentControlSet\Control" /v SvcHostSplitThresholdInKB /t REG_DWORD /d $ramKB /f | Out-Null
             Write-Log ("Svchost split threshold set to " + [math]::Round($ramKB/1024) + " MB (RAM size)")
+        }
+    },
+
+    # == WINDOWS / CTT ESSENTIALS (parity with Chris Titus Tech WinUtil) ===
+    [PSCustomObject]@{
+        Name     = "Prevent Device Companion Apps"
+        Desc     = "Verhindert, dass Windows Geraete-Metadaten aus dem Netzwerk laedt und automatisch Companion-Apps fuer angeschlossene Geraete installiert oder vorschlaegt. Spart Hintergrund-Traffic und ungewollte App-Installationen."
+        Category = "Windows"
+        Group    = "CTT Essentials"
+        Action   = {
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Device Metadata" /v PreventDeviceMetadataFromNetwork /t REG_DWORD /d 1 /f | Out-Null
+            Write-Log "Prevent Device Companion Apps enabled"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Consumer Features"
+        Desc     = "Deaktiviert Windows Consumer Features. Windows installiert dann keine vorgeschlagenen Apps, Spiele und Werbe-Kacheln mehr automatisch (z.B. Candy Crush oder TikTok im Startmenue)."
+        Category = "Windows"
+        Group    = "CTT Essentials"
+        Action   = {
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableWindowsConsumerFeatures /t REG_DWORD /d 1 /f | Out-Null
+            Write-Log "Windows Consumer Features disabled"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Windows Platform Binary Table (WPBT)"
+        Desc     = "Deaktiviert die Ausfuehrung der Windows Platform Binary Table. Verhindert, dass Mainboard-/OEM-Firmware bei jedem Start heimlich Programme in Windows einschleust. Reiner Sicherheits-Tweak."
+        Category = "Windows"
+        Group    = "CTT Essentials"
+        Action   = {
+            reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v DisableWpbtExecution /t REG_DWORD /d 1 /f | Out-Null
+            Write-Log "WPBT execution disabled"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Store Recommended Search Results"
+        Desc     = "Sperrt die store.db der Microsoft Store App per Dateiberechtigung. Der Store zeigt dann keine empfohlenen/gesponserten Suchergebnisse mehr an. Vollstaendig reversibel."
+        Category = "Windows"
+        Group    = "CTT Essentials"
+        Action   = {
+            $storeDb = "$env:LocalAppData\Packages\Microsoft.WindowsStore_8wekyb3d8bbwe\LocalState\store.db"
+            if (Test-Path $storeDb) {
+                icacls "$storeDb" /deny "Everyone:F" 2>$null | Out-Null
+                Write-Log "Store recommended search results disabled (store.db locked)"
+            } else {
+                Write-Log "Store search tweak skipped: store.db not found"
+            }
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Enable Start Menu Previous Layout"
+        Desc     = "Aktiviert auf unterstuetzten Windows 11 Builds das vorherige Startmenue-Layout ueber ein Feature-Override. Wirkt nur auf Builds, die dieses Feature-Flag kennen -- sonst ohne Effekt."
+        Category = "Windows"
+        Group    = "CTT Essentials"
+        Action   = {
+            reg add "HKLM\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\3036241548" /v EnabledState /t REG_DWORD /d 1 /f | Out-Null
+            Write-Log "Start Menu previous layout enabled (feature override)"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable File Explorer Automatic Folder Discovery"
+        Desc     = "Setzt alle Ordner auf 'Allgemeine Elemente'. Der Explorer verschwendet dann keine Zeit mehr damit, Ordnertypen automatisch zu erkennen -- oeffnet grosse Ordner deutlich schneller. Abmelden/Neustart noetig."
+        Category = "Windows"
+        Group    = "CTT Essentials"
+        Action   = {
+            $bags   = "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags"
+            $bagMRU = "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU"
+            Remove-Item -Path $bags   -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -Path $bagMRU -Recurse -Force -ErrorAction SilentlyContinue
+            $allFolders = "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell"
+            if (-not (Test-Path $allFolders)) { New-Item -Path $allFolders -Force | Out-Null }
+            New-ItemProperty -Path $allFolders -Name "FolderType" -Value "NotSpecified" -PropertyType String -Force | Out-Null
+            Write-Log "File Explorer automatic folder discovery disabled (all folders = General)"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Run Disk Cleanup"
+        Desc     = "Fuehrt die Windows-Datentraegerbereinigung automatisch aus (cleanmgr /VERYLOWDISK) und raeumt zusaetzlich alte Windows-Update-Komponenten per DISM auf. Einmalige Aktion, kann einige Minuten dauern."
+        Category = "Windows"
+        Group    = "CTT Essentials"
+        Action   = {
+            Start-Process -FilePath "cleanmgr.exe" -ArgumentList "/d C: /VERYLOWDISK" -Wait -ErrorAction SilentlyContinue
+            Start-Process -FilePath "Dism.exe" -ArgumentList "/online /Cleanup-Image /StartComponentCleanup /ResetBase" -Wait -ErrorAction SilentlyContinue
+            Write-Log "Disk Cleanup executed (cleanmgr + DISM component cleanup)"
         }
     },
     [PSCustomObject]@{
@@ -1393,6 +1477,39 @@ $RevertActions = @{
         Write-Log "Revert: Svchost threshold reset to Windows default (380000 KB)"
     }
 
+    # == WINDOWS / CTT ESSENTIALS ==========================================
+    "Prevent Device Companion Apps" = {
+        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\Device Metadata" /v PreventDeviceMetadataFromNetwork /f 2>$null
+        Write-Log "Revert: Device Companion Apps re-enabled"
+    }
+    "Disable Consumer Features" = {
+        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableWindowsConsumerFeatures /f 2>$null
+        Write-Log "Revert: Windows Consumer Features re-enabled"
+    }
+    "Disable Windows Platform Binary Table (WPBT)" = {
+        reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager" /v DisableWpbtExecution /f 2>$null
+        Write-Log "Revert: WPBT execution restored to Windows default"
+    }
+    "Disable Store Recommended Search Results" = {
+        $storeDb = "$env:LocalAppData\Packages\Microsoft.WindowsStore_8wekyb3d8bbwe\LocalState\store.db"
+        if (Test-Path $storeDb) { icacls "$storeDb" /grant "Everyone:F" 2>$null | Out-Null }
+        Write-Log "Revert: Store recommended search results re-enabled (store.db unlocked)"
+    }
+    "Enable Start Menu Previous Layout" = {
+        reg delete "HKLM\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\3036241548" /v EnabledState /f 2>$null
+        Write-Log "Revert: Start Menu layout override removed"
+    }
+    "Disable File Explorer Automatic Folder Discovery" = {
+        $bags   = "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags"
+        $bagMRU = "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU"
+        Remove-Item -Path $bags   -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $bagMRU -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Log "Revert: File Explorer folder view database reset (auto-discovery restored)"
+    }
+    "Run Disk Cleanup" = {
+        Write-Log "Revert: Run Disk Cleanup is a one-time cleanup action -- nothing to revert"
+    }
+
     "Disable Telemetry & Data Collection" = {
         Start-Service DiagTrack -ErrorAction SilentlyContinue
         Set-Service DiagTrack -StartupType Automatic -ErrorAction SilentlyContinue
@@ -1932,6 +2049,15 @@ $CheckFunctions = @{
     "Disable Bing in Windows Search" = { (Get-RegVal "HKCU:\SOFTWARE\Policies\Microsoft\Windows\Explorer" "DisableSearchBoxSuggestions") -eq 1 }
     "Process Count Reduction (Svchost)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control" "SvcHostSplitThresholdInKB") -gt 380000 }
 
+    # CTT ESSENTIALS
+    "Prevent Device Companion Apps" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Device Metadata" "PreventDeviceMetadataFromNetwork") -eq 1 }
+    "Disable Consumer Features" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableWindowsConsumerFeatures") -eq 1 }
+    "Disable Windows Platform Binary Table (WPBT)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" "DisableWpbtExecution") -eq 1 }
+    "Disable Store Recommended Search Results" = { $null }
+    "Enable Start Menu Previous Layout" = { (Get-RegVal "HKLM:\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\3036241548" "EnabledState") -eq 1 }
+    "Disable File Explorer Automatic Folder Discovery" = { (Get-RegVal "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" "FolderType") -eq "NotSpecified" }
+    "Run Disk Cleanup" = { $null }
+
     "Disable Telemetry & Data Collection" = { (($s=Get-Service DiagTrack -EA SilentlyContinue) -and $s.StartType -eq "Disabled") -or ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection" "AllowTelemetry") -eq 0) }
     "Disable Activity History"           = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" "EnableActivityFeed") -eq 0 }
     "Disable Advertising ID"             = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" "Enabled") -eq 0 }
@@ -2236,6 +2362,13 @@ $TweakDescEN = @{
     "Disable Power Throttling"            = "Prevents Windows from throttling processes for energy savings (EcoQoS). Useful for games with multiple processes -- background game processes are no longer throttled."
     "Disable Bing in Windows Search"      = "Disables Bing integration in Windows Search. Start menu searches only locally -- faster, no data exchange with Microsoft on every search."
     "Process Count Reduction (Svchost)"   = "Sets the Svchost split threshold to your RAM size. Windows combines services into fewer separate processes -- noticeably reduces background process count. Reboot recommended."
+    "Prevent Device Companion Apps"       = "Stops Windows from downloading device metadata from the network and auto-installing or suggesting companion apps for connected devices. Saves background traffic and unwanted app installs."
+    "Disable Consumer Features"           = "Disables Windows Consumer Features so Windows no longer auto-installs suggested apps, games and promoted tiles (e.g. Candy Crush or TikTok in the Start menu)."
+    "Disable Windows Platform Binary Table (WPBT)" = "Disables execution of the Windows Platform Binary Table, preventing motherboard/OEM firmware from silently injecting programs into Windows at every boot. Pure security tweak."
+    "Disable Store Recommended Search Results" = "Locks the Microsoft Store's store.db via file permissions so the Store stops showing recommended/sponsored search results. Fully reversible."
+    "Enable Start Menu Previous Layout"   = "Enables the previous Start menu layout on supported Windows 11 builds via a feature override. Only affects builds that know this feature flag -- otherwise no effect."
+    "Disable File Explorer Automatic Folder Discovery" = "Sets every folder to 'General items' so Explorer stops auto-detecting folder types -- opens large folders noticeably faster. Sign out / restart required."
+    "Run Disk Cleanup"                    = "Runs Windows Disk Cleanup automatically (cleanmgr /VERYLOWDISK) and additionally cleans up old Windows Update components via DISM. One-time action, may take a few minutes."
     "Remove Cortana"                              = "Uninstalls Cortana completely. Cortana is Microsoft's voice assistant that sends data to Microsoft. Not needed by most users."
     "Remove Xbox Apps"                            = "Removes Xbox Game Bar, Identity Provider and TCUI. These apps run in the background consuming resources even without an Xbox."
     "Remove Microsoft Teams (Personal)"           = "Removes the consumer version of Microsoft Teams and blocks automatic reinstallation via registry."
