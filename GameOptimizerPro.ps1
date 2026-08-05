@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.2.1
+    1.3.0
 #>
 
 $ErrorActionPreference = "Continue"
@@ -115,6 +115,29 @@ function Write-Log {
     $entry = "[$(Get-Date -Format 'HH:mm:ss')] $Message"
     Add-Content -Path $LogFile -Value $entry
 }
+
+# -----------------------------------------
+# DEEP CLEAN HELPER
+# Measures the total size of files matching the given paths, then deletes
+# them. Returns the number of bytes freed (files locked/in-use are skipped
+# by -ErrorAction SilentlyContinue and simply not counted as failures).
+# -----------------------------------------
+function Clear-PathItems {
+    param([string[]]$Paths)
+    $freed = 0
+    foreach ($p in $Paths) {
+        $items = Get-ChildItem -Path $p -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer }
+        foreach ($it in $items) { $freed += $it.Length }
+        Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    return [int64]$freed
+}
+function Format-FreedMB { param([int64]$Bytes) return ([math]::Round($Bytes / 1MB, 1)).ToString("0.#", [System.Globalization.CultureInfo]::InvariantCulture) }
+
+# -----------------------------------------
+# LIVE MONITOR HELPER (locale-safe: uses CIM perf classes, not Get-Counter)
+# -----------------------------------------
+function Format-Bar { param([double]$Pct, [int]$Width = 12) $f = [math]::Round($Pct / 100 * $Width); if ($f -gt $Width) { $f = $Width }; if ($f -lt 0) { $f = 0 }; return ('#' * $f) + ('-' * ($Width - $f)) }
 
 # -----------------------------------------
 # REGISTRY BACKUP
@@ -1071,6 +1094,83 @@ $AllTweaks = @(
         }
     },
 
+    # == RAM & STORAGE / DEEP CLEAN (Kudu-style multi-category cleanup) ====
+    [PSCustomObject]@{
+        Name     = "Clean Browser Caches"
+        Desc     = "Leert die Caches von Chrome, Edge und Firefox (nur Cache, keine Passwoerter/Verlauf/Lesezeichen). Gibt oft mehrere hundert MB frei. Browser sollten geschlossen sein."
+        Category = "RAM & Storage"
+        Group    = "Deep Clean"
+        Action   = {
+            $freed = Clear-PathItems @(
+                "$env:LOCALAPPDATA\Google\Chrome\User Data\*\Cache\*",
+                "$env:LOCALAPPDATA\Google\Chrome\User Data\*\Code Cache\*",
+                "$env:LOCALAPPDATA\Microsoft\Edge\User Data\*\Cache\*",
+                "$env:LOCALAPPDATA\Microsoft\Edge\User Data\*\Code Cache\*",
+                "$env:LOCALAPPDATA\Mozilla\Firefox\Profiles\*\cache2\*"
+            )
+            Write-Log ("Browser caches cleaned (~" + (Format-FreedMB $freed) + " MB freed)")
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Clean Windows Update Cache"
+        Desc     = "Loescht den heruntergeladenen Windows-Update-Cache (SoftwareDistribution\Download). Sicher -- Windows laedt bei Bedarf neu. Der Update-Dienst wird kurz gestoppt und wieder gestartet."
+        Category = "RAM & Storage"
+        Group    = "Deep Clean"
+        Action   = {
+            Stop-Service wuauserv -Force -ErrorAction SilentlyContinue
+            $freed = Clear-PathItems @("$env:SystemRoot\SoftwareDistribution\Download\*")
+            Start-Service wuauserv -ErrorAction SilentlyContinue
+            Write-Log ("Windows Update cache cleaned (~" + (Format-FreedMB $freed) + " MB freed)")
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Clean Thumbnail Cache"
+        Desc     = "Loescht die Thumbnail-Datenbank des Explorers. Windows baut sie bei Bedarf neu auf. Behebt oft fehlerhafte/veraltete Vorschaubilder und gibt Platz frei."
+        Category = "RAM & Storage"
+        Group    = "Deep Clean"
+        Action   = {
+            $freed = Clear-PathItems @("$env:LOCALAPPDATA\Microsoft\Windows\Explorer\thumbcache_*.db")
+            Write-Log ("Thumbnail cache cleaned (~" + (Format-FreedMB $freed) + " MB freed)")
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Empty Recycle Bin"
+        Desc     = "Leert den Papierkorb aller Laufwerke endgueltig. Achtung: geloeschte Dateien sind danach nicht mehr wiederherstellbar."
+        Category = "RAM & Storage"
+        Group    = "Deep Clean"
+        Action   = {
+            try { Clear-RecycleBin -Force -ErrorAction Stop; Write-Log "Recycle Bin emptied" }
+            catch { Write-Log "Recycle Bin already empty or not accessible" }
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Clean Prefetch Data"
+        Desc     = "Loescht die Prefetch-Dateien (.pf). Windows baut sie beim naechsten Start neu auf. Kann bei veralteten Eintraegen helfen -- der erste Boot danach ist minimal langsamer."
+        Category = "RAM & Storage"
+        Group    = "Deep Clean"
+        Action   = {
+            $freed = Clear-PathItems @("$env:SystemRoot\Prefetch\*.pf")
+            Write-Log ("Prefetch data cleaned (~" + (Format-FreedMB $freed) + " MB freed)")
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Clean System Logs & Crash Dumps"
+        Desc     = "Loescht Windows-Temp, CBS-Logs, Crash-Dumps und Fehlerbericht-Dateien. Rein diagnostische Dateien -- gefahrlos zu entfernen, gibt oft spuerbar Platz frei."
+        Category = "RAM & Storage"
+        Group    = "Deep Clean"
+        Action   = {
+            $freed = Clear-PathItems @(
+                "$env:SystemRoot\Temp\*",
+                "$env:SystemRoot\Logs\CBS\*.log",
+                "$env:SystemRoot\Minidump\*",
+                "$env:LOCALAPPDATA\CrashDumps\*",
+                "$env:ProgramData\Microsoft\Windows\WER\ReportQueue\*",
+                "$env:ProgramData\Microsoft\Windows\WER\ReportArchive\*"
+            )
+            Write-Log ("System logs & crash dumps cleaned (~" + (Format-FreedMB $freed) + " MB freed)")
+        }
+    },
+
     # == WINDOWS 11 SPECIFIC ==============================================
     [PSCustomObject]@{
         Name     = "Restore Classic Right-Click Menu"
@@ -1846,6 +1946,26 @@ $RevertActions = @{
         Write-Log "Revert: Temp files were deleted  --  nothing to restore"
     }
 
+    # == RAM & STORAGE / DEEP CLEAN (one-time cleanups -- nothing to revert) ==
+    "Clean Browser Caches" = {
+        Write-Log "Revert: Browser caches were cleared  --  nothing to restore (rebuild automatically)"
+    }
+    "Clean Windows Update Cache" = {
+        Write-Log "Revert: Windows Update cache was cleared  --  Windows re-downloads as needed"
+    }
+    "Clean Thumbnail Cache" = {
+        Write-Log "Revert: Thumbnail cache was cleared  --  Windows rebuilds it automatically"
+    }
+    "Empty Recycle Bin" = {
+        Write-Log "Revert: Recycle Bin was emptied  --  deleted files cannot be restored"
+    }
+    "Clean Prefetch Data" = {
+        Write-Log "Revert: Prefetch data was cleared  --  Windows rebuilds it on next boots"
+    }
+    "Clean System Logs & Crash Dumps" = {
+        Write-Log "Revert: System logs & crash dumps were deleted  --  nothing to restore"
+    }
+
     # == WINDOWS 11 =====================================================
     "Restore Classic Right-Click Menu" = {
         reg delete "HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}" /f 2>$null
@@ -2160,6 +2280,14 @@ $CheckFunctions = @{
     "Disable Hibernation"                = { -not (Test-Path "$env:SystemRoot\hiberfil.sys") }
     "Clean Temp Files"                   = { $null }
 
+    # DEEP CLEAN (one-time actions -- status is always "unknown")
+    "Clean Browser Caches"               = { $null }
+    "Clean Windows Update Cache"          = { $null }
+    "Clean Thumbnail Cache"              = { $null }
+    "Empty Recycle Bin"                  = { $null }
+    "Clean Prefetch Data"                = { $null }
+    "Clean System Logs & Crash Dumps"    = { $null }
+
     # WINDOWS 11
     "Restore Classic Right-Click Menu"   = { Test-Path "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" }
     "Left-Align Taskbar"                 = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarAl") -eq 0 }
@@ -2424,6 +2552,12 @@ $TweakDescEN = @{
     "Disable Write-Cache Buffer Flushing"         = "Disables forced write-cache buffer flushing for SSDs. Noticeably improves write speed. Desktop PCs with stable power supply only."
     "Disable Hibernation"                         = "Disables hibernate mode and removes hiberfil.sys. Frees several GB of disk space (equals your RAM amount). Recommended for desktop PCs."
     "Clean Temp Files"                            = "Deletes all files in %TEMP%, Windows\Temp and Prefetch folders. Frees disk space and can slightly speed up boot."
+    "Clean Browser Caches"                        = "Clears the caches of Chrome, Edge and Firefox (cache only -- no passwords/history/bookmarks). Often frees several hundred MB. Browsers should be closed."
+    "Clean Windows Update Cache"                   = "Deletes the downloaded Windows Update cache (SoftwareDistribution\Download). Safe -- Windows re-downloads as needed. The update service is briefly stopped and restarted."
+    "Clean Thumbnail Cache"                        = "Deletes the Explorer thumbnail database. Windows rebuilds it on demand. Fixes broken/outdated thumbnails and frees space."
+    "Empty Recycle Bin"                           = "Permanently empties the Recycle Bin on all drives. Warning: deleted files can no longer be recovered afterwards."
+    "Clean Prefetch Data"                         = "Deletes the Prefetch files (.pf). Windows rebuilds them on the next boot. Can help with stale entries -- the first boot afterwards is marginally slower."
+    "Clean System Logs & Crash Dumps"             = "Deletes Windows temp, CBS logs, crash dumps and error-report files. Purely diagnostic data -- safe to remove, often frees noticeable space."
     "Restore Classic Right-Click Menu"            = "WIN11: Restores the Windows 10 classic right-click menu. No more 'Show more options' click needed to access common options."
     "Left-Align Taskbar"                          = "WIN11: Moves taskbar icons to the left like Windows 10. Windows 11 centers icons by default. Takes effect after Explorer restart."
     "Disable Widgets"                             = "WIN11: Disables the Widgets panel (Weather, News, Stocks). Widgets run as an MSN browser process in the background consuming RAM."
@@ -3168,6 +3302,68 @@ function Build-DashboardPanel {
 
     $infoBorder.Child = $infoStack
     $DashboardPanel.Children.Add($infoBorder) | Out-Null
+
+    # --- Live resource monitor (updates every 1.5s; locale-safe CIM perf classes) ---
+    $monBorder = New-Object Windows.Controls.Border
+    $monBorder.Background   = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(22,33,62))
+    $monBorder.CornerRadius = New-Object Windows.CornerRadius(6)
+    $monBorder.Padding      = New-Object Windows.Thickness(14,10,14,10)
+    $monBorder.Margin       = New-Object Windows.Thickness(0,0,0,16)
+    $monStack = New-Object Windows.Controls.StackPanel
+
+    $monTitle = New-Object Windows.Controls.TextBlock
+    $monTitle.Text       = "-- Live Monitor (refreshes every 1.5s)"
+    $monTitle.FontSize   = 12
+    $monTitle.FontWeight = "SemiBold"
+    $monTitle.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0,212,170))
+    $monTitle.Margin     = New-Object Windows.Thickness(0,0,0,6)
+    $monStack.Children.Add($monTitle) | Out-Null
+
+    $mkMon = {
+        param($initial)
+        $tb = New-Object Windows.Controls.TextBlock
+        $tb.FontSize   = 13
+        $tb.FontFamily = New-Object Windows.Media.FontFamily("Consolas")
+        $tb.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(221,221,221))
+        $tb.Margin     = New-Object Windows.Thickness(0,1,0,1)
+        $tb.Text       = $initial
+        return $tb
+    }
+    $monCpu  = & $mkMon "CPU   [------------]   --%"
+    $monRam  = & $mkMon "RAM   [------------]   --%"
+    $monDisk = & $mkMon "Disk  [------------]   --%"
+    $monNet  = & $mkMon "Net   -- Mbps"
+    $monStack.Children.Add($monCpu)  | Out-Null
+    $monStack.Children.Add($monRam)  | Out-Null
+    $monStack.Children.Add($monDisk) | Out-Null
+    $monStack.Children.Add($monNet)  | Out-Null
+    $monBorder.Child = $monStack
+    $DashboardPanel.Children.Add($monBorder) | Out-Null
+
+    $monTimer = New-Object System.Windows.Threading.DispatcherTimer
+    $monTimer.Interval = [TimeSpan]::FromMilliseconds(1500)
+    $monTimer.Add_Tick({
+        try {
+            $inv = [System.Globalization.CultureInfo]::InvariantCulture
+            $cpu = [double](Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'" -ErrorAction SilentlyContinue).PercentProcessorTime
+            $os  = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+            if ($os -and $os.TotalVisibleMemorySize) {
+                $ramPct    = [double]((($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) / $os.TotalVisibleMemorySize) * 100)
+                $ramUsedGB = [math]::Round((($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) / 1MB), 1)
+                $ramTotGB  = [math]::Round(($os.TotalVisibleMemorySize / 1MB), 1)
+            } else { $ramPct = 0; $ramUsedGB = 0; $ramTotGB = 0 }
+            $disk    = [double](Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk -Filter "Name='_Total'" -ErrorAction SilentlyContinue).PercentDiskTime
+            $dcap    = [math]::Min($disk, 100)
+            $netBps  = (Get-CimInstance Win32_PerfFormattedData_Tcpip_NetworkInterface -ErrorAction SilentlyContinue | Measure-Object -Property BytesTotalPersec -Sum).Sum
+            $netMbps = [math]::Round(($netBps * 8 / 1MB), 1)
+
+            $monCpu.Text  = "CPU   [$(Format-Bar $cpu)]  {0,3}%" -f [int]$cpu
+            $monRam.Text  = "RAM   [$(Format-Bar $ramPct)]  {0,3}%  ({1}/{2} GB)" -f [int]$ramPct, $ramUsedGB.ToString("0.#", $inv), $ramTotGB.ToString("0.#", $inv)
+            $monDisk.Text = "Disk  [$(Format-Bar $dcap)]  {0,3}%" -f [int]$dcap
+            $monNet.Text  = "Net   {0} Mbps" -f $netMbps.ToString("0.#", $inv)
+        } catch { }
+    }.GetNewClosure())
+    $monTimer.Start()
 
     # --- Snapshot / Compare buttons ---
     $btnRow = New-Object Windows.Controls.StackPanel

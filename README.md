@@ -1,11 +1,11 @@
-# ⚡ GameOptimizerPro v1.2.1
+# ⚡ GameOptimizerPro v1.3.0
 
 > **Windows & Gaming Optimizer** — by FloDePin
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.2.1-red)
+![Version](https://img.shields.io/badge/Version-1.3.0-red)
 
 🇬🇧 **English** | 🇩🇪 [Deutsch](README.de.md)
 
@@ -46,7 +46,8 @@ The tool offers a modern, user-friendly interface with:
 | ⚡ Power Plan | 7 Tweaks | USB, PCI-E, HDD, display, sleep, CPU min/max |
 | 🚀 Startup Manager | ✅ | Own window, HKCU/HKLM/Run32, disable/enable/refresh |
 | 🔧 **[BIOS] BIOS Guide** | ✅ **NEW** | Hardware-specific BIOS recommendations with menu paths |
-| 📊 **[DASH] Dashboard** | ✅ **NEW** | Live system status, snapshot & before/after comparison |
+| 📊 **[DASH] Dashboard** | ✅ | Live resource monitor (CPU/RAM/disk/network), status, snapshot & before/after comparison |
+| 🧹 Deep Clean | 6 Tools | Browser caches, Windows Update cache, thumbnails, recycle bin, prefetch, logs & crash dumps (shows MB freed) |
 | 🌍 Language DE/EN | ✅ | 80+ EN descriptions, toggle button, switches live |
 
 ---
@@ -270,7 +271,16 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 📜 Changelog
 
-### v1.2.1 ⭐ **CURRENT**
+### v1.3.0 ⭐ **CURRENT**
+- 🧹 **New "Deep Clean" section** (RAM & Storage tab) — 6 selectable cleanup tools, each reports how many MB it freed:
+  - **Clean Browser Caches** (Chrome/Edge/Firefox — cache only, no passwords/history)
+  - **Clean Windows Update Cache** (stops/restarts the update service safely)
+  - **Clean Thumbnail Cache**, **Empty Recycle Bin**, **Clean Prefetch Data**
+  - **Clean System Logs & Crash Dumps** (Windows temp, CBS logs, dumps, error reports)
+- 📈 **Live Resource Monitor** in the Dashboard tab — real-time CPU, RAM, disk and network usage, refreshing every 1.5s (locale-safe CIM perf counters, so it works on non-English Windows too)
+- ✅ Verified: 98/98 tweaks have Apply + Revert + Status-Check, no collisions
+
+### v1.2.1
 - 📶 **Enhanced Ping Test** in the Network tab — now measures **average latency, packet loss % and jitter** across **3 targets** (gateway, Cloudflare 1.1.1.1, Google 8.8.8.8), 10 pings each. Shows whether the network tweaks actually help.
 - ⚡ Runs on a background runspace so the UI stays fully responsive during the ~30s test (no freeze), with locale-independent number formatting.
 

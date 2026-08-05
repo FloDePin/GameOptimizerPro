@@ -1,11 +1,11 @@
-# ⚡ GameOptimizerPro v1.2.1
+# ⚡ GameOptimizerPro v1.3.0
 
 > **Windows & Gaming Optimizer** — by FloDePin
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.2.1-red)
+![Version](https://img.shields.io/badge/Version-1.3.0-red)
 
 🇬🇧 [English](README.md) | 🇩🇪 **Deutsch**
 
@@ -46,7 +46,8 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 | ⚡ Power Plan | 7 Tweaks | USB, PCI-E, HDD, Display, Sleep, CPU Min/Max |
 | 🚀 Startup Manager | ✅ | Eigenes Fenster, HKCU/HKLM/Run32, Disable/Enable/Refresh |
 | 🔧 **[BIOS] BIOS Guide** | ✅ **NEW** | Hardware-spezifische BIOS-Empfehlungen mit Menüpfaden |
-| 📊 **[DASH] Dashboard** | ✅ **NEW** | Live-Systemstatus, Snapshot & Vorher/Nachher-Vergleich |
+| 📊 **[DASH] Dashboard** | ✅ | Live-Ressourcen-Monitor (CPU/RAM/Disk/Netz), Status, Snapshot & Vorher/Nachher-Vergleich |
+| 🧹 Deep Clean | 6 Tools | Browser-Caches, Windows-Update-Cache, Thumbnails, Papierkorb, Prefetch, Logs & Crash-Dumps (zeigt freigegebene MB) |
 | 🌍 Language DE/EN | ✅ | 80+ EN-Beschreibungen, Toggle-Button, live umschaltbar |
 
 ---
@@ -258,7 +259,16 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 📜 Changelog
 
-### v1.2.1 ⭐ **CURRENT**
+### v1.3.0 ⭐ **CURRENT**
+- 🧹 **Neuer „Deep Clean"-Bereich** (RAM & Storage-Tab) — 6 auswählbare Cleanup-Tools, jedes zeigt die freigegebenen MB an:
+  - **Clean Browser Caches** (Chrome/Edge/Firefox — nur Cache, keine Passwörter/Verlauf)
+  - **Clean Windows Update Cache** (stoppt/startet den Update-Dienst sicher)
+  - **Clean Thumbnail Cache**, **Empty Recycle Bin**, **Clean Prefetch Data**
+  - **Clean System Logs & Crash Dumps** (Windows-Temp, CBS-Logs, Dumps, Fehlerberichte)
+- 📈 **Live-Ressourcen-Monitor** im Dashboard-Tab — CPU-, RAM-, Disk- und Netzauslastung in Echtzeit, aktualisiert alle 1,5s (locale-sichere CIM-Perf-Counter, funktioniert also auch auf nicht-englischem Windows)
+- ✅ Verifiziert: 98/98 Tweaks mit Apply + Revert + Status-Check, keine Kollisionen
+
+### v1.2.1
 - 📶 **Erweiterter Ping-Test** im Network-Tab — misst jetzt **durchschnittliche Latenz, Paketverlust % und Jitter** über **3 Ziele** (Gateway, Cloudflare 1.1.1.1, Google 8.8.8.8), je 10 Pings. Zeigt, ob die Network-Tweaks wirklich etwas bringen.
 - ⚡ Läuft in einem Hintergrund-Runspace, damit die Oberfläche während des ~30s-Tests flüssig bleibt (kein Einfrieren), mit sprachunabhängiger Zahlenformatierung.
 
