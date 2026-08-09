@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.3.0
+    1.3.1
 #>
 
 $ErrorActionPreference = "Continue"
@@ -598,6 +598,79 @@ $AllTweaks = @(
             Start-Process -FilePath "cleanmgr.exe" -ArgumentList "/d C: /VERYLOWDISK" -Wait -ErrorAction SilentlyContinue
             Start-Process -FilePath "Dism.exe" -ArgumentList "/online /Cleanup-Image /StartComponentCleanup /ResetBase" -Wait -ErrorAction SilentlyContinue
             Write-Log "Disk Cleanup executed (cleanmgr + DISM component cleanup)"
+        }
+    },
+
+    # == WINDOWS / QUALITY OF LIFE (CTT WinUtil parity) ===================
+    [PSCustomObject]@{
+        Name     = "Show File Extensions"
+        Desc     = "Blendet Dateiendungen im Explorer ein (z.B. .exe, .txt, .jpg). Wichtig fuer Sicherheit -- getarnte Dateien wie 'foto.jpg.exe' werden so sofort erkennbar."
+        Category = "Windows"
+        Group    = "Quality of Life"
+        Action   = {
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v HideFileExt /t REG_DWORD /d 0 /f | Out-Null
+            Write-Log "File extensions shown in Explorer"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Show Hidden Files"
+        Desc     = "Zeigt versteckte Dateien und Ordner im Explorer an. Nuetzlich um AppData, Config-Dateien und versteckte Ordner zu sehen."
+        Category = "Windows"
+        Group    = "Quality of Life"
+        Action   = {
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Hidden /t REG_DWORD /d 1 /f | Out-Null
+            Write-Log "Hidden files shown in Explorer"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Reserved Storage"
+        Desc     = "Deaktiviert den reservierten Speicher, den Windows fuer Updates zuruecklegt (~7 GB). Gibt den Platz auf der Systemplatte frei. Windows verwaltet Updates danach dynamisch."
+        Category = "Windows"
+        Group    = "Quality of Life"
+        Action   = {
+            try { Set-WindowsReservedStorageState -State Disabled -ErrorAction Stop; Write-Log "Reserved storage disabled (~7 GB freed)" }
+            catch { Write-Log "Reserved storage could not be disabled: $($_.Exception.Message)" }
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Storage Sense"
+        Desc     = "Deaktiviert Storage Sense (automatische Speicherbereinigung). Windows loescht dann nicht mehr eigenmaechtig temporaere Dateien oder Papierkorb-Inhalte -- du behaeltst die volle Kontrolle."
+        Category = "Windows"
+        Group    = "Quality of Life"
+        Action   = {
+            reg add "HKLM\Software\Policies\Microsoft\Windows\StorageSense" /v AllowStorageSenseGlobal /t REG_DWORD /d 0 /f | Out-Null
+            Write-Log "Storage Sense disabled"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Num Lock on Startup"
+        Desc     = "Aktiviert NumLock automatisch beim Systemstart und am Login-Bildschirm. Praktisch, wenn du den Ziffernblock direkt nutzen willst."
+        Category = "Windows"
+        Group    = "Quality of Life"
+        Action   = {
+            reg add "HKCU\Control Panel\Keyboard" /v InitialKeyboardIndicators /t REG_SZ /d 2147483650 /f | Out-Null
+            reg add "HKU\.DEFAULT\Control Panel\Keyboard" /v InitialKeyboardIndicators /t REG_SZ /d 2147483650 /f | Out-Null
+            Write-Log "NumLock enabled on startup"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Lock Screen"
+        Desc     = "Deaktiviert den Sperrbildschirm. Beim Start/Aufwachen geht es direkt zum Login-Feld -- spart einen Klick bzw. Wisch."
+        Category = "Windows"
+        Group    = "Quality of Life"
+        Action   = {
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /t REG_DWORD /d 1 /f | Out-Null
+            Write-Log "Lock screen disabled"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Enable Long Paths"
+        Desc     = "Aktiviert Pfade laenger als 260 Zeichen. Hilfreich bei tiefen Ordnerstrukturen, Game-Mods, Node-Projekten usw. -- verhindert 'Pfad zu lang'-Fehler."
+        Category = "Windows"
+        Group    = "Quality of Life"
+        Action   = {
+            reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f | Out-Null
+            Write-Log "Long paths enabled"
         }
     },
     [PSCustomObject]@{
@@ -1610,6 +1683,37 @@ $RevertActions = @{
         Write-Log "Revert: Run Disk Cleanup is a one-time cleanup action -- nothing to revert"
     }
 
+    # == WINDOWS / QUALITY OF LIFE ========================================
+    "Show File Extensions" = {
+        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v HideFileExt /t REG_DWORD /d 1 /f | Out-Null
+        Write-Log "Revert: File extensions hidden again (Windows default)"
+    }
+    "Show Hidden Files" = {
+        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Hidden /t REG_DWORD /d 2 /f | Out-Null
+        Write-Log "Revert: Hidden files hidden again (Windows default)"
+    }
+    "Disable Reserved Storage" = {
+        try { Set-WindowsReservedStorageState -State Enabled -ErrorAction Stop; Write-Log "Revert: Reserved storage re-enabled" }
+        catch { Write-Log "Revert: Reserved storage could not be re-enabled: $($_.Exception.Message)" }
+    }
+    "Disable Storage Sense" = {
+        reg delete "HKLM\Software\Policies\Microsoft\Windows\StorageSense" /v AllowStorageSenseGlobal /f 2>$null
+        Write-Log "Revert: Storage Sense policy removed (user setting restored)"
+    }
+    "Num Lock on Startup" = {
+        reg add "HKCU\Control Panel\Keyboard" /v InitialKeyboardIndicators /t REG_SZ /d 2147483648 /f | Out-Null
+        reg add "HKU\.DEFAULT\Control Panel\Keyboard" /v InitialKeyboardIndicators /t REG_SZ /d 2147483648 /f | Out-Null
+        Write-Log "Revert: NumLock on startup disabled"
+    }
+    "Disable Lock Screen" = {
+        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /f 2>$null
+        Write-Log "Revert: Lock screen re-enabled"
+    }
+    "Enable Long Paths" = {
+        reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 0 /f | Out-Null
+        Write-Log "Revert: Long paths disabled (Windows default)"
+    }
+
     "Disable Telemetry & Data Collection" = {
         Start-Service DiagTrack -ErrorAction SilentlyContinue
         Set-Service DiagTrack -StartupType Automatic -ErrorAction SilentlyContinue
@@ -2178,6 +2282,15 @@ $CheckFunctions = @{
     "Disable File Explorer Automatic Folder Discovery" = { (Get-RegVal "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" "FolderType") -eq "NotSpecified" }
     "Run Disk Cleanup" = { $null }
 
+    # QUALITY OF LIFE
+    "Show File Extensions"               = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "HideFileExt") -eq 0 }
+    "Show Hidden Files"                  = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "Hidden") -eq 1 }
+    "Disable Reserved Storage"           = { try { (Get-WindowsReservedStorageState -ErrorAction Stop).ReservedStorageState -eq "Disabled" } catch { $null } }
+    "Disable Storage Sense"              = { (Get-RegVal "HKLM:\Software\Policies\Microsoft\Windows\StorageSense" "AllowStorageSenseGlobal") -eq 0 }
+    "Num Lock on Startup"                = { (Get-RegVal "HKCU:\Control Panel\Keyboard" "InitialKeyboardIndicators") -eq "2147483650" }
+    "Disable Lock Screen"                = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization" "NoLockScreen") -eq 1 }
+    "Enable Long Paths"                  = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" "LongPathsEnabled") -eq 1 }
+
     "Disable Telemetry & Data Collection" = { (($s=Get-Service DiagTrack -EA SilentlyContinue) -and $s.StartType -eq "Disabled") -or ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection" "AllowTelemetry") -eq 0) }
     "Disable Activity History"           = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" "EnableActivityFeed") -eq 0 }
     "Disable Advertising ID"             = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" "Enabled") -eq 0 }
@@ -2497,6 +2610,13 @@ $TweakDescEN = @{
     "Enable Start Menu Previous Layout"   = "Enables the previous Start menu layout on supported Windows 11 builds via a feature override. Only affects builds that know this feature flag -- otherwise no effect."
     "Disable File Explorer Automatic Folder Discovery" = "Sets every folder to 'General items' so Explorer stops auto-detecting folder types -- opens large folders noticeably faster. Sign out / restart required."
     "Run Disk Cleanup"                    = "Runs Windows Disk Cleanup automatically (cleanmgr /VERYLOWDISK) and additionally cleans up old Windows Update components via DISM. One-time action, may take a few minutes."
+    "Show File Extensions"                        = "Shows file extensions in Explorer (e.g. .exe, .txt, .jpg). Important for security -- disguised files like 'photo.jpg.exe' become immediately visible."
+    "Show Hidden Files"                           = "Shows hidden files and folders in Explorer. Useful for seeing AppData, config files and hidden folders."
+    "Disable Reserved Storage"                    = "Disables the reserved storage Windows sets aside for updates (~7 GB). Frees that space on the system drive. Windows then manages updates dynamically."
+    "Disable Storage Sense"                       = "Disables Storage Sense (automatic disk cleanup). Windows will no longer delete temp files or Recycle Bin contents on its own -- you keep full control."
+    "Num Lock on Startup"                         = "Enables NumLock automatically at system startup and on the login screen. Handy if you want to use the numpad right away."
+    "Disable Lock Screen"                         = "Disables the lock screen. On start/wake it goes straight to the login field -- saves a click or swipe."
+    "Enable Long Paths"                           = "Enables paths longer than 260 characters. Helpful for deep folder structures, game mods, Node projects etc. -- prevents 'path too long' errors."
     "Remove Cortana"                              = "Uninstalls Cortana completely. Cortana is Microsoft's voice assistant that sends data to Microsoft. Not needed by most users."
     "Remove Xbox Apps"                            = "Removes Xbox Game Bar, Identity Provider and TCUI. These apps run in the background consuming resources even without an Xbox."
     "Remove Microsoft Teams (Personal)"           = "Removes the consumer version of Microsoft Teams and blocks automatic reinstallation via registry."

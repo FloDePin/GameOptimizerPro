@@ -1,11 +1,11 @@
-# ⚡ GameOptimizerPro v1.3.0
+# ⚡ GameOptimizerPro v1.3.1
 
 > **Windows & Gaming Optimizer** — by FloDePin
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.3.0-red)
+![Version](https://img.shields.io/badge/Version-1.3.1-red)
 
 🇬🇧 **English** | 🇩🇪 [Deutsch](README.de.md)
 
@@ -39,7 +39,7 @@ The tool offers a modern, user-friendly interface with:
 
 | Tab | Features | Description |
 |-----|----------|-------------|
-| 🪟 Windows | 22 Tweaks | Debloat, privacy, Win11 tweaks, performance tweaks + **7 new CTT Essentials** |
+| 🪟 Windows | 29 Tweaks | Debloat, privacy, Win11 tweaks, performance tweaks + CTT Essentials + Quality of Life |
 | 🌐 Network | 10 Tweaks | Nagle, LSO, DNS, TCP tuning, QoS, adapter power saving, delivery optimization + async ping test (latency, packet loss, jitter to gateway/1.1.1.1/8.8.8.8) |
 | 🔊 Audio | 6 Tweaks | Audio tweaks, dedicated tab |
 | 🎮 GPU Tweaks | 7 Tweaks | 4 NVIDIA + 3 AMD tweaks, GPU detection, brand grey-out |
@@ -52,7 +52,7 @@ The tool offers a modern, user-friendly interface with:
 
 ---
 
-## 🪟 Windows Tab - 22 Tweaks
+## 🪟 Windows Tab - 29 Tweaks
 
 ### 🧹 Debloat & System Cleanup
 - **Remove Cortana** — Completely removes Windows' voice assistant
@@ -271,7 +271,14 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 📜 Changelog
 
-### v1.3.0 ⭐ **CURRENT**
+### v1.3.1 ⭐ **CURRENT**
+- ✨ **7 new "Quality of Life" tweaks** (Windows tab, CTT WinUtil parity):
+  - **Show File Extensions** & **Show Hidden Files** (Explorer)
+  - **Disable Reserved Storage** (frees ~7 GB) & **Disable Storage Sense**
+  - **Num Lock on Startup**, **Disable Lock Screen**, **Enable Long Paths**
+- ✅ Verified: 105/105 tweaks have Apply + Revert + Status-Check, no collisions
+
+### v1.3.0
 - 🧹 **New "Deep Clean" section** (RAM & Storage tab) — 6 selectable cleanup tools, each reports how many MB it freed:
   - **Clean Browser Caches** (Chrome/Edge/Firefox — cache only, no passwords/history)
   - **Clean Windows Update Cache** (stops/restarts the update service safely)

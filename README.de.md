@@ -1,11 +1,11 @@
-# ⚡ GameOptimizerPro v1.3.0
+# ⚡ GameOptimizerPro v1.3.1
 
 > **Windows & Gaming Optimizer** — by FloDePin
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.3.0-red)
+![Version](https://img.shields.io/badge/Version-1.3.1-red)
 
 🇬🇧 [English](README.md) | 🇩🇪 **Deutsch**
 
@@ -39,7 +39,7 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 
 | Tab | Features | Description |
 |-----|----------|-------------|
-| 🪟 Windows | 22 Tweaks | Debloat, Datenschutz, Win11-Tweaks, Performance-Tweaks + CTT Essentials |
+| 🪟 Windows | 29 Tweaks | Debloat, Datenschutz, Win11-Tweaks, Performance-Tweaks + CTT Essentials + Quality of Life |
 | 🌐 Network | 10 Tweaks | Nagle, LSO, DNS, TCP-Tuning, QoS, Adapter Power Saving, Delivery Optimization + asynchroner Ping-Test (Latenz, Paketverlust, Jitter zu Gateway/1.1.1.1/8.8.8.8) |
 | 🔊 Audio | 6 Tweaks | Audio-Tweaks, eigener Tab |
 | 🎮 GPU Tweaks | 7 Tweaks | 4 NVIDIA + 3 AMD Tweaks, GPU-Erkennung, Brand-Grauausblendung |
@@ -52,7 +52,7 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 
 ---
 
-## 🪟 Windows Tab - 22 Tweaks
+## 🪟 Windows Tab - 29 Tweaks
 
 ### 🧹 Debloat & System Cleanup
 - **Remove Cortana** — Entfernt den Windows Sprachassistenten
@@ -259,7 +259,14 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 📜 Changelog
 
-### v1.3.0 ⭐ **CURRENT**
+### v1.3.1 ⭐ **CURRENT**
+- ✨ **7 neue „Quality of Life"-Tweaks** (Windows-Tab, Parität zu CTT WinUtil):
+  - **Show File Extensions** & **Show Hidden Files** (Explorer)
+  - **Disable Reserved Storage** (gibt ~7 GB frei) & **Disable Storage Sense**
+  - **Num Lock on Startup**, **Disable Lock Screen**, **Enable Long Paths**
+- ✅ Verifiziert: 105/105 Tweaks mit Apply + Revert + Status-Check, keine Kollisionen
+
+### v1.3.0
 - 🧹 **Neuer „Deep Clean"-Bereich** (RAM & Storage-Tab) — 6 auswählbare Cleanup-Tools, jedes zeigt die freigegebenen MB an:
   - **Clean Browser Caches** (Chrome/Edge/Firefox — nur Cache, keine Passwörter/Verlauf)
   - **Clean Windows Update Cache** (stoppt/startet den Update-Dienst sicher)
