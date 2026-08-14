@@ -1,11 +1,11 @@
-# ⚡ GameOptimizerPro v1.3.1
+# ⚡ GameOptimizerPro v1.3.2
 
 > **Windows & Gaming Optimizer** — by FloDePin
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.3.1-red)
+![Version](https://img.shields.io/badge/Version-1.3.2-red)
 
 🇬🇧 [English](README.md) | 🇩🇪 **Deutsch**
 
@@ -259,7 +259,16 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 📜 Changelog
 
-### v1.3.1 ⭐ **CURRENT**
+### v1.3.2 ⭐ **CURRENT** (Bugfixes & Härtung)
+- 🐛 **Hibernation-Status-Check korrigiert** — prüfte `%SystemRoot%\hiberfil.sys` (falscher Pfad), der Punkt war immer grün. Jetzt korrekt `%SystemDrive%\hiberfil.sys`.
+- 🐛 **Startup Manager zeigt jetzt auch die Autostart-Ordner** — Apps wie Discord/Spotify, die aus `shell:startup` (nicht den Run-Keys) starten, waren vorher unsichtbar. Enable/Disable über denselben Task-Manager-Mechanismus.
+- 🔧 **DNS-Revert** macht jetzt zusätzlich `ipconfig /renew` + DNS-Cache leeren, damit man nicht bis zum Neustart ohne funktionierendes DNS dasteht.
+- 🔧 **OneDrive-Entfernung** räumt zusätzlich den übrig gebliebenen Explorer-Seitenleisten-Eintrag (CLSID) weg.
+- 🔧 **Restore Point** scheitert nicht mehr heimlich beim 2. Start am selben Tag (24h-Limit wird aufgehoben).
+- ⚡ **Live-Monitor** in einen Hintergrund-Runspace ausgelagert (wie der Ping-Test) — kein UI-Mikroruckeln mehr alle 1,5s.
+- ⚠️ Stabilitäts-Warnung zur **Svchost Process Count Reduction**-Beschreibung ergänzt (reduzierte Prozess-Isolation).
+
+### v1.3.1
 - ✨ **7 neue „Quality of Life"-Tweaks** (Windows-Tab, Parität zu CTT WinUtil):
   - **Show File Extensions** & **Show Hidden Files** (Explorer)
   - **Disable Reserved Storage** (gibt ~7 GB frei) & **Disable Storage Sense**

@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.3.1
+    1.3.2
 #>
 
 $ErrorActionPreference = "Continue"
@@ -269,7 +269,10 @@ $AllTweaks = @(
             if (!(Test-Path $onedrive)) { $onedrive = "$env:SYSTEMROOT\System32\OneDriveSetup.exe" }
             if (Test-Path $onedrive) { & $onedrive /uninstall }
             reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v OneDrive /f 2>$null
-            Write-Log "OneDrive removed"
+            # Remove the leftover OneDrive entry from the File Explorer sidebar (64-bit + 32-bit)
+            reg delete "HKCR\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}" /f 2>$null
+            reg delete "HKCR\Wow6432Node\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}" /f 2>$null
+            Write-Log "OneDrive removed (incl. Explorer sidebar entry)"
         }
     },
     [PSCustomObject]@{
@@ -507,7 +510,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Process Count Reduction (Svchost)"
-        Desc     = "Setzt den Svchost-Split-Schwellwert auf die RAM-Groesse. Windows teilt Dienste in weniger separate Prozesse auf -- reduziert Hintergrundprozesse spuerbar. Reboot empfohlen."
+        Desc     = "Setzt den Svchost-Split-Schwellwert auf die RAM-Groesse. Windows teilt Dienste in weniger separate Prozesse auf -- reduziert Hintergrundprozesse spuerbar. WARNUNG: Reduziert die Prozess-Isolation -- stuerzt ein Dienst ab, kann er andere im selben Host (Audio, Netzwerk etc.) mitreissen. Reboot empfohlen."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -1946,14 +1949,19 @@ $RevertActions = @{
         foreach ($adapter in $adapters) {
             Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
         }
-        Write-Log "Revert: DNS reset to automatic/DHCP on all adapters"
+        # Force Windows to pick up the router's DHCP DNS again and drop stale entries
+        ipconfig /renew 2>$null | Out-Null
+        Clear-DnsClientCache -ErrorAction SilentlyContinue
+        Write-Log "Revert: DNS reset to automatic/DHCP on all adapters (cache flushed, lease renewed)"
     }
     "Set DNS to Google (8.8.8.8)" = {
         $adapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
         foreach ($adapter in $adapters) {
             Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
         }
-        Write-Log "Revert: DNS reset to automatic/DHCP on all adapters"
+        ipconfig /renew 2>$null | Out-Null
+        Clear-DnsClientCache -ErrorAction SilentlyContinue
+        Write-Log "Revert: DNS reset to automatic/DHCP on all adapters (cache flushed, lease renewed)"
     }
     "Flush DNS Cache" = {
         Write-Log "Revert: DNS Flush  --  nothing to restore"
@@ -2390,7 +2398,7 @@ $CheckFunctions = @{
         if (-not $d) { return $null }
         (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Enum\$($d.PNPDeviceID)\Device Parameters\Disk" "UserWriteCacheSetting") -eq 1
     }
-    "Disable Hibernation"                = { -not (Test-Path "$env:SystemRoot\hiberfil.sys") }
+    "Disable Hibernation"                = { -not (Test-Path "$env:SystemDrive\hiberfil.sys") }
     "Clean Temp Files"                   = { $null }
 
     # DEEP CLEAN (one-time actions -- status is always "unknown")
@@ -2602,7 +2610,7 @@ function Get-UIString {
 $TweakDescEN = @{
     "Disable Power Throttling"            = "Prevents Windows from throttling processes for energy savings (EcoQoS). Useful for games with multiple processes -- background game processes are no longer throttled."
     "Disable Bing in Windows Search"      = "Disables Bing integration in Windows Search. Start menu searches only locally -- faster, no data exchange with Microsoft on every search."
-    "Process Count Reduction (Svchost)"   = "Sets the Svchost split threshold to your RAM size. Windows combines services into fewer separate processes -- noticeably reduces background process count. Reboot recommended."
+    "Process Count Reduction (Svchost)"   = "Sets the Svchost split threshold to your RAM size. Windows combines services into fewer separate processes -- noticeably reduces background process count. WARNING: reduces process isolation -- if one service crashes it can take down others in the same host (audio, network etc.). Reboot recommended."
     "Prevent Device Companion Apps"       = "Stops Windows from downloading device metadata from the network and auto-installing or suggesting companion apps for connected devices. Saves background traffic and unwanted app installs."
     "Disable Consumer Features"           = "Disables Windows Consumer Features so Windows no longer auto-installs suggested apps, games and promoted tiles (e.g. Candy Crush or TikTok in the Start menu)."
     "Disable Windows Platform Binary Table (WPBT)" = "Disables execution of the Windows Platform Binary Table, preventing motherboard/OEM firmware from silently injecting programs into Windows at every boot. Pure security tweak."
@@ -3460,28 +3468,48 @@ function Build-DashboardPanel {
     $monBorder.Child = $monStack
     $DashboardPanel.Children.Add($monBorder) | Out-Null
 
-    $monTimer = New-Object System.Windows.Threading.DispatcherTimer
-    $monTimer.Interval = [TimeSpan]::FromMilliseconds(1500)
-    $monTimer.Add_Tick({
-        try {
-            $inv = [System.Globalization.CultureInfo]::InvariantCulture
-            $cpu = [double](Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'" -ErrorAction SilentlyContinue).PercentProcessorTime
-            $os  = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
-            if ($os -and $os.TotalVisibleMemorySize) {
-                $ramPct    = [double]((($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) / $os.TotalVisibleMemorySize) * 100)
-                $ramUsedGB = [math]::Round((($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) / 1MB), 1)
-                $ramTotGB  = [math]::Round(($os.TotalVisibleMemorySize / 1MB), 1)
-            } else { $ramPct = 0; $ramUsedGB = 0; $ramTotGB = 0 }
-            $disk    = [double](Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk -Filter "Name='_Total'" -ErrorAction SilentlyContinue).PercentDiskTime
-            $dcap    = [math]::Min($disk, 100)
-            $netBps  = (Get-CimInstance Win32_PerfFormattedData_Tcpip_NetworkInterface -ErrorAction SilentlyContinue | Measure-Object -Property BytesTotalPersec -Sum).Sum
-            $netMbps = [math]::Round(($netBps * 8 / 1MB), 1)
+    # Sample the (relatively expensive) CIM perf classes on a BACKGROUND
+    # runspace so the WPF UI thread never stalls. The DispatcherTimer below
+    # only reads the shared, already-computed values -> no micro-stutter.
+    $monData = [hashtable]::Synchronized(@{ Run = $true; Ready = $false; Cpu = 0.0; RamPct = 0.0; RamUsedGB = 0.0; RamTotGB = 0.0; Disk = 0.0; NetMbps = 0.0 })
+    $monRs = [runspacefactory]::CreateRunspace()
+    $monRs.ApartmentState = "MTA"
+    $monRs.ThreadOptions  = "ReuseThread"
+    $monRs.Open()
+    $monRs.SessionStateProxy.SetVariable("monData", $monData)
+    $monPs = [powershell]::Create()
+    $monPs.Runspace = $monRs
+    [void]$monPs.AddScript({
+        while ($monData.Run) {
+            try {
+                $monData.Cpu = [double](Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'" -ErrorAction SilentlyContinue).PercentProcessorTime
+                $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+                if ($os -and $os.TotalVisibleMemorySize) {
+                    $monData.RamPct    = [double]((($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) / $os.TotalVisibleMemorySize) * 100)
+                    $monData.RamUsedGB = [math]::Round((($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) / 1MB), 1)
+                    $monData.RamTotGB  = [math]::Round(($os.TotalVisibleMemorySize / 1MB), 1)
+                }
+                $monData.Disk    = [math]::Min([double](Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk -Filter "Name='_Total'" -ErrorAction SilentlyContinue).PercentDiskTime, 100)
+                $netBps          = (Get-CimInstance Win32_PerfFormattedData_Tcpip_NetworkInterface -ErrorAction SilentlyContinue | Measure-Object -Property BytesTotalPersec -Sum).Sum
+                $monData.NetMbps = [math]::Round(($netBps * 8 / 1MB), 1)
+                $monData.Ready   = $true
+            } catch { }
+            Start-Sleep -Milliseconds 1500
+        }
+    })
+    [void]$monPs.BeginInvoke()
+    # Stop the sampler loop when the main window closes so the thread ends.
+    $Window.Add_Closed({ $monData.Run = $false }.GetNewClosure())
 
-            $monCpu.Text  = "CPU   [$(Format-Bar $cpu)]  {0,3}%" -f [int]$cpu
-            $monRam.Text  = "RAM   [$(Format-Bar $ramPct)]  {0,3}%  ({1}/{2} GB)" -f [int]$ramPct, $ramUsedGB.ToString("0.#", $inv), $ramTotGB.ToString("0.#", $inv)
-            $monDisk.Text = "Disk  [$(Format-Bar $dcap)]  {0,3}%" -f [int]$dcap
-            $monNet.Text  = "Net   {0} Mbps" -f $netMbps.ToString("0.#", $inv)
-        } catch { }
+    $monTimer = New-Object System.Windows.Threading.DispatcherTimer
+    $monTimer.Interval = [TimeSpan]::FromMilliseconds(750)
+    $monTimer.Add_Tick({
+        if (-not $monData.Ready) { return }
+        $inv = [System.Globalization.CultureInfo]::InvariantCulture
+        $monCpu.Text  = "CPU   [$(Format-Bar $monData.Cpu)]  {0,3}%" -f [int]$monData.Cpu
+        $monRam.Text  = "RAM   [$(Format-Bar $monData.RamPct)]  {0,3}%  ({1}/{2} GB)" -f [int]$monData.RamPct, ([double]$monData.RamUsedGB).ToString("0.#", $inv), ([double]$monData.RamTotGB).ToString("0.#", $inv)
+        $monDisk.Text = "Disk  [$(Format-Bar $monData.Disk)]  {0,3}%" -f [int]$monData.Disk
+        $monNet.Text  = "Net   {0} Mbps" -f ([double]$monData.NetMbps).ToString("0.#", $inv)
     }.GetNewClosure())
     $monTimer.Start()
 
@@ -3830,13 +3858,16 @@ $BtnApply.Add_Click({
 
     # Create Restore Point
     $StatusText.Text = "Creating restore point..."
+    # Lift the default 24h creation-frequency limit so the point isn't silently
+    # skipped when the user runs the tool twice on the same day.
+    reg add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v SystemRestorePointCreationFrequency /t REG_DWORD /d 0 /f 2>$null | Out-Null
     try {
         Checkpoint-Computer -Description "GameOptimizerPro Backup" -RestorePointType "MODIFY_SETTINGS" -ErrorAction Stop
         Write-Log "Restore point created"
         $StatusText.Text = "Restore point created. Backing up registry..."
     } catch {
-        Write-Log "Restore point skipped (Windows 24h frequency limit or VSS error): $_"
-        $StatusText.Text = "Restore point skipped (24h limit). Backing up registry..."
+        Write-Log "Restore point skipped (VSS error or System Protection disabled): $_"
+        $StatusText.Text = "Restore point skipped. Backing up registry..."
     }
 
     # Registry backup (independent of restore-point success -- always runs)
@@ -3950,13 +3981,14 @@ $BtnRevertAll.Add_Click({
 
     # Restore point before reverting
     $StatusText.Text = "Creating safety restore point..."
+    reg add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v SystemRestorePointCreationFrequency /t REG_DWORD /d 0 /f 2>$null | Out-Null
     try {
         Checkpoint-Computer -Description "GameOptimizerPro Pre-Revert Backup" -RestorePointType "MODIFY_SETTINGS" -ErrorAction Stop
         Write-Log "Revert restore point created"
         $StatusText.Text = "Safety restore point created. Backing up registry..."
     } catch {
-        Write-Log "Revert restore point skipped (24h limit or VSS error): $_"
-        $StatusText.Text = "Restore point skipped (24h limit). Backing up registry..."
+        Write-Log "Revert restore point skipped (VSS error or System Protection disabled): $_"
+        $StatusText.Text = "Restore point skipped. Backing up registry..."
     }
 
     # Registry backup (independent of restore-point success -- always runs)
@@ -4104,6 +4136,49 @@ function Get-StartupEntries {
                         ApprovedPath = $src.App
                     })
                 }
+            }
+        } catch { }
+    }
+
+    # Physical startup FOLDERS (.lnk shortcuts) -- e.g. Discord, Spotify.
+    # Many apps auto-start from here instead of the Run keys. Disable/enable
+    # uses the same StartupApproved binary-flag mechanism as Task Manager,
+    # under the StartupFolder subkey, so the existing handlers work unchanged.
+    $folderSources = @(
+        @{ Path = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+           Loc  = "Startup Folder"
+           App  = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder" },
+        @{ Path = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
+           Loc  = "Startup Folder (All)"
+           App  = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder" }
+    )
+    $wsh = $null
+    foreach ($fsrc in $folderSources) {
+        if (-not (Test-Path $fsrc.Path)) { continue }
+        try {
+            Get-ChildItem -Path $fsrc.Path -Filter *.lnk -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                $name   = $_.Name
+                $target = $_.FullName
+                try {
+                    if (-not $wsh) { $wsh = New-Object -ComObject WScript.Shell }
+                    $tp = $wsh.CreateShortcut($_.FullName).TargetPath
+                    if ($tp) { $target = $tp }
+                } catch { }
+                $cmd = if ($target.Length -gt 65) { $target.Substring(0,62)+"..." } else { $target }
+                $enabled = $true
+                if (Test-Path $fsrc.App) {
+                    $av = Get-ItemProperty $fsrc.App -Name $name -ErrorAction SilentlyContinue
+                    if ($av -and $av.$name -and $av.$name[0] -eq 3) { $enabled = $false }
+                }
+                $entries.Add([PSCustomObject]@{
+                    Name         = $name
+                    Command      = $cmd
+                    FullCmd      = $target
+                    Location     = $fsrc.Loc
+                    Status       = if ($enabled) { "Enabled" } else { "Disabled" }
+                    RegPath      = $fsrc.Path
+                    ApprovedPath = $fsrc.App
+                })
             }
         } catch { }
     }
