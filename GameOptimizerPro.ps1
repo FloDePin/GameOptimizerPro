@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.3.3
+    1.4.0
 #>
 
 $ErrorActionPreference = "Continue"
@@ -2922,6 +2922,13 @@ Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML wird geladen..." -ForegroundColor D
 
         <!-- BUTTONS -->
         <StackPanel Grid.Row="3" Margin="0,12,0,0" HorizontalAlignment="Right">
+            <!-- Row 0: Presets -->
+            <WrapPanel HorizontalAlignment="Right" Margin="0,0,0,6">
+                <TextBlock Text="Presets:" Foreground="#4ec9ff" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <Button Name="BtnPresetMin" Content="&#x1F7E2; Minimal"    Style="{StaticResource PrimaryBtn}" Margin="4,0" Background="#1a6b3c"/>
+                <Button Name="BtnPresetBal" Content="&#x1F7E1; Balanced"   Style="{StaticResource PrimaryBtn}" Margin="4,0" Background="#8a6d1a"/>
+                <Button Name="BtnPresetAgg" Content="&#x1F534; Aggressive" Style="{StaticResource PrimaryBtn}" Margin="4,0" Background="#8a1a1a"/>
+            </WrapPanel>
             <!-- Row 1: Main action buttons -->
             <WrapPanel HorizontalAlignment="Right" Margin="0,0,0,6">
                 <Button Name="BtnSelectAll"   Content="[x] Select All"        Style="{StaticResource PrimaryBtn}" Margin="4,0"/>
@@ -2982,6 +2989,9 @@ $DashboardPanel = $Window.FindName("DashboardPanel")
 $BtnApply       = $Window.FindName("BtnApply")
 $BtnSelectAll   = $Window.FindName("BtnSelectAll")
 $BtnDeselect    = $Window.FindName("BtnDeselectAll")
+$BtnPresetMin   = $Window.FindName("BtnPresetMin")
+$BtnPresetBal   = $Window.FindName("BtnPresetBal")
+$BtnPresetAgg   = $Window.FindName("BtnPresetAgg")
 $BtnOpenLog     = $Window.FindName("BtnOpenLog")
 $BtnOpenBackups = $Window.FindName("BtnOpenBackups")
 $BtnServices    = $Window.FindName("BtnServices")
@@ -3788,6 +3798,62 @@ foreach ($cat in @("Windows","Gaming","Network","RAM & Storage","Windows 11","Au
 }
 
 # -----------------------------------------
+# PRESETS (cumulative: Minimal subset of Balanced subset of Aggressive)
+# One-time/destructive actions (Deep Clean, Empty Recycle Bin, Run Disk
+# Cleanup, Clear Shader Cache, Clean Temp Files, Flush DNS) and the DNS
+# provider tweaks (Cloudflare vs Google conflict) are deliberately NEVER
+# part of a preset -- those stay a conscious manual choice.
+# -----------------------------------------
+$Script:PresetMinimal = @(
+    "Disable Telemetry & Data Collection","Disable Activity History","Disable Advertising ID",
+    "Disable Location Tracking","Disable Scheduled Telemetry Tasks",
+    "Prevent Device Companion Apps","Disable Consumer Features","Disable Windows Platform Binary Table (WPBT)",
+    "Disable Power Throttling",
+    "Enable Game Mode","CPU Priority for Games (Win32Priority)","MMCSS Gaming Profile (High Priority)","Disable Fullscreen Optimizations",
+    "Disable Mouse Acceleration","Show File Extensions",
+    "Disable Nagle's Algorithm (TCPNoDelay)","Disable Network Throttling Index","Disable QoS Packet Scheduler Limit",
+    "Disable Delivery Optimization (P2P Windows Update)"
+)
+$Script:PresetBalanced = $Script:PresetMinimal + @(
+    "Remove Xbox Apps","Remove Copilot","Remove Windows Recall","Remove Other Bloatware",
+    "Block Telemetry Hosts (hosts file)",
+    "Ultimate Performance Plan","Disable HPET (High Precision Event Timer)","Set 0.5ms Timer Resolution",
+    "Disable Prefetch & Superfetch","Optimize Visual Effects (Performance Mode)","Disable Bing in Windows Search",
+    "Disable Store Recommended Search Results","Disable File Explorer Automatic Folder Discovery",
+    "Disable Xbox Game Bar","Disable Windows Update during Gaming","Disable Background App Throttling",
+    "NVIDIA Low Latency Mode (Reflex)","Enable MSI Mode (Message Signaled Interrupts)","Enable Hardware-Accelerated GPU Scheduling (HAGS)","Enable DirectX 12 Optimization",
+    "NVIDIA: Disable Threaded Optimization","NVIDIA: Max Pre-Rendered Frames = 1","NVIDIA: Shader Cache Size (Unlimited)","NVIDIA: Power Management = Max Performance",
+    "AMD: Disable ULPS (Ultra Low Power State)","AMD: Shader Cache (Unlimited)","AMD: Anti-Lag (Low Latency Mode)",
+    "Disable Audio Enhancements","Optimize MMCSS Audio Profile","Set Audio Service High Priority","Disable Windows Sound Scheme","Disable Spatial Sound (Windows Sonic)","Disable Audio Device Power Save",
+    "Disable Large Send Offload (LSO)","Optimize TCP Settings (ECN/SACK/Timestamps)","Disable TCP Auto-Tuning","Disable Network Adapter Power Saving",
+    "Disable Sticky Keys","Enable Dark Mode","Disable Transparency Effects",
+    "Restore Classic Right-Click Menu","Left-Align Taskbar","Disable Widgets","Remove Chat Icon from Taskbar","Disable Recommended in Start Menu","Enable End Task in Taskbar","Disable Snap Layout Hover Menu",
+    "Show Hidden Files","Num Lock on Startup","Enable Long Paths",
+    "Optimize PageFile (System Managed)","Enable SSD TRIM","Disable Scheduled Defragmentation","Optimize NVMe Queue Depth",
+    "Disable USB Selective Suspend","Disable PCI-E Link State Power Management","Disable Hard Disk Sleep","CPU Minimum Processor State = 100%","CPU Maximum Processor State = 100%"
+)
+$Script:PresetAggressive = $Script:PresetBalanced + @(
+    "Remove Cortana","Remove Microsoft Teams (Personal)","Remove OneDrive",
+    "Disable Windows Search Indexing","Process Count Reduction (Svchost)",
+    "Disable Memory Compression","Disable Write-Cache Buffer Flushing","Disable Hibernation","Clear PageFile on Shutdown",
+    "Disable Reserved Storage","Disable Storage Sense","Disable Lock Screen","Enable Start Menu Previous Layout",
+    "Set Display Sleep = 15 Minutes","Disable Sleep (System)"
+)
+
+function Set-Preset {
+    param([string[]]$Names, [string]$Label)
+    foreach ($cb in $CheckBoxMap.Values) { $cb.IsChecked = $false }
+    $sel = 0; $skipped = 0
+    foreach ($n in $Names) {
+        if ($CheckBoxMap.ContainsKey($n)) {
+            if ($CheckBoxMap[$n].IsEnabled) { $CheckBoxMap[$n].IsChecked = $true; $sel++ }
+            else { $skipped++ }
+        }
+    }
+    $StatusText.Text = "Preset '$Label': $sel tweaks selected$(if ($skipped) { " ($skipped skipped -- not compatible with this system)" }). Review, then click Apply Selected."
+}
+
+# -----------------------------------------
 # BUTTON EVENTS
 # -----------------------------------------
 $BtnSelectAll.Add_Click({
@@ -3796,6 +3862,17 @@ $BtnSelectAll.Add_Click({
 
 $BtnDeselect.Add_Click({
     foreach ($cb in $CheckBoxMap.Values) { $cb.IsChecked = $false }
+})
+
+$BtnPresetMin.Add_Click({ Set-Preset $Script:PresetMinimal    "Minimal" })
+$BtnPresetBal.Add_Click({ Set-Preset $Script:PresetBalanced   "Balanced" })
+$BtnPresetAgg.Add_Click({
+    $r = [System.Windows.MessageBox]::Show(
+        "The 'Aggressive' preset also selects app removals (Cortana, OneDrive, Teams, Xbox, Recall, bloatware) and aggressive tweaks.`n`nRemoved apps cannot be restored by 'Revert All' -- only via System Restore.`n`nSelect the aggressive preset now? (Nothing is applied until you click 'Apply Selected'.)",
+        "GameOptimizerPro -- Aggressive Preset",
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning)
+    if ($r -eq [System.Windows.MessageBoxResult]::Yes) { Set-Preset $Script:PresetAggressive "Aggressive" }
 })
 
 $BtnOpenLog.Add_Click({

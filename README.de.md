@@ -1,11 +1,11 @@
-# ⚡ GameOptimizerPro v1.3.3
+# ⚡ GameOptimizerPro v1.4.0
 
 > **Windows & Gaming Optimizer** — by FloDePin
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.3.3-red)
+![Version](https://img.shields.io/badge/Version-1.4.0-red)
 
 🇬🇧 [English](README.md) | 🇩🇪 **Deutsch**
 
@@ -39,6 +39,7 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 
 | Tab | Features | Description |
 |-----|----------|-------------|
+| 🎚️ Presets | 3 Stufen | Ein-Klick **Minimal / Balanced / Aggressive** Tweak-Auswahl (kumulativ, sicher als Standard) |
 | 🪟 Windows | 29 Tweaks | Debloat, Datenschutz, Win11-Tweaks, Performance-Tweaks + CTT Essentials + Quality of Life |
 | 🌐 Network | 10 Tweaks | Nagle, LSO, DNS, TCP-Tuning, QoS, Adapter Power Saving, Delivery Optimization + asynchroner Ping-Test (Latenz, Paketverlust, Jitter zu Gateway/1.1.1.1/8.8.8.8) |
 | 🔊 Audio | 6 Tweaks | Audio-Tweaks, eigener Tab |
@@ -259,23 +260,23 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 📜 Changelog
 
-### v1.3.3 ⭐ **CURRENT**
-- 🧹 **Live-Monitor-Runspace-Cleanup** — der in v1.3.2 hinzugefügte Hintergrund-Sampler-Runspace wird jetzt beim Fenster-Schließen sauber aufgeräumt (`EndInvoke` + `Dispose`/`Close`), analog zum Ping-Test. Kein Thread-/Handle-Leak; Shutdown quasi sofort (~10 ms).
-
-### v1.3.2 (Bugfixes & Härtung)
-- 🐛 **Hibernation-Status-Check korrigiert** — prüfte `%SystemRoot%\hiberfil.sys` (falscher Pfad), der Punkt war immer grün. Jetzt korrekt `%SystemDrive%\hiberfil.sys`.
-- 🐛 **Startup Manager zeigt jetzt auch die Autostart-Ordner** — Apps wie Discord/Spotify, die aus `shell:startup` (nicht den Run-Keys) starten, waren vorher unsichtbar. Enable/Disable über denselben Task-Manager-Mechanismus.
-- 🔧 **DNS-Revert** macht jetzt zusätzlich `ipconfig /renew` + DNS-Cache leeren, damit man nicht bis zum Neustart ohne funktionierendes DNS dasteht.
-- 🔧 **OneDrive-Entfernung** räumt zusätzlich den übrig gebliebenen Explorer-Seitenleisten-Eintrag (CLSID) weg.
-- 🔧 **Restore Point** scheitert nicht mehr heimlich beim 2. Start am selben Tag (24h-Limit wird aufgehoben).
-- ⚡ **Live-Monitor** in einen Hintergrund-Runspace ausgelagert (wie der Ping-Test) — kein UI-Mikroruckeln mehr alle 1,5s.
-- ⚠️ Stabilitäts-Warnung zur **Svchost Process Count Reduction**-Beschreibung ergänzt (reduzierte Prozess-Isolation).
+### v1.4.0 ⭐ **CURRENT**
+- 🎚️ **Preset-Buttons: Minimal / Balanced / Aggressive** — ein Klick wählt ein kuratiertes, kumulatives Tweak-Set (Minimal ⊂ Balanced ⊂ Aggressive):
+  - **Minimal** (19) — nur die sichersten, voll reversiblen Tweaks; kein App-Löschen
+  - **Balanced** (78) — Minimal + Performance, sanftes Debloat, GPU/Audio/UI-Politur
+  - **Aggressive** (93) — Balanced + volle App-Entfernung (Cortana/OneDrive/Teams…) & aggressive Tweaks (fragt vorher nach)
+- 🛡️ Einmalige/destruktive Aktionen (Deep Clean, Papierkorb leeren, Disk Cleanup) und die DNS-Provider-Tweaks sind bewusst **nie** Teil eines Presets — die bleiben bewusste manuelle Wahl.
+- ℹ️ Presets *wählen* nur aus — angewendet wird nichts, bis du **Apply Selected** klickst (das erstellt weiter Restore Point + Registry-Backup).
 
 ### v1.3.1
-- ✨ **7 neue „Quality of Life"-Tweaks** (Windows-Tab, Parität zu CTT WinUtil):
-  - **Show File Extensions** & **Show Hidden Files** (Explorer)
-  - **Disable Reserved Storage** (gibt ~7 GB frei) & **Disable Storage Sense**
-  - **Num Lock on Startup**, **Disable Lock Screen**, **Enable Long Paths**
+- ✨ **7 neue „Quality of Life"-Tweaks** (Windows-Tab, Parität zu CTT WinUtil): Show File Extensions, Show Hidden Files, Disable Reserved Storage (~7 GB), Disable Storage Sense, Num Lock on Startup, Disable Lock Screen, Enable Long Paths
+- 🐛 **Hibernation-Status-Check korrigiert** — prüfte den falschen Pfad (`%SystemRoot%` statt `%SystemDrive%\hiberfil.sys`), der Punkt war immer grün
+- 🐛 **Startup Manager zeigt jetzt auch die Autostart-Ordner** — Apps wie Discord/Spotify aus `shell:startup` (nicht den Run-Keys) waren vorher unsichtbar
+- 🔧 **DNS-Revert** macht jetzt zusätzlich `ipconfig /renew` + DNS-Cache leeren (kein kaputtes DNS mehr bis zum Neustart)
+- 🔧 **OneDrive-Entfernung** räumt zusätzlich den Explorer-Seitenleisten-Eintrag (CLSID) weg
+- 🔧 **Restore Point** scheitert nicht mehr heimlich beim 2. Start am selben Tag (24h-Limit aufgehoben)
+- ⚡ **Live-Monitor** läuft in einem Hintergrund-Runspace mit sauberem Dispose — kein UI-Ruckeln, keine Handle-Leaks
+- ⚠️ Stabilitäts-Warnung zur **Svchost Process Count Reduction**-Beschreibung ergänzt
 - ✅ Verifiziert: 105/105 Tweaks mit Apply + Revert + Status-Check, keine Kollisionen
 
 ### v1.3.0
