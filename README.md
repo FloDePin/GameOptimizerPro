@@ -1,11 +1,11 @@
-# ⚡ GameOptimizerPro v1.3.2
+# ⚡ GameOptimizerPro v1.3.3
 
 > **Windows & Gaming Optimizer** — by FloDePin
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.3.2-red)
+![Version](https://img.shields.io/badge/Version-1.3.3-red)
 
 🇬🇧 **English** | 🇩🇪 [Deutsch](README.de.md)
 
@@ -271,7 +271,10 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 📜 Changelog
 
-### v1.3.2 ⭐ **CURRENT** (bugfixes & hardening)
+### v1.3.3 ⭐ **CURRENT**
+- 🧹 **Live Monitor runspace cleanup** — the background sampler runspace added in v1.3.2 now disposes cleanly on window close (`EndInvoke` + `Dispose`/`Close`), matching the ping test's pattern. No leaked thread/handle; shutdown is instant (~10 ms).
+
+### v1.3.2 (bugfixes & hardening)
 - 🐛 **Fixed Hibernation status check** — checked `%SystemRoot%\hiberfil.sys` (wrong path), so the dot always showed green. Now checks `%SystemDrive%\hiberfil.sys` correctly.
 - 🐛 **Startup Manager now also lists the Startup folders** — apps like Discord/Spotify that auto-start from `shell:startup` (not the Run keys) were invisible before. Enable/disable uses the same Task-Manager mechanism.
 - 🔧 **DNS revert** now runs `ipconfig /renew` + flushes the DNS cache, so you don't end up with no working DNS until reboot.

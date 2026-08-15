@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.3.2
+    1.3.3
 #>
 
 $ErrorActionPreference = "Continue"
@@ -3494,12 +3494,18 @@ function Build-DashboardPanel {
                 $monData.NetMbps = [math]::Round(($netBps * 8 / 1MB), 1)
                 $monData.Ready   = $true
             } catch { }
-            Start-Sleep -Milliseconds 1500
+            # Sleep in short chunks so setting Run=$false stops the loop within ~100ms
+            for ($i = 0; $i -lt 15 -and $monData.Run; $i++) { Start-Sleep -Milliseconds 100 }
         }
     })
-    [void]$monPs.BeginInvoke()
-    # Stop the sampler loop when the main window closes so the thread ends.
-    $Window.Add_Closed({ $monData.Run = $false }.GetNewClosure())
+    $monHandle = $monPs.BeginInvoke()
+    # On main-window close: stop the sampler loop, then dispose the runspace
+    # cleanly (same pattern as the ping test) so no thread/handle is leaked.
+    $Window.Add_Closed({
+        $monData.Run = $false
+        try { $monPs.EndInvoke($monHandle) } catch { }
+        $monPs.Dispose(); $monRs.Close(); $monRs.Dispose()
+    }.GetNewClosure())
 
     $monTimer = New-Object System.Windows.Threading.DispatcherTimer
     $monTimer.Interval = [TimeSpan]::FromMilliseconds(750)
