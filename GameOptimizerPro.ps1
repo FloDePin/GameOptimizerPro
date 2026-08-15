@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    GameOptimizerPro v1.1 - Windows & Gaming Optimizer
+    GameOptimizerPro - Windows & Gaming Optimizer
 .DESCRIPTION
     GUI-based PowerShell optimizer with checkboxes and info tooltips.
     Tabs: Windows | Gaming | Network | RAM & Storage |
@@ -9,10 +9,17 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.4.0
+    1.4.1
 #>
 
 $ErrorActionPreference = "Continue"
+
+# -----------------------------------------
+# APP VERSION -- single source of truth. The window title, subtitle and
+# startup/close log lines all derive from this, so a version bump only needs
+# to change this ONE value (keep it in sync with the .VERSION block above).
+# -----------------------------------------
+$Script:AppVersion = "1.4.1"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -2514,7 +2521,7 @@ $Script:TweakDots = @{}           # tweakName -> dot Border (for Verify button r
 # -----------------------------------------
 $Script:UIStrings = @{
     # Header / subtitle
-    "subtitle"          = @{ EN = "Windows & Gaming Optimizer v1.1 -- by FloDePin";      DE = "Windows & Gaming Optimizer v1.1 -- von FloDePin" }
+    "subtitle"          = @{ EN = "Windows & Gaming Optimizer v$($Script:AppVersion) -- by FloDePin";      DE = "Windows & Gaming Optimizer v$($Script:AppVersion) -- von FloDePin" }
     "hw_detecting"      = @{ EN = "Detecting hardware...";                                DE = "Erkenne Hardware..." }
 
     # Tab headers
@@ -2723,7 +2730,7 @@ Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML wird geladen..." -ForegroundColor D
 [xml]$XAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="GameOptimizerPro v1.1 -- by FloDePin"
+        Title="GameOptimizerPro v$($Script:AppVersion) -- by FloDePin"
         Height="720" Width="860"
         ResizeMode="CanMinimize"
         WindowStartupLocation="CenterScreen"
@@ -2837,7 +2844,7 @@ Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML wird geladen..." -ForegroundColor D
         <!-- HEADER -->
         <StackPanel Grid.Row="0" Margin="0,0,0,12">
             <TextBlock Text="GameOptimizerPro" FontSize="26" FontWeight="Bold" Foreground="#e94560"/>
-            <TextBlock Name="SubtitleText" Text="Windows &amp; Gaming Optimizer v1.1 -- by FloDePin" FontSize="12" Foreground="#888" Margin="2,2,0,0"/>
+            <TextBlock Name="SubtitleText" Text="Windows &amp; Gaming Optimizer v$($Script:AppVersion) -- by FloDePin" FontSize="12" Foreground="#888" Margin="2,2,0,0"/>
         </StackPanel>
 
         <!-- HW INFO -->
@@ -4819,7 +4826,7 @@ $BtnLang.Background  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.
 Apply-Language
 $StatusText.Text    = Get-UIString "status_ready"
 
-Write-Log "GameOptimizerPro v1.1 started | $HWInfo"
+Write-Log "GameOptimizerPro v$($Script:AppVersion) started | $HWInfo"
 foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] Alles OK  --  ShowDialog wird aufgerufen" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
 Write-Host "[$(Get-Date -f 'HH:mm:ss')] Alles OK  --  ShowDialog wird aufgerufen" -ForegroundColor DarkGray
 
@@ -4835,7 +4842,7 @@ $Window.ShowDialog() | Out-Null
 # Note: this only runs on a clean close. If the script crashes, the catch
 # block below keeps the process alive so the error MessageBox can be read.
 # -----------------------------------------
-Write-Log "GameOptimizerPro v1.1 closed by user"
+Write-Log "GameOptimizerPro v$($Script:AppVersion) closed by user"
 Stop-Process -Id $PID -Force -ErrorAction SilentlyContinue
 
 } catch {
