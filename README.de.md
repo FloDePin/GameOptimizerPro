@@ -1,11 +1,11 @@
-# ⚡ GameOptimizerPro v1.4.1
+# ⚡ GameOptimizerPro v1.4.0
 
 > **Windows & Gaming Optimizer** — by FloDePin
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.4.1-red)
+![Version](https://img.shields.io/badge/Version-1.4.0-red)
 
 🇬🇧 [English](README.md) | 🇩🇪 **Deutsch**
 
@@ -260,10 +260,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 📜 Changelog
 
-### v1.4.1 ⭐ **CURRENT**
-- 🐛 **Fenstertitel/Untertitel zeigen jetzt die echte Version** — die Titelleiste war fest auf „v1.1" verdrahtet, unabhängig von der tatsächlichen Version. Titel, Untertitel und Log-Zeilen leiten sich jetzt aus einer einzigen `$AppVersion`-Variable ab und bleiben so immer synchron.
-
-### v1.4.0
+### v1.4.0 ⭐ **CURRENT**
 - 🎚️ **Preset-Buttons: Minimal / Balanced / Aggressive** — ein Klick wählt ein kuratiertes, kumulatives Tweak-Set (Minimal ⊂ Balanced ⊂ Aggressive):
   - **Minimal** (19) — nur die sichersten, voll reversiblen Tweaks; kein App-Löschen
   - **Balanced** (78) — Minimal + Performance, sanftes Debloat, GPU/Audio/UI-Politur

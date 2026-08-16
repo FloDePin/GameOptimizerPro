@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.4.1
+    1.4.0
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.4.1"
+$Script:AppVersion = "1.4.0"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
