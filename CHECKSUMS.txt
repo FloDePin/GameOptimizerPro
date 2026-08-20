@@ -10,4 +10,4 @@
 # Update this file (and the $ExpectedHash constant in install.ps1) every
 # time GameOptimizerPro.ps1 changes.
 
-E3F1E0C158FBB2D20AD591478732FC4B75374C1A033478E997B49D5FD403F512  GameOptimizerPro.ps1
+9CF664967BD391245EACBD70E47AA7B8C365F4C5FAF73E268ECD1F6F6A95A409  GameOptimizerPro.ps1
