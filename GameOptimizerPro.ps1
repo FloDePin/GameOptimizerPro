@@ -416,18 +416,25 @@ $AllTweaks = @(
         Category = "Windows"
         Group    = "Performance"
         Action   = {
-            powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>$null
-            $planMatch = powercfg -list | Select-String "Ultimative Leistung|Ultimate Performance" | Select-Object -First 1
-            if ($planMatch) {
-                $guid = $planMatch.ToString().Split()[3]
-                if ($guid) {
-                    powercfg -setactive $guid
-                    Write-Log "Ultimate Performance Plan activated (GUID: $guid)"
-                } else {
-                    Write-Log "Ultimate Performance Plan: could not parse GUID from: $($planMatch.ToString())"
-                }
+            # Capture the GUID straight from the duplicatescheme output. Searching
+            # the plan list by name fails on non-English Windows (the plan is named
+            # e.g. "Maximo rendimiento" / "Ultimative Leistung"), so match the GUID
+            # pattern instead -- fully locale-independent.
+            $out  = powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>$null
+            $guid = $null
+            if (($out -join " ") -match "([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})") { $guid = $matches[1] }
+            if (-not $guid) {
+                # Plan may already exist -- grab a GUID from any Ultimate-Performance list line
+                $line = powercfg -list | Select-String "Ultimate Performance|Ultimative Leistung" | Select-Object -First 1
+                if ($line -and $line.ToString() -match "([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})") { $guid = $matches[1] }
+            }
+            if ($guid) {
+                powercfg -setactive $guid 2>$null
+                # Remember the activated GUID so the status check works locale-independently
+                reg add "HKLM\SOFTWARE\GameOptimizerPro" /v UltimatePerfGuid /t REG_SZ /d $guid /f | Out-Null
+                Write-Log "Ultimate Performance Plan activated (GUID: $guid)"
             } else {
-                Write-Log "Ultimate Performance Plan: plan not found after duplication attempt"
+                Write-Log "Ultimate Performance Plan: could not create or locate the plan"
             }
         }
     },
@@ -838,7 +845,7 @@ $AllTweaks = @(
             if ($gpuDev) {
                 $pnpId   = $gpuDev.PNPDeviceID
                 $regPath = "HKLM\SYSTEM\CurrentControlSet\Enum\$pnpId\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties"
-                reg add $regPath /v MSISupported /t REG_DWORD /d 1 /f | Out-Null
+                reg add "$regPath" /v MSISupported /t REG_DWORD /d 1 /f | Out-Null
                 Write-Log "MSI Mode enabled for: $($gpuDev.Name)"
             }
         }
@@ -925,6 +932,8 @@ $AllTweaks = @(
         Action   = {
             reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 0xffffffff /f | Out-Null
             reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 0 /f | Out-Null
+            # Ownership marker for the shared SystemResponsiveness value (see reverts)
+            reg add "HKLM\SOFTWARE\GameOptimizerPro" /v SR_NetworkThrottle /t REG_DWORD /d 1 /f | Out-Null
             Write-Log "Network Throttling Index disabled"
         }
     },
@@ -1106,10 +1115,10 @@ $AllTweaks = @(
                     $pnpId = $disk.PNPDeviceID
                     # Path 1: per-device StorPort queue depth (most controllers)
                     $regPath1 = "HKLM\SYSTEM\CurrentControlSet\Enum\$pnpId\Device Parameters\StorPort"
-                    reg add $regPath1 /v QueueDepth /t REG_DWORD /d 32 /f | Out-Null
+                    reg add "$regPath1" /v QueueDepth /t REG_DWORD /d 32 /f | Out-Null
                     # Path 2: interrupt affinity priority (Samsung/WD/Seagate NVMe)
                     $regPath2 = "HKLM\SYSTEM\CurrentControlSet\Enum\$pnpId\Device Parameters\Interrupt Management\Affinity Policy"
-                    reg add $regPath2 /v DevicePriority /t REG_DWORD /d 2 /f | Out-Null
+                    reg add "$regPath2" /v DevicePriority /t REG_DWORD /d 2 /f | Out-Null
                 }
                 # Global stornvme driver: disable idle power management for lower latency
                 reg add "HKLM\SYSTEM\CurrentControlSet\Services\stornvme\Parameters\Device" /v IdlePowerEnabled /t REG_DWORD /d 0 /f 2>$null | Out-Null
@@ -1139,7 +1148,7 @@ $AllTweaks = @(
                 foreach ($disk in $disks) {
                     $pnpId   = $disk.PNPDeviceID
                     $regPath = "HKLM\SYSTEM\CurrentControlSet\Enum\$pnpId\Device Parameters\Disk"
-                    reg add $regPath /v UserWriteCacheSetting /t REG_DWORD /d 1 /f | Out-Null
+                    reg add "$regPath" /v UserWriteCacheSetting /t REG_DWORD /d 1 /f | Out-Null
                     $count++
                 }
                 Write-Log ("Write-Cache Buffer Flushing disabled (" + $count + " disks updated)")
@@ -1372,6 +1381,8 @@ $AllTweaks = @(
         Group    = "Latency & Quality"
         Action   = {
             reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 0 /f | Out-Null
+            # Ownership marker for the shared SystemResponsiveness value (see reverts)
+            reg add "HKLM\SOFTWARE\GameOptimizerPro" /v SR_AudioPriority /t REG_DWORD /d 1 /f | Out-Null
             Write-Log "Audio SystemResponsiveness set to 0 (maximum audio priority)"
         }
     },
@@ -1799,6 +1810,7 @@ $RevertActions = @{
                 Write-Log "Revert WARNING: Balanced power plan not found -- could not revert power plan"
             }
         }
+        reg delete "HKLM\SOFTWARE\GameOptimizerPro" /v UltimatePerfGuid /f 2>$null
     }
     "Disable HPET (High Precision Event Timer)" = {
         bcdedit /set useplatformclock true 2>$null | Out-Null
@@ -1908,7 +1920,7 @@ $RevertActions = @{
         if ($gpuDev) {
             $pnpId   = $gpuDev.PNPDeviceID
             $regPath = "HKLM\SYSTEM\CurrentControlSet\Enum\$pnpId\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties"
-            reg add $regPath /v MSISupported /t REG_DWORD /d 0 /f | Out-Null
+            reg add "$regPath" /v MSISupported /t REG_DWORD /d 0 /f | Out-Null
             Write-Log "Revert: MSI Mode disabled for $($gpuDev.Name)"
         }
     }
@@ -1946,7 +1958,12 @@ $RevertActions = @{
     }
     "Disable Network Throttling Index" = {
         reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 10 /f | Out-Null
-        reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 20 /f | Out-Null
+        reg delete "HKLM\SOFTWARE\GameOptimizerPro" /v SR_NetworkThrottle /f 2>$null
+        # Restore the SHARED SystemResponsiveness to default only if the Audio-priority
+        # tweak isn't still relying on it (both tweaks set it to 0).
+        if (-not (Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "SR_AudioPriority")) {
+            reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 20 /f | Out-Null
+        }
         Write-Log "Revert: Network Throttling Index restored to default (10)"
     }
 
@@ -2053,7 +2070,7 @@ $RevertActions = @{
         foreach ($disk in $disks) {
             $pnpId   = $disk.PNPDeviceID
             $regPath = "HKLM\SYSTEM\CurrentControlSet\Enum\$pnpId\Device Parameters\Disk"
-            reg add $regPath /v UserWriteCacheSetting /t REG_DWORD /d 0 /f | Out-Null
+            reg add "$regPath" /v UserWriteCacheSetting /t REG_DWORD /d 0 /f | Out-Null
         }
         Write-Log "Revert: Write-Cache Buffer Flushing set back to 0 (Windows default)"
     }
@@ -2138,8 +2155,13 @@ $RevertActions = @{
         Write-Log "Revert: MMCSS Audio profile restored to defaults"
     }
     "Set Audio Service High Priority" = {
-        reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 20 /f | Out-Null
-        Write-Log "Revert: SystemResponsiveness restored to 20 (default)"
+        reg delete "HKLM\SOFTWARE\GameOptimizerPro" /v SR_AudioPriority /f 2>$null
+        # Restore the SHARED SystemResponsiveness to default only if the Network-throttle
+        # tweak isn't still relying on it (both tweaks set it to 0).
+        if (-not (Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "SR_NetworkThrottle")) {
+            reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 20 /f | Out-Null
+        }
+        Write-Log "Revert: SystemResponsiveness restored (unless still in use by another tweak)"
     }
     "Disable Windows Sound Scheme" = {
         reg add "HKCU\AppEvents\Schemes" /ve /t REG_SZ /d "Windows Default" /f | Out-Null
@@ -2314,7 +2336,7 @@ $CheckFunctions = @{
     "Disable Scheduled Telemetry Tasks"  = { ($t = Get-ScheduledTask -TaskName "Microsoft Compatibility Appraiser" -EA SilentlyContinue) -and $t.State -eq "Disabled" }
 
     # PERFORMANCE
-    "Ultimate Performance Plan"          = { (powercfg /getactivescheme 2>$null) -match "e9a42b02|Ultimat" }
+    "Ultimate Performance Plan"          = { $g = Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "UltimatePerfGuid"; $a = (powercfg /getactivescheme 2>$null) -join " "; ($g -and $a -match [regex]::Escape($g)) -or ($a -match "Ultimate Performance|Ultimative Leistung") }
     "Disable HPET (High Precision Event Timer)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" "GlobalTimerResolutionRequests") -eq 1 }
     "Set 0.5ms Timer Resolution"         = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" "GlobalTimerResolutionRequests") -eq 1 }
     "Disable Prefetch & Superfetch"      = { (($s=Get-Service SysMain -EA SilentlyContinue) -and ($s.StartType -eq "Disabled" -or $s.Status -eq "Stopped")) }
