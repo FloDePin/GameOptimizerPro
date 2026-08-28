@@ -1,11 +1,11 @@
-# ⚡ GameOptimizerPro v1.4.0
+# ⚡ GameOptimizerPro v1.4.1
 
 > **Windows & Gaming Optimizer** — by FloDePin
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.4.0-red)
+![Version](https://img.shields.io/badge/Version-1.4.1-red)
 
 🇬🇧 [English](README.md) | 🇩🇪 **Deutsch**
 
@@ -260,7 +260,13 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 📜 Changelog
 
-### v1.4.0 ⭐ **CURRENT**
+### v1.4.1 ⭐ **CURRENT** (Lokalisierungs- & Robustheits-Fixes)
+- 🌍 **„Ultimate Performance Plan" auf nicht-englischem Windows gefixt** — der Plan wurde über seinen (lokalisierten) Anzeigenamen gesucht, also auf ES/FR/PL/etc. zwar erstellt, aber nie aktiviert. Jetzt wird die GUID direkt abgefangen und der Status-Check ist sprachunabhängig.
+- 🌍 **„Disable Store Recommended Search Results" gefixt** — nutzte den englischen Kontonamen `Everyone` bei icacls, der z.B. auf Deutsch („Jeder") fehlschlägt. Jetzt die sprachneutrale SID `*S-1-1-0`.
+- 🔧 **SystemResponsiveness-Konflikt behoben** — „Disable Network Throttling Index" und „Set Audio Service High Priority" setzen denselben Wert; das Rückgängigmachen des einen brach lautlos den anderen. Jetzt über Besitzer-Marker gelöst, sodass der geteilte Wert nur zurückgesetzt wird, wenn kein Tweak ihn mehr braucht (reihenfolge-unabhängig).
+- 🔧 **`reg add`-Aufrufe gehärtet** — Registry-Pfade mit Leerzeichen werden jetzt gequotet, um seltene „Invalid key name"-Fehler zu vermeiden.
+
+### v1.4.0
 - 🎚️ **Preset-Buttons: Minimal / Balanced / Aggressive** — ein Klick wählt ein kuratiertes, kumulatives Tweak-Set (Minimal ⊂ Balanced ⊂ Aggressive):
   - **Minimal** (19) — nur die sichersten, voll reversiblen Tweaks; kein App-Löschen
   - **Balanced** (78) — Minimal + Performance, sanftes Debloat, GPU/Audio/UI-Politur

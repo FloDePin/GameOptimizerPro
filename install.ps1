@@ -7,7 +7,7 @@ $dest = "$env:TEMP\GameOptimizerPro.ps1"
 # integrity check against corruption/tampering in transit -- it does not
 # replace reading the source, but lets users verify what they're about
 # to run with Admin rights without having to read all 3800 lines by hand.
-$ExpectedHash = "713DEF1DEC03435285FCE1E3DCAA695E1B3E416070A1B86875B8CEDB00783458"
+$ExpectedHash = "5489138D793C30576882DACC26991683C2ECA4F32A583798B7886F2F6CC1A007"
 
 Write-Host ""
 Write-Host "  GameOptimizerPro v1.1 Installer" -ForegroundColor Red
