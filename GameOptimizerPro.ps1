@@ -566,7 +566,7 @@ $AllTweaks = @(
         Action   = {
             $storeDb = "$env:LocalAppData\Packages\Microsoft.WindowsStore_8wekyb3d8bbwe\LocalState\store.db"
             if (Test-Path $storeDb) {
-                icacls "$storeDb" /deny "Everyone:F" 2>$null | Out-Null
+                icacls "$storeDb" /deny "*S-1-1-0:F" 2>$null | Out-Null
                 Write-Log "Store recommended search results disabled (store.db locked)"
             } else {
                 Write-Log "Store search tweak skipped: store.db not found"
@@ -1675,7 +1675,7 @@ $RevertActions = @{
     }
     "Disable Store Recommended Search Results" = {
         $storeDb = "$env:LocalAppData\Packages\Microsoft.WindowsStore_8wekyb3d8bbwe\LocalState\store.db"
-        if (Test-Path $storeDb) { icacls "$storeDb" /grant "Everyone:F" 2>$null | Out-Null }
+        if (Test-Path $storeDb) { icacls "$storeDb" /grant "*S-1-1-0:F" 2>$null | Out-Null }
         Write-Log "Revert: Store recommended search results re-enabled (store.db unlocked)"
     }
     "Enable Start Menu Previous Layout" = {
