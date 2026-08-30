@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.4.1
+    1.4.2
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.4.1"
+$Script:AppVersion = "1.4.2"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -349,6 +349,16 @@ $AllTweaks = @(
             reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" /v Enabled /t REG_DWORD /d 0 /f | Out-Null
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo" /v DisabledByGroupPolicy /t REG_DWORD /d 1 /f | Out-Null
             Write-Log "Advertising ID disabled"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Text & Image Generation (AI)"
+        Desc     = "Deaktiviert die geraeteweite Text- und Bildgenerierung (on-device generative KI) fuer alle Apps per Gruppenrichtlinie (Force Deny). Betrifft nur die lokale KI auf dem Geraet, nicht Cloud-KI-Dienste."
+        Category = "Windows"
+        Group    = "Privacy"
+        Action   = {
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" /v LetAppsAccessSystemAIModels /t REG_DWORD /d 2 /f | Out-Null
+            Write-Log "Text & Image Generation (on-device AI) disabled for all apps (Force Deny)"
         }
     },
     [PSCustomObject]@{
@@ -1754,6 +1764,10 @@ $RevertActions = @{
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo" /v DisabledByGroupPolicy /f 2>$null
         Write-Log "Revert: Advertising ID re-enabled"
     }
+    "Disable Text & Image Generation (AI)" = {
+        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" /v LetAppsAccessSystemAIModels /f 2>$null
+        Write-Log "Revert: Text & Image Generation policy removed (back to user control)"
+    }
     "Disable Location Tracking" = {
         reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location" /v Value /t REG_SZ /d Allow /f | Out-Null
         Set-Service lfsvc -StartupType Manual -ErrorAction SilentlyContinue
@@ -2331,6 +2345,7 @@ $CheckFunctions = @{
     "Disable Telemetry & Data Collection" = { (($s=Get-Service DiagTrack -EA SilentlyContinue) -and $s.StartType -eq "Disabled") -or ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection" "AllowTelemetry") -eq 0) }
     "Disable Activity History"           = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" "EnableActivityFeed") -eq 0 }
     "Disable Advertising ID"             = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" "Enabled") -eq 0 }
+    "Disable Text & Image Generation (AI)" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" "LetAppsAccessSystemAIModels") -eq 2 }
     "Disable Location Tracking"          = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location" "Value") -eq "Deny" }
     "Block Telemetry Hosts (hosts file)" = { (Get-Content "$env:SystemRoot\System32\drivers\etc\hosts" -EA SilentlyContinue) -match "0.0.0.0 telemetry.microsoft.com" }
     "Disable Scheduled Telemetry Tasks"  = { ($t = Get-ScheduledTask -TaskName "Microsoft Compatibility Appraiser" -EA SilentlyContinue) -and $t.State -eq "Disabled" }
@@ -2664,6 +2679,7 @@ $TweakDescEN = @{
     "Disable Telemetry & Data Collection"         = "Disables all Windows telemetry services (DiagTrack, dmwappushservice). Windows stops sending usage data to Microsoft."
     "Disable Activity History"                    = "Disables Windows Timeline/Activity History. Windows stops tracking which apps and files you open."
     "Disable Advertising ID"                      = "Disables the advertising ID Windows assigns each user. Apps can no longer track you across devices for targeted ads."
+    "Disable Text & Image Generation (AI)"        = "Disables device-wide Text and Image Generation (on-device generative AI) for all apps via policy (Force Deny). Affects only local on-device AI, not cloud AI services."
     "Disable Location Tracking"                   = "Disables the Windows location service system-wide. Apps can no longer request your location."
     "Block Telemetry Hosts (hosts file)"          = "Adds Microsoft telemetry servers to the Windows hosts file, blocking them even if telemetry services are still running."
     "Disable Scheduled Telemetry Tasks"           = "Disables all scheduled Windows tasks that collect and send telemetry data (e.g. Compatibility Appraiser, CEIP)."
@@ -3225,6 +3241,7 @@ $BiosProfiles = @(
             @{ Cat="Memory";               Name="Memory Interleaving";          Rec="Enabled (Auto)"; Path="MIT --> Advanced Memory Settings";                        Desc="Improves memory bandwidth. Leave enabled, size on Auto.";                                                                             Risk="Safe" }
             @{ Cat="PCIe Power (Latency)"; Name="ASPM + LTR + Clock PM";        Rec="Disabled";       Path="Settings --> IO Ports / AMD CBS --> PCIe power";            Desc="Latency-focused: turning off PCIe ASPM, LTR and Clock Power Management removes PCIe power-state latency. Real win, but higher idle power/heat -- desktops only.";  Risk="Moderate" }
             @{ Cat="C-States (Latency)";   Name="DF C-States";                  Rec="Disabled";       Path="AMD CBS --> DF Common Options --> DF C-States";            Desc="Disabling Data Fabric C-states trims latency spikes (small idle-power cost). On AM5 LEAVE global C-States on Auto -- only DF C-States off.";  Risk="Moderate" }
+            @{ Cat="Security"; Name="Disable Motherboard Auto-Install Utilities"; Rec="Disabled"; Path="ASUS: Tool > Auto Install ASUS Utilities  |  MSI: Settings > Advanced > MSI Driver Utility Installer  |  Gigabyte: Settings > Gigabyte Utilities Downloader  |  ASRock: Tool > Auto Driver Installer"; Desc="Stops the board from silently installing vendor utilities, drivers and background services into Windows on every boot (via WPBT). Complements the 'Disable WPBT' tweak. Grab any driver you need directly from the vendor's website instead.";  Risk="Safe" }
         )
     }
     @{
@@ -3239,6 +3256,7 @@ $BiosProfiles = @(
             @{ Cat="Power";   Name="Power Limit 1 / 2 (PL1/PL2)";       Rec="Auto or Board Max";    Path="Advanced --> CPU Configuration --> CPU Power Limits";                  Desc="With good cooling, leave on Auto. Only reduce manually if throttling.";                 Risk="Moderate" }
             @{ Cat="Boot";    Name="Fast Boot";                         Rec="Disabled";             Path="Boot --> Fast Boot";                                                   Desc="Disabling prevents POST issues.";                                                       Risk="Safe" }
             @{ Cat="Security"; Name="Secure Boot";                      Rec="Enabled";              Path="Boot --> Secure Boot";                                                 Desc="Mandatory for Windows 11. Only disable for Linux dual-boot.";                           Risk="Safe" }
+            @{ Cat="Security"; Name="Disable Motherboard Auto-Install Utilities"; Rec="Disabled"; Path="ASUS: Tool > Auto Install ASUS Utilities  |  MSI: Settings > Advanced > MSI Driver Utility Installer  |  Gigabyte: Settings > Gigabyte Utilities Downloader  |  ASRock: Tool > Auto Driver Installer"; Desc="Stops the board from silently installing vendor utilities, drivers and background services into Windows on every boot (via WPBT). Complements the 'Disable WPBT' tweak. Grab any driver you need directly from the vendor's website instead.";  Risk="Safe" }
         )
     }
     @{
@@ -3258,6 +3276,7 @@ $BiosProfiles = @(
             @{ Cat="Memory";               Name="Memory Interleaving";          Rec="Enabled (Auto)"; Path="MIT --> Advanced Memory Settings";                        Desc="Improves memory bandwidth. Leave enabled, size on Auto.";                                                                             Risk="Safe" }
             @{ Cat="PCIe Power (Latency)"; Name="ASPM + LTR + Clock PM";        Rec="Disabled";       Path="Settings --> IO Ports / AMD CBS --> PCIe power";            Desc="Latency-focused: turning off PCIe ASPM, LTR and Clock Power Management removes PCIe power-state latency. Higher idle power/heat -- desktops only.";  Risk="Moderate" }
             @{ Cat="C-States (Latency)";   Name="DF C-States (+ optional Global)"; Rec="Disabled";    Path="AMD CBS --> DF Common Options --> DF C-States";            Desc="Disabling Data Fabric C-states trims latency spikes. On AM4, latency-focused users may also disable Global C-State Control (higher idle power) -- the safe default stays Auto.";  Risk="Moderate" }
+            @{ Cat="Security"; Name="Disable Motherboard Auto-Install Utilities"; Rec="Disabled"; Path="ASUS: Tool > Auto Install ASUS Utilities  |  MSI: Settings > Advanced > MSI Driver Utility Installer  |  Gigabyte: Settings > Gigabyte Utilities Downloader  |  ASRock: Tool > Auto Driver Installer"; Desc="Stops the board from silently installing vendor utilities, drivers and background services into Windows on every boot (via WPBT). Complements the 'Disable WPBT' tweak. Grab any driver you need directly from the vendor's website instead.";  Risk="Safe" }
         )
     }
 )

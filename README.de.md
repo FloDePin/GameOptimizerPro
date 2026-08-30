@@ -1,11 +1,11 @@
-# ⚡ GameOptimizerPro v1.4.1
+# ⚡ GameOptimizerPro v1.4.2
 
 > **Windows & Gaming Optimizer** — by FloDePin
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.4.1-red)
+![Version](https://img.shields.io/badge/Version-1.4.2-red)
 
 🇬🇧 [English](README.md) | 🇩🇪 **Deutsch**
 
@@ -40,7 +40,7 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 | Tab | Features | Description |
 |-----|----------|-------------|
 | 🎚️ Presets | 3 Stufen | Ein-Klick **Minimal / Balanced / Aggressive** Tweak-Auswahl (kumulativ, sicher als Standard) |
-| 🪟 Windows | 29 Tweaks | Debloat, Datenschutz, Win11-Tweaks, Performance-Tweaks + CTT Essentials + Quality of Life |
+| 🪟 Windows | 30 Tweaks | Debloat, Datenschutz, Win11-Tweaks, Performance-Tweaks + CTT Essentials + Quality of Life |
 | 🌐 Network | 10 Tweaks | Nagle, LSO, DNS, TCP-Tuning, QoS, Adapter Power Saving, Delivery Optimization + asynchroner Ping-Test (Latenz, Paketverlust, Jitter zu Gateway/1.1.1.1/8.8.8.8) |
 | 🔊 Audio | 6 Tweaks | Audio-Tweaks, eigener Tab |
 | 🎮 GPU Tweaks | 7 Tweaks | 4 NVIDIA + 3 AMD Tweaks, GPU-Erkennung, Brand-Grauausblendung |
@@ -53,7 +53,7 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 
 ---
 
-## 🪟 Windows Tab - 29 Tweaks
+## 🪟 Windows Tab - 30 Tweaks
 
 ### 🧹 Debloat & System Cleanup
 - **Remove Cortana** — Entfernt den Windows Sprachassistenten
@@ -260,7 +260,11 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 📜 Changelog
 
-### v1.4.1 ⭐ **CURRENT** (Lokalisierungs- & Robustheits-Fixes)
+### v1.4.2 ⭐ **CURRENT**
+- 🤖 **Neuer Tweak: Disable Text & Image Generation (AI)** — schaltet die geräteweite on-device-generative KI von Windows 11 für alle Apps per Richtlinie ab (Force Deny). Betrifft nur die lokale KI, nicht Cloud-Dienste.
+- 🔧 **BIOS Guide: „Disable Motherboard Auto-Install Utilities"** — zu den AM5/AM4/Intel-Profilen hinzugefügt, mit den herstellerspezifischen Pfaden (ASUS/MSI/Gigabyte/ASRock), die verhindern, dass das Board beim Boot heimlich Hersteller-Utilities/Treiber in Windows schiebt. Ergänzt den Disable-WPBT-Tweak.
+
+### v1.4.1 (Lokalisierungs- & Robustheits-Fixes)
 - 🌍 **„Ultimate Performance Plan" auf nicht-englischem Windows gefixt** — der Plan wurde über seinen (lokalisierten) Anzeigenamen gesucht, also auf ES/FR/PL/etc. zwar erstellt, aber nie aktiviert. Jetzt wird die GUID direkt abgefangen und der Status-Check ist sprachunabhängig.
 - 🌍 **„Disable Store Recommended Search Results" gefixt** — nutzte den englischen Kontonamen `Everyone` bei icacls, der z.B. auf Deutsch („Jeder") fehlschlägt. Jetzt die sprachneutrale SID `*S-1-1-0`.
 - 🔧 **SystemResponsiveness-Konflikt behoben** — „Disable Network Throttling Index" und „Set Audio Service High Priority" setzen denselben Wert; das Rückgängigmachen des einen brach lautlos den anderen. Jetzt über Besitzer-Marker gelöst, sodass der geteilte Wert nur zurückgesetzt wird, wenn kein Tweak ihn mehr braucht (reihenfolge-unabhängig).
