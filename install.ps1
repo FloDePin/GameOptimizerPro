@@ -7,13 +7,17 @@ $dest = "$env:TEMP\GameOptimizerPro.ps1"
 # integrity check against corruption/tampering in transit -- it does not
 # replace reading the source, but lets users verify what they're about
 # to run with Admin rights without having to read all 3800 lines by hand.
-$ExpectedHash = "88F260B3F88323549906EBE1D3B8157B502BE3D25D4EE8F84C47D3F5A6714A27"
+$ExpectedHash = "BC3C8097D40A9B387ABE9B48CB73ECB91135D2D4D12138C589869B7A8A1D8DD3"
+
+# Keep this in sync with $Script:AppVersion in GameOptimizerPro.ps1 (used for
+# display only -- integrity is enforced by $ExpectedHash above, not this string).
+$ScriptVersion = "1.4.3"
 
 Write-Host ""
-Write-Host "  GameOptimizerPro v1.1 Installer" -ForegroundColor Red
+Write-Host "  GameOptimizerPro v$ScriptVersion Installer" -ForegroundColor Red
 Write-Host "  ---------------------------------" -ForegroundColor DarkGray
 Write-Host ""
-Write-Host "  Downloading GameOptimizerPro v1.1..." -ForegroundColor Cyan
+Write-Host "  Downloading GameOptimizerPro v$ScriptVersion..." -ForegroundColor Cyan
 
 try {
     Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing

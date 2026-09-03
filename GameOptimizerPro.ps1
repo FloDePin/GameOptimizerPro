@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.4.2
+    1.4.3
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.4.2"
+$Script:AppVersion = "1.4.3"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -101,12 +101,21 @@ $HasNVMe  = $NVMeDisks.Count -gt 0
 $NVMeInfo = if ($HasNVMe) { "NVMe: $($NVMeDisks.Count)x" } else { "NVMe: none" }
 
 try {
-    $OSInfo  = Get-WmiObject Win32_OperatingSystem
+    $OSInfo  = Get-WmiObject Win32_OperatingSystem -ErrorAction Stop
     $OSBuild = [int]$OSInfo.BuildNumber
     $OSName  = $OSInfo.Caption
 } catch { $OSBuild = 0; $OSName = "Unknown OS" }
+# Fallback: if WMI failed (OSBuild 0, e.g. on some VMs/locked-down systems),
+# read the build straight from the registry so OS detection still works.
+if ($OSBuild -lt 10240) {
+    try {
+        $cv = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -ErrorAction Stop
+        if ($cv.CurrentBuildNumber) { $OSBuild = [int]$cv.CurrentBuildNumber }
+        if ((-not $OSName) -or $OSName -eq "Unknown OS") { if ($cv.ProductName) { $OSName = $cv.ProductName } }
+    } catch { }
+}
 $IsWin11 = $OSBuild -ge 22000
-$IsWin10 = $OSBuild -ge 10240 -and -not $IsWin11
+$IsWin10 = $OSBuild -ge 10240 -and $OSBuild -lt 22000
 $OSShort = if ($IsWin11) { "Win11 (Build $OSBuild)" } elseif ($IsWin10) { "Win10 (Build $OSBuild)" } else { $OSName }
 
 $HWInfo  = "GPU: $GPU   |   CPU: $CPU   |   RAM: $RAM GB   |   $NVMeInfo   |   $OSShort"
@@ -153,7 +162,7 @@ function Format-Bar { param([double]$Pct, [int]$Width = 12) $f = [math]::Round($
 # registry key any tweak touches to .reg files before Apply/Revert, giving
 # a always-available, tweak-specific fallback independent of VSS.
 # -----------------------------------------
-$Script:RegistryBackupRoot = "$env:TEMP\GameOptimizerPro_Backups"
+$Script:RegistryBackupRoot = "$env:LOCALAPPDATA\GameOptimizerPro\RegistryBackups"
 
 $Script:RegistryBackupKeys = @(
     "HKCU\AppEvents\Schemes",
@@ -596,7 +605,7 @@ $AllTweaks = @(
         Category = "Windows"
         Group    = "CTT Essentials"
         Action   = {
-            reg add "HKLM\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\3036241548" /v EnabledState /t REG_DWORD /d 1 /f | Out-Null
+            reg add "HKLM\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\8\3036241548" /v EnabledState /t REG_DWORD /d 1 /f | Out-Null
             Write-Log "Start Menu previous layout enabled (feature override)"
         }
     },
@@ -847,7 +856,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Enable MSI Mode (Message Signaled Interrupts)"
-        Desc     = "Aktiviert MSI-Modus fuer GPU und NVMe. Reduziert Interrupt-Latenz erheblich. Standard-Windows nutzt Line-Based Interrupts - MSI ist moderner und schneller. Reboot empfohlen."
+        Desc     = "Aktiviert MSI-Modus (Message Signaled Interrupts) fuer die primaere GPU. Reduziert Interrupt-Latenz erheblich. Standard-Windows nutzt Line-Based Interrupts - MSI ist moderner und schneller. Reboot empfohlen."
         Category = "Gaming"
         Group    = "GPU & Driver"
         Action   = {
@@ -892,16 +901,18 @@ $AllTweaks = @(
         }
     },
     [PSCustomObject]@{
-        Name     = "Enable DirectX 12 Optimization"
-        Desc     = "Optimiert DirectX 12 Einstellungen fuer maximale Gaming-Performance. Aktiviert DX12 Multi-Threading und reduziert Draw-Call-Overhead. Besonders effektiv bei modernen AAA-Spielen die DX12 nutzen."
+        Name     = "Increase GPU Timeout Tolerance (TDR)"
+        Desc     = "Erhoeht die GPU-Timeout-Toleranz (TDR-Delay von 2s auf 10s). Windows setzt den Grafiktreiber dann nicht mehr vorschnell zurueck, wenn die GPU unter Volllast kurz nicht antwortet -- reduziert Blackscreens/Treiber-Resets in fordernden Spielen und beim Uebertakten. Hinweis: erhoeht nicht die FPS, sondern die Stabilitaet."
         Category = "Gaming"
         Group    = "GPU & Driver"
         Action   = {
-            reg add "HKLM\SOFTWARE\Microsoft\DirectX" /v D3D12_ENABLE_UNSAFE_COMMAND_BUFFER_REUSE /t REG_DWORD /d 1 /f | Out-Null
-            reg add "HKLM\SOFTWARE\Microsoft\DirectX" /v D3D12_CPU_PAGE_PROPERTY /t REG_DWORD /d 2 /f | Out-Null
+            # Raise the GPU timeout (TDR) delay so Windows doesn't reset the driver
+            # prematurely under heavy load. NOTE: the old D3D12_* values under
+            # HKLM\SOFTWARE\Microsoft\DirectX were removed -- the D3D12 runtime never
+            # read them (those names are process env-vars, not registry keys).
             reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v TdrDelay /t REG_DWORD /d 10 /f | Out-Null
             reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v TdrDdiDelay /t REG_DWORD /d 10 /f | Out-Null
-            Write-Log "DirectX 12 Optimization enabled"
+            Write-Log "GPU TDR timeout raised (TdrDelay/TdrDdiDelay = 10s)"
         }
     },
 
@@ -1700,7 +1711,7 @@ $RevertActions = @{
         Write-Log "Revert: Store recommended search results re-enabled (store.db unlocked)"
     }
     "Enable Start Menu Previous Layout" = {
-        reg delete "HKLM\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\3036241548" /v EnabledState /f 2>$null
+        reg delete "HKLM\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\8\3036241548" /v EnabledState /f 2>$null
         Write-Log "Revert: Start Menu layout override removed"
     }
     "Disable File Explorer Automatic Folder Discovery" = {
@@ -1945,7 +1956,7 @@ $RevertActions = @{
     "Clear Shader Cache" = {
         Write-Log "Revert: Shader Cache cleared  --  nothing to restore (cache rebuilds automatically)"
     }
-    "Enable DirectX 12 Optimization" = {
+    "Increase GPU Timeout Tolerance (TDR)" = {
         reg delete "HKLM\SOFTWARE\Microsoft\DirectX" /v D3D12_ENABLE_UNSAFE_COMMAND_BUFFER_REUSE /f 2>$null
         reg delete "HKLM\SOFTWARE\Microsoft\DirectX" /v D3D12_CPU_PAGE_PROPERTY /f 2>$null
         reg delete "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v TdrDelay /f 2>$null
@@ -2329,7 +2340,7 @@ $CheckFunctions = @{
     "Disable Consumer Features" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableWindowsConsumerFeatures") -eq 1 }
     "Disable Windows Platform Binary Table (WPBT)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" "DisableWpbtExecution") -eq 1 }
     "Disable Store Recommended Search Results" = { $null }
-    "Enable Start Menu Previous Layout" = { (Get-RegVal "HKLM:\SYSTEM\ControlSet001\Control\FeatureManagement\Overrides\8\3036241548" "EnabledState") -eq 1 }
+    "Enable Start Menu Previous Layout" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\8\3036241548" "EnabledState") -eq 1 }
     "Disable File Explorer Automatic Folder Discovery" = { (Get-RegVal "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" "FolderType") -eq "NotSpecified" }
     "Run Disk Cleanup" = { $null }
 
@@ -2352,7 +2363,14 @@ $CheckFunctions = @{
 
     # PERFORMANCE
     "Ultimate Performance Plan"          = { $g = Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "UltimatePerfGuid"; $a = (powercfg /getactivescheme 2>$null) -join " "; ($g -and $a -match [regex]::Escape($g)) -or ($a -match "Ultimate Performance|Ultimative Leistung") }
-    "Disable HPET (High Precision Event Timer)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" "GlobalTimerResolutionRequests") -eq 1 }
+    "Disable HPET (High Precision Event Timer)" = {
+        # HPET is applied via bcdedit (useplatformtick/disabledynamictick), not the
+        # timer-resolution registry key -- so read the real BCD state here. bcdedit
+        # prints element names + Yes/No in English regardless of Windows locale.
+        $b = bcdedit /enum "{current}" 2>$null
+        if (-not $b) { return $null }
+        ($b -match 'useplatformtick\s+Yes') -and ($b -match 'disabledynamictick\s+Yes')
+    }
     "Set 0.5ms Timer Resolution"         = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" "GlobalTimerResolutionRequests") -eq 1 }
     "Disable Prefetch & Superfetch"      = { (($s=Get-Service SysMain -EA SilentlyContinue) -and ($s.StartType -eq "Disabled" -or $s.Status -eq "Stopped")) }
     "Optimize Visual Effects (Performance Mode)" = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" "VisualFXSetting") -eq 2 }
@@ -2382,7 +2400,7 @@ $CheckFunctions = @{
     }
     "Enable Hardware-Accelerated GPU Scheduling (HAGS)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" "HwSchMode") -eq 2 }
     "Clear Shader Cache"                 = { $null }
-    "Enable DirectX 12 Optimization"    = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\DirectX" "D3D12_ENABLE_UNSAFE_COMMAND_BUFFER_REUSE") -eq 1 }
+    "Increase GPU Timeout Tolerance (TDR)"    = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" "TdrDelay") -eq 10 }
 
     # NETWORK
     "Disable Nagle's Algorithm (TCPNoDelay)" = {
@@ -2438,7 +2456,7 @@ $CheckFunctions = @{
         (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Enum\$($d.PNPDeviceID)\Device Parameters\StorPort" "QueueDepth") -eq 32
     }
     "Disable Write-Cache Buffer Flushing" = {
-        $d = Get-WmiObject "SELECT * FROM Win32_DiskDrive" -EA SilentlyContinue | Where-Object { $null -eq $_.MediaType -or $_.MediaType -eq 3 -or $_.MediaType -eq 4 } | Select-Object -First 1
+        $d = Get-WmiObject -Query "SELECT * FROM Win32_DiskDrive" -EA SilentlyContinue | Where-Object { $null -eq $_.MediaType -or $_.MediaType -eq 3 -or $_.MediaType -eq 4 -or $_.MediaType -eq 'Fixed hard disk media' } | Select-Object -First 1
         if (-not $d) { return $null }
         (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Enum\$($d.PNPDeviceID)\Device Parameters\Disk" "UserWriteCacheSetting") -eq 1
     }
@@ -2472,7 +2490,7 @@ $CheckFunctions = @{
         (($fp=Get-ItemProperty $fx -Name "{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5" -EA SilentlyContinue) -and $fp."{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5" -eq 1)
     }
     "Optimize MMCSS Audio Profile"       = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Audio" "Latency Sensitive") -eq "True" }
-    "Set Audio Service High Priority"    = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "SystemResponsiveness") -eq 0 }
+    "Set Audio Service High Priority"    = { (Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "SR_AudioPriority") -eq 1 }
     "Disable Windows Sound Scheme"       = {
         try { (Get-ItemProperty "HKCU:\AppEvents\Schemes" -EA Stop)."(default)" -eq ".None" } catch { $null }
     }
@@ -2701,10 +2719,10 @@ $TweakDescEN = @{
     "Disable Windows Update during Gaming"        = "Permanently disables Windows Update auto-download via registry. Windows Update won't interrupt or background-load during gaming."
     "Disable Background App Throttling"           = "Disables Windows CPU throttling for background processes. Prevents Windows from secretly reducing game CPU time when background tasks are active."
     "NVIDIA Low Latency Mode (Reflex)"            = "NVIDIA only: Enables Ultra Low Latency Mode via registry. Reduces render queue to 1 frame for lower input lag. Skipped on AMD/Intel."
-    "Enable MSI Mode (Message Signaled Interrupts)" = "Enables MSI mode for GPU and NVMe. Significantly reduces interrupt latency compared to Line-Based Interrupts. Reboot recommended."
+    "Enable MSI Mode (Message Signaled Interrupts)" = "Enables MSI mode for the primary GPU. Significantly reduces interrupt latency compared to Line-Based Interrupts. Reboot recommended."
     "Enable Hardware-Accelerated GPU Scheduling (HAGS)" = "Enables HAGS  --  Windows hands GPU scheduling directly to hardware instead of software. Reduces CPU overhead and slightly lowers input lag."
     "Clear Shader Cache"                          = "Clears the NVIDIA/AMD shader cache on disk. Forces fresh shader compilation on next game launch. Useful after driver updates or graphical glitches."
-    "Enable DirectX 12 Optimization"             = "Optimizes DirectX 12 settings for maximum gaming performance. Enables DX12 multi-threading and reduces draw call overhead."
+    "Increase GPU Timeout Tolerance (TDR)"             = "Raises the GPU timeout tolerance (TDR delay 2s -> 10s) so Windows doesn't reset the graphics driver prematurely when the GPU stalls briefly under heavy load. Reduces black-screens / driver resets in demanding games and when overclocking. Note: improves stability, not FPS."
     "Disable Nagle's Algorithm (TCPNoDelay)"      = "Disables Nagle's Algorithm on all network adapters. Nagle buffers small packets at the cost of latency. Disabling noticeably reduces ping in online games."
     "Disable Large Send Offload (LSO)"            = "Disables Large Send Offload on all active network adapters. Can reduce ping spikes on some systems in online games."
     "Disable Network Throttling Index"            = "Disables Windows network packet throttling under high CPU load. Gives the network stack the highest priority."
@@ -3882,7 +3900,7 @@ $Script:PresetBalanced = $Script:PresetMinimal + @(
     "Disable Prefetch & Superfetch","Optimize Visual Effects (Performance Mode)","Disable Bing in Windows Search",
     "Disable Store Recommended Search Results","Disable File Explorer Automatic Folder Discovery",
     "Disable Xbox Game Bar","Disable Windows Update during Gaming","Disable Background App Throttling",
-    "NVIDIA Low Latency Mode (Reflex)","Enable MSI Mode (Message Signaled Interrupts)","Enable Hardware-Accelerated GPU Scheduling (HAGS)","Enable DirectX 12 Optimization",
+    "NVIDIA Low Latency Mode (Reflex)","Enable MSI Mode (Message Signaled Interrupts)","Enable Hardware-Accelerated GPU Scheduling (HAGS)","Increase GPU Timeout Tolerance (TDR)",
     "NVIDIA: Disable Threaded Optimization","NVIDIA: Max Pre-Rendered Frames = 1","NVIDIA: Shader Cache Size (Unlimited)","NVIDIA: Power Management = Max Performance",
     "AMD: Disable ULPS (Ultra Low Power State)","AMD: Shader Cache (Unlimited)","AMD: Anti-Lag (Low Latency Mode)",
     "Disable Audio Enhancements","Optimize MMCSS Audio Profile","Set Audio Service High Priority","Disable Windows Sound Scheme","Disable Spatial Sound (Windows Sonic)","Disable Audio Device Power Save",

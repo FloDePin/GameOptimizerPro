@@ -1,11 +1,11 @@
-# ⚡ GameOptimizerPro v1.4.2
+# ⚡ GameOptimizerPro v1.4.3
 
 > **Windows & Gaming Optimizer** — by FloDePin
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.4.2-red)
+![Version](https://img.shields.io/badge/Version-1.4.3-red)
 
 🇬🇧 [English](README.md) | 🇩🇪 **Deutsch**
 
@@ -260,7 +260,15 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 📜 Changelog
 
-### v1.4.2 ⭐ **CURRENT**
+### v1.4.3 ⭐ **CURRENT** (Status-Genauigkeit & Robustheit)
+- 💾 **Registry-Backups raus aus `%TEMP%`** — sie liegen jetzt unter `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`, damit der eingebaute „Clean Temp Files"-Tweak (und die Windows-Temp-Bereinigung) deine Revert-Backups nicht mehr löschen können.
+- 🔴 **Ehrlicher DX12-Tweak** — *„Enable DirectX 12 Optimization"* umbenannt in **„Increase GPU Timeout Tolerance (TDR)"** und zwei wirkungslose Registry-Werte (`D3D12_*` unter `HKLM\...\DirectX`) entfernt, die das D3D12-Runtime nie liest. Er setzt jetzt nur noch die wirklich wirksamen `TdrDelay`/`TdrDdiDelay` und sagt ehrlich, dass er die **Stabilität verbessert, nicht die FPS**.
+- 🟢 **Falsche Status-Punkte korrigiert** — die Anzeigen für *Set Audio Service High Priority* (wurde grün, sobald *Network Throttling* aktiv war — beide teilen sich einen Registry-Wert), *Disable Write-Cache Buffer Flushing* (string-typisierte Platten wurden nicht erkannt) und *Disable HPET* (las einen unbeteiligten Timer-Key statt des echten `bcdedit`-Status) spiegeln jetzt die Realität wider.
+- 🔧 **Startmenü-Layout-Check nutzt `CurrentControlSet`** statt hartcodiertem `ControlSet001` (Apply, Revert und Check angeglichen).
+- 🩹 **OS-Erkennungs-Fallback** — schlägt WMI fehl, wird der Windows-Build jetzt aus der Registry gelesen, sodass Win10/11 auch auf abgeschotteten Systemen/VMs korrekt erkannt wird.
+- 📝 MSI-Mode-Beschreibung (nur primäre GPU, nicht NVMe) und der Versions-Banner im Installer (stand noch auf „v1.1") korrigiert.
+
+### v1.4.2
 - 🤖 **Neuer Tweak: Disable Text & Image Generation (AI)** — schaltet die geräteweite on-device-generative KI von Windows 11 für alle Apps per Richtlinie ab (Force Deny). Betrifft nur die lokale KI, nicht Cloud-Dienste.
 - 🔧 **BIOS Guide: „Disable Motherboard Auto-Install Utilities"** — zu den AM5/AM4/Intel-Profilen hinzugefügt, mit den herstellerspezifischen Pfaden (ASUS/MSI/Gigabyte/ASRock), die verhindern, dass das Board beim Boot heimlich Hersteller-Utilities/Treiber in Windows schiebt. Ergänzt den Disable-WPBT-Tweak.
 
