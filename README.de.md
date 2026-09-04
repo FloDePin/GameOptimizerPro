@@ -1,11 +1,11 @@
-# ⚡ GameOptimizerPro v1.4.3
+# ⚡ GameOptimizerPro v1.0
 
 > **Windows & Gaming Optimizer** — by FloDePin
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.4.3-red)
+![Version](https://img.shields.io/badge/Version-1.0-red)
 
 🇬🇧 [English](README.md) | 🇩🇪 **Deutsch**
 
@@ -46,7 +46,7 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 | 🎮 GPU Tweaks | 7 Tweaks | 4 NVIDIA + 3 AMD Tweaks, GPU-Erkennung, Brand-Grauausblendung |
 | ⚡ Power Plan | 7 Tweaks | USB, PCI-E, HDD, Display, Sleep, CPU Min/Max |
 | 🚀 Startup Manager | ✅ | Eigenes Fenster, HKCU/HKLM/Run32, Disable/Enable/Refresh |
-| 🔧 **[BIOS] BIOS Guide** | ✅ **NEW** | Hardware-spezifische BIOS-Empfehlungen mit Menüpfaden |
+| 🔧 **[BIOS] BIOS Guide** | ✅ | Hardware-spezifische BIOS-Empfehlungen mit Menüpfaden |
 | 📊 **[DASH] Dashboard** | ✅ | Live-Ressourcen-Monitor (CPU/RAM/Disk/Netz), Status, Snapshot & Vorher/Nachher-Vergleich |
 | 🧹 Deep Clean | 6 Tools | Browser-Caches, Windows-Update-Cache, Thumbnails, Papierkorb, Prefetch, Logs & Crash-Dumps (zeigt freigegebene MB) |
 | 🌍 Language DE/EN | ✅ | 80+ EN-Beschreibungen, Toggle-Button, live umschaltbar |
@@ -73,7 +73,7 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 - **Win11 Tweaks** — Spezialisierte Optimierungen für Windows 11
 - **Win10 Grauausblendung + Banner** — Optimierte Darstellung für Windows 10-Kompatibilität
 
-### ⚡ Performance-Tweaks (NEW in v1.1)
+### ⚡ Performance-Tweaks
 - **Disable Power Throttling** — Verhindert, dass Windows Gaming-Prozesse per EcoQoS drosselt
 - **Disable Bing in Windows Search** — Startmenü sucht nur noch lokal, kein Datenaustausch mit Microsoft
 - **Process Count Reduction (Svchost)** — Weniger Hintergrundprozesse durch erhöhten Split-Threshold
@@ -127,7 +127,7 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 
 ---
 
-## 🔧 [BIOS] BIOS Guide Tab - NEW in v1.1
+## 🔧 [BIOS] BIOS Guide Tab
 
 ### 🎯 Hardware-spezifische BIOS-Empfehlungen
 - **Automatische Hardware-Erkennung** — Erkennt CPU, Motherboard und GPU
@@ -260,100 +260,30 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 📜 Changelog
 
-### v1.4.3 ⭐ **CURRENT** (Status-Genauigkeit & Robustheit)
-- 💾 **Registry-Backups raus aus `%TEMP%`** — sie liegen jetzt unter `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`, damit der eingebaute „Clean Temp Files"-Tweak (und die Windows-Temp-Bereinigung) deine Revert-Backups nicht mehr löschen können.
-- 🔴 **Ehrlicher DX12-Tweak** — *„Enable DirectX 12 Optimization"* umbenannt in **„Increase GPU Timeout Tolerance (TDR)"** und zwei wirkungslose Registry-Werte (`D3D12_*` unter `HKLM\...\DirectX`) entfernt, die das D3D12-Runtime nie liest. Er setzt jetzt nur noch die wirklich wirksamen `TdrDelay`/`TdrDdiDelay` und sagt ehrlich, dass er die **Stabilität verbessert, nicht die FPS**.
-- 🟢 **Falsche Status-Punkte korrigiert** — die Anzeigen für *Set Audio Service High Priority* (wurde grün, sobald *Network Throttling* aktiv war — beide teilen sich einen Registry-Wert), *Disable Write-Cache Buffer Flushing* (string-typisierte Platten wurden nicht erkannt) und *Disable HPET* (las einen unbeteiligten Timer-Key statt des echten `bcdedit`-Status) spiegeln jetzt die Realität wider.
-- 🔧 **Startmenü-Layout-Check nutzt `CurrentControlSet`** statt hartcodiertem `ControlSet001` (Apply, Revert und Check angeglichen).
-- 🩹 **OS-Erkennungs-Fallback** — schlägt WMI fehl, wird der Windows-Build jetzt aus der Registry gelesen, sodass Win10/11 auch auf abgeschotteten Systemen/VMs korrekt erkannt wird.
-- 📝 MSI-Mode-Beschreibung (nur primäre GPU, nicht NVMe) und der Versions-Banner im Installer (stand noch auf „v1.1") korrigiert.
+### v1.0 — Erste öffentliche Veröffentlichung
+Ein vollständiger, gehärteter Windows- & Gaming-Optimierer. Jeder Tweak hat volles **Apply + Revert + Live-Status-Check**, und jedes Apply legt zuerst einen **Systemwiederherstellungspunkt** und ein **`.reg`-Registry-Backup** an (gespeichert unter `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`, sicher vor der Temp-Bereinigung).
 
-### v1.4.2
-- 🤖 **Neuer Tweak: Disable Text & Image Generation (AI)** — schaltet die geräteweite on-device-generative KI von Windows 11 für alle Apps per Richtlinie ab (Force Deny). Betrifft nur die lokale KI, nicht Cloud-Dienste.
-- 🔧 **BIOS Guide: „Disable Motherboard Auto-Install Utilities"** — zu den AM5/AM4/Intel-Profilen hinzugefügt, mit den herstellerspezifischen Pfaden (ASUS/MSI/Gigabyte/ASRock), die verhindern, dass das Board beim Boot heimlich Hersteller-Utilities/Treiber in Windows schiebt. Ergänzt den Disable-WPBT-Tweak.
+**Tweak-Bibliothek (106 Tweaks, alle reversibel):**
+- 🪟 **Windows** — Debloat, Privatsphäre, Performance, CTT-Essentials & Quality-of-Life-Tweaks, inkl. Abschalten der geräteweiten generativen KI (Text- & Bildgenerierung)
+- 🎮 **Gaming & GPU** — MSI-Modus, HAGS, NVIDIA/AMD-Treiber-Tweaks, GPU-Timeout-Toleranz (TDR), Shader-Cache-Tools
+- 🌐 **Netzwerk** — Latenz (Nagle/LSO/Throttling), DNS (Cloudflare/Google), TCP-Tuning, QoS, Adapter-Energie
+- 🔊 **Audio** — MMCSS/Audio-Priorität, Spatial Sound, Sound-Schema & Geräte-Energie
+- 💾 **RAM & Speicher** — Auslagerungsdatei, Write-Cache, plus **Deep Clean** (6 Cleanup-Tools, jedes zeigt die freigegebenen MB)
+- ⚡ **Energieplan** — Ultimate Performance, HPET, 0,5-ms-Timer-Auflösung
 
-### v1.4.1 (Lokalisierungs- & Robustheits-Fixes)
-- 🌍 **„Ultimate Performance Plan" auf nicht-englischem Windows gefixt** — der Plan wurde über seinen (lokalisierten) Anzeigenamen gesucht, also auf ES/FR/PL/etc. zwar erstellt, aber nie aktiviert. Jetzt wird die GUID direkt abgefangen und der Status-Check ist sprachunabhängig.
-- 🌍 **„Disable Store Recommended Search Results" gefixt** — nutzte den englischen Kontonamen `Everyone` bei icacls, der z.B. auf Deutsch („Jeder") fehlschlägt. Jetzt die sprachneutrale SID `*S-1-1-0`.
-- 🔧 **SystemResponsiveness-Konflikt behoben** — „Disable Network Throttling Index" und „Set Audio Service High Priority" setzen denselben Wert; das Rückgängigmachen des einen brach lautlos den anderen. Jetzt über Besitzer-Marker gelöst, sodass der geteilte Wert nur zurückgesetzt wird, wenn kein Tweak ihn mehr braucht (reihenfolge-unabhängig).
-- 🔧 **`reg add`-Aufrufe gehärtet** — Registry-Pfade mit Leerzeichen werden jetzt gequotet, um seltene „Invalid key name"-Fehler zu vermeiden.
+**Tools & UX:**
+- 🎚️ **Presets** — Minimal / Balanced / Aggressive (kumulativ; destruktive Aktionen werden nie automatisch ausgewählt)
+- 📊 **Dashboard** mit **Live-Ressourcen-Monitor** (CPU/RAM/Disk/Netzwerk auf Background-Runspace, kein UI-Ruckeln)
+- 📶 **Ping-Test** über 3 Ziele — durchschnittliche Latenz, Paketverlust % und Jitter
+- 🧰 **BIOS-Guide** — hardware-erkannte, read-only Empfehlungen für AM5 / AM4 / Intel
+- 🚀 **Autostart-Manager** — deckt Run-Keys und Autostart-Ordner ab
 
-### v1.4.0
-- 🎚️ **Preset-Buttons: Minimal / Balanced / Aggressive** — ein Klick wählt ein kuratiertes, kumulatives Tweak-Set (Minimal ⊂ Balanced ⊂ Aggressive):
-  - **Minimal** (19) — nur die sichersten, voll reversiblen Tweaks; kein App-Löschen
-  - **Balanced** (78) — Minimal + Performance, sanftes Debloat, GPU/Audio/UI-Politur
-  - **Aggressive** (93) — Balanced + volle App-Entfernung (Cortana/OneDrive/Teams…) & aggressive Tweaks (fragt vorher nach)
-- 🛡️ Einmalige/destruktive Aktionen (Deep Clean, Papierkorb leeren, Disk Cleanup) und die DNS-Provider-Tweaks sind bewusst **nie** Teil eines Presets — die bleiben bewusste manuelle Wahl.
-- ℹ️ Presets *wählen* nur aus — angewendet wird nichts, bis du **Apply Selected** klickst (das erstellt weiter Restore Point + Registry-Backup).
+**Sicherheit & Robustheit:**
+- 🛡️ Startup-**Sanity-Check** verhindert, dass ein Status-Check je mit einer Revert-Aktion verwechselt wird
+- 🌍 Durchgängig **locale-unabhängig** (SIDs, feste GUIDs, CIM-Perf-Counter) — funktioniert auf nicht-englischem Windows
+- 🔒 **SHA256-Integritätskette** — `install.ps1` pinnt den veröffentlichten Hash und prüft ihn gegen `CHECKSUMS.txt`, bevor irgendetwas mit Admin-Rechten läuft
+- ✅ Verifiziert: **106/106** Tweaks haben Apply + Revert + Status-Check, keine Kollisionen
 
-### v1.3.1
-- ✨ **7 neue „Quality of Life"-Tweaks** (Windows-Tab, Parität zu CTT WinUtil): Show File Extensions, Show Hidden Files, Disable Reserved Storage (~7 GB), Disable Storage Sense, Num Lock on Startup, Disable Lock Screen, Enable Long Paths
-- 🐛 **Hibernation-Status-Check korrigiert** — prüfte den falschen Pfad (`%SystemRoot%` statt `%SystemDrive%\hiberfil.sys`), der Punkt war immer grün
-- 🐛 **Startup Manager zeigt jetzt auch die Autostart-Ordner** — Apps wie Discord/Spotify aus `shell:startup` (nicht den Run-Keys) waren vorher unsichtbar
-- 🔧 **DNS-Revert** macht jetzt zusätzlich `ipconfig /renew` + DNS-Cache leeren (kein kaputtes DNS mehr bis zum Neustart)
-- 🔧 **OneDrive-Entfernung** räumt zusätzlich den Explorer-Seitenleisten-Eintrag (CLSID) weg
-- 🔧 **Restore Point** scheitert nicht mehr heimlich beim 2. Start am selben Tag (24h-Limit aufgehoben)
-- ⚡ **Live-Monitor** läuft in einem Hintergrund-Runspace mit sauberem Dispose — kein UI-Ruckeln, keine Handle-Leaks
-- ⚠️ Stabilitäts-Warnung zur **Svchost Process Count Reduction**-Beschreibung ergänzt
-- ✅ Verifiziert: 105/105 Tweaks mit Apply + Revert + Status-Check, keine Kollisionen
-
-### v1.3.0
-- 🧹 **Neuer „Deep Clean"-Bereich** (RAM & Storage-Tab) — 6 auswählbare Cleanup-Tools, jedes zeigt die freigegebenen MB an:
-  - **Clean Browser Caches** (Chrome/Edge/Firefox — nur Cache, keine Passwörter/Verlauf)
-  - **Clean Windows Update Cache** (stoppt/startet den Update-Dienst sicher)
-  - **Clean Thumbnail Cache**, **Empty Recycle Bin**, **Clean Prefetch Data**
-  - **Clean System Logs & Crash Dumps** (Windows-Temp, CBS-Logs, Dumps, Fehlerberichte)
-- 📈 **Live-Ressourcen-Monitor** im Dashboard-Tab — CPU-, RAM-, Disk- und Netzauslastung in Echtzeit, aktualisiert alle 1,5s (locale-sichere CIM-Perf-Counter, funktioniert also auch auf nicht-englischem Windows)
-- ✅ Verifiziert: 98/98 Tweaks mit Apply + Revert + Status-Check, keine Kollisionen
-
-### v1.2.1
-- 📶 **Erweiterter Ping-Test** im Network-Tab — misst jetzt **durchschnittliche Latenz, Paketverlust % und Jitter** über **3 Ziele** (Gateway, Cloudflare 1.1.1.1, Google 8.8.8.8), je 10 Pings. Zeigt, ob die Network-Tweaks wirklich etwas bringen.
-- ⚡ Läuft in einem Hintergrund-Runspace, damit die Oberfläche während des ~30s-Tests flüssig bleibt (kein Einfrieren), mit sprachunabhängiger Zahlenformatierung.
-
-### v1.2.0
-- 🧰 **7 neue „CTT Essentials"-Tweaks** im Windows-Tab (Parität zu Chris Titus Tech WinUtil), jeder mit Apply/Revert/Status-Check:
-  - **Prevent Device Companion Apps** — blockiert Geräte-Metadaten-Downloads + automatisch vorgeschlagene Companion-Apps
-  - **Disable Consumer Features** — stoppt automatisch installierte Vorschlags-Apps/Spiele im Startmenü
-  - **Disable Windows Platform Binary Table (WPBT)** — verhindert, dass OEM-Firmware beim Boot Programme einschleust
-  - **Disable Store Recommended Search Results** — entfernt gesponserte Ergebnisse im Microsoft Store
-  - **Enable Start Menu Previous Layout** — klassisches Startmenü auf unterstützten Win11-Builds
-  - **Disable File Explorer Automatic Folder Discovery** — öffnet große Ordner schneller
-  - **Run Disk Cleanup** — automatisierte cleanmgr- + DISM-Komponentenbereinigung
-- 📇 Registry-Keys 1:1 aus der originalen CTT-WinUtil-Config übernommen (Genauigkeit)
-
-### v1.1.1
-- 🐛 **Bugfix:** 3 Tweaks (Power Throttling, Bing-Suche, Svchost-Reduktion) wurden durch einen Copy-Paste-Fehler bei jedem Programmstart automatisch wieder rückgängig gemacht — behoben
-- 🌍 **Bugfix (Sprache):** Auf nicht-englischem Windows (z.B. Deutsch) lieferte der Status-Check für "Disable TCP Auto-Tuning" immer "unbekannt" statt des echten Status (netsh-Textsuche war auf Englisch hartkodiert) — jetzt sprachunabhängig via `Get-NetTCPSetting`
-- 🌍 **Bugfix (Sprache):** "Revert All" konnte den Energiesparplan "Balanced" auf deutschem Windows nie finden ("Ausbalanciert") und hat den Revert fälschlich als erfolgreich geloggt, obwohl nichts passiert ist — jetzt über die feste, sprachunabhängige Windows-GUID gelöst
-- 🛡️ **Sanity-Check beim Start** — Erkennt automatisch, falls ein Status-Check jemals wieder mit einer Revert-Aktion verwechselt wird
-- 💾 **Registry-Backup** — Vor jedem Apply/Revert werden betroffene Registry-Keys zusätzlich als `.reg`-Dateien gesichert (unabhängig vom System-Restore-Point-Limit)
-- 🔒 **Checksum-Verifizierung** — `install.ps1` prüft den Download gegen `CHECKSUMS.txt`
-- 🌐 **2 neue Network-Tweaks** — Disable Network Adapter Power Saving, Disable Delivery Optimization (P2P Updates)
-- 📶 **Live Netzwerk-Info + Ping-Test** im Network-Tab (Adapter, Gateway, DNS, Ping zu Gateway/1.1.1.1)
-- 📊 **Neuer [DASH] Dashboard Tab** — Live-Systemstatus (Power Plan, Timer-Auflösung, aktive Tweaks) sowie Snapshot/Vergleich für Vorher-Nachher-Auswertung
-
-### v1.1
-- ✨ **3 neue Performance-Tweaks** im Windows-Tab:
-  - **Disable Power Throttling** — Verhindert EcoQoS-Drosselung bei Gaming
-  - **Disable Bing in Windows Search** — Nur lokale Suche, kein Datenaustausch
-  - **Process Count Reduction (Svchost)** — Weniger Hintergrundprozesse
-- 🔧 **Neuer [BIOS] BIOS Guide Tab** — Hardware-erkannte BIOS-Empfehlungen
-  - Automatische CPU/Motherboard/GPU-Erkennung
-  - Konkrete Menüpfade mit deutschen Beschreibungen
-  - Support für Zen 5/4 (AM5), Intel 13./14. Gen, Zen 3 (AM4)
-  - Sicherheitsbewertung (Sicher / Moderat) für jede Empfehlung
-  - Read-Only Ratgeber — keine automatischen Änderungen
-- 🎯 **Optimierte Hardware-Integration** — Bessere CPU/GPU-Erkennung
-
-### v1.0
-- 🚀 **Initial release** mit umfangreicher Feature-Liste
-- 🪟 **Windows Tab** — 12 Tweaks für OS-Optimierung, Debloat & Datenschutz
-- 🔊 **Audio Tab** — 6 dedizierte Audio-Optimierungen
-- 🎮 **GPU Tweaks Tab** — 7 Tweaks (4 NVIDIA + 3 AMD) mit automatischer GPU-Erkennung
-- ⚡ **Power Plan Tab** — 7 Tweaks für Systemenergie-Optimierung
-- 🚀 **Startup Manager** — Verwaltung von Auto-Start-Programmen
-- 🌍 **Language Support** — 80+ Beschreibungen in EN, live umschaltbar
-- 🌐 **Mehrsprachige UI** — Deutsch und Englisch voll unterstützt
 
 ---
 

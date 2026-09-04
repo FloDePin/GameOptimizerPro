@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.4.3
+    1.0
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.4.3"
+$Script:AppVersion = "1.0"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -1957,11 +1957,9 @@ $RevertActions = @{
         Write-Log "Revert: Shader Cache cleared  --  nothing to restore (cache rebuilds automatically)"
     }
     "Increase GPU Timeout Tolerance (TDR)" = {
-        reg delete "HKLM\SOFTWARE\Microsoft\DirectX" /v D3D12_ENABLE_UNSAFE_COMMAND_BUFFER_REUSE /f 2>$null
-        reg delete "HKLM\SOFTWARE\Microsoft\DirectX" /v D3D12_CPU_PAGE_PROPERTY /f 2>$null
         reg delete "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v TdrDelay /f 2>$null
         reg delete "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v TdrDdiDelay /f 2>$null
-        Write-Log "Revert: DirectX 12 optimization keys removed"
+        Write-Log "Revert: TDR timeout keys removed (TdrDelay/TdrDdiDelay)"
     }
 
     # == NETWORK  --  LATENCY ================================================
@@ -2427,7 +2425,7 @@ $CheckFunctions = @{
         $dnsObj -and $dnsObj.ServerAddresses -contains "8.8.8.8"
     }
     "Flush DNS Cache"                    = { $null }
-    "Disable TCP Auto-Tuning"            = { (Get-NetTCPSetting -SettingName InternetCustom -EA SilentlyContinue).AutoTuningLevelLocal -eq "Disabled" }
+    "Disable TCP Auto-Tuning"            = { (Get-NetTCPSetting -SettingName Internet -EA SilentlyContinue).AutoTuningLevelLocal -eq "Disabled" }
     "Optimize TCP Settings (ECN/SACK/Timestamps)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" "SackOpts") -eq 1 }
     "Disable QoS Packet Scheduler Limit" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Psched" "NonBestEffortLimit") -eq 0 }
     "Disable Network Adapter Power Saving" = {
@@ -4069,8 +4067,8 @@ $BtnApply.Add_Click({
 
     # Neustart-Empfehlung
     $restart = [System.Windows.MessageBox]::Show(
-        "Fuer optimale Wirkung wird ein Neustart empfohlen.`n`nJetzt neu starten?",
-        "GameOptimizerPro -- Neustart empfohlen",
+        "For best results, a restart is recommended.`n`nRestart now?",
+        "GameOptimizerPro -- Restart recommended",
         [System.Windows.MessageBoxButton]::YesNo,
         [System.Windows.MessageBoxImage]::Question
     )
@@ -4484,7 +4482,7 @@ $BtnStartup.Add_Click({
             $tbDelay.ToolTip = if ($delayMs -gt 0) {
                 "Letzter gemessener Boot-Delay: $delayMs ms`nQuelle: Windows Diagnostics-Performance Log"
             } else {
-                "Keine Delay-Daten vorhanden.`nNach naechstem Neustart verfuegbar."
+                "No delay data available.`nWill be available after next restart."
             }
 
             $row.Children.Add($cb)       | Out-Null
