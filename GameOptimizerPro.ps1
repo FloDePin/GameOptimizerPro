@@ -92,7 +92,6 @@ try {
 
 $IsNVIDIA   = $GPU -match "NVIDIA"
 $IsAMD      = $GPU -match "AMD|Radeon"
-$IsIntelGPU = $GPU -match "Intel"
 
 try {
     $NVMeDisks = @(Get-WmiObject -Query "SELECT * FROM Win32_DiskDrive" | Where-Object { $_.Model -match "NVMe|NVME" })

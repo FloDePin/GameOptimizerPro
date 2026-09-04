@@ -166,11 +166,10 @@ Registry keys sourced **1:1 from Chris Titus Tech WinUtil** for guaranteed accur
 
 ## 🌍 Language Toggle - DE/EN
 
-### 🗣️ Multilingual Support
-- **80+ English Descriptions** — Full EN localization
-- **Toggle Button** — Quick switch between German and English
-- **Switches Live** — No restart required
-- **All Tweaks Translated** — Consistent multilingual UI
+### 🗣️ Bilingual Tweak Descriptions (DE/EN)
+- **80+ tweak descriptions in German & English** — shown in each tweak's info popup
+- **Toggle Button** — switches all descriptions between DE and EN live, no restart
+- **Interface labels stay English** — the toggle affects the tweak descriptions, not the UI chrome
 
 ---
 

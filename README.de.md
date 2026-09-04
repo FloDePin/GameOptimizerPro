@@ -154,11 +154,10 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 
 ## 🌍 Language Toggle - DE/EN
 
-### 🗣️ Mehrsprachigkeit
-- **80+ englische Beschreibungen** — Vollständige EN-Lokalisierung
-- **Toggle-Button** — Schneller Wechsel zwischen Deutsch und Englisch
-- **Live-Umschaltbar** — Keine Neustart erforderlich
-- **Alle Tweaks übersetzt** — Konsistente mehrsprachige UI
+### 🗣️ Zweisprachige Tweak-Beschreibungen (DE/EN)
+- **80+ Tweak-Beschreibungen auf Deutsch & Englisch** — im Info-Popup jedes Tweaks
+- **Toggle-Button** — schaltet alle Beschreibungen live zwischen DE und EN, kein Neustart
+- **Interface-Beschriftungen bleiben Englisch** — der Umschalter betrifft die Beschreibungen, nicht die UI-Elemente
 
 ---
 
