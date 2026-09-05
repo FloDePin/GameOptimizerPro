@@ -3972,7 +3972,14 @@ $BtnVerify.Add_Click({
         if ($Script:TweakDots.ContainsKey($tweak.Name)) {
             $result = Update-TweakDot $Script:TweakDots[$tweak.Name] $tweak.Name
             switch ($result) {
-                "active"   { $active++ }
+                "active"   {
+                    $active++
+                    # Tick the checkbox for tweaks detected as already active (green dot).
+                    # Purely additive -- a manual selection on inactive tweaks is left alone.
+                    if ($CheckBoxMap.ContainsKey($tweak.Name) -and $CheckBoxMap[$tweak.Name].IsEnabled) {
+                        $CheckBoxMap[$tweak.Name].IsChecked = $true
+                    }
+                }
                 "inactive" { $inactive++ }
                 default    { $unknown++ }
             }
@@ -3980,9 +3987,9 @@ $BtnVerify.Add_Click({
     }
     $checkable = $active + $inactive
     if ($LangState.Current -eq "EN") {
-        $StatusText.Text = "Verify complete: $active of $checkable checkable tweaks active  |  $unknown one-time/unknown  |  green = active, grey = inactive"
+        $StatusText.Text = "Verify complete: $active of $checkable checkable tweaks active (ticked)  |  $unknown one-time/unknown  |  green = active, grey = inactive"
     } else {
-        $StatusText.Text = "Verify fertig: $active von $checkable pruefbaren Tweaks aktiv  |  $unknown einmalig/unbekannt  |  gruen = aktiv, grau = inaktiv"
+        $StatusText.Text = "Verify fertig: $active von $checkable pruefbaren Tweaks aktiv (angehakt)  |  $unknown einmalig/unbekannt  |  gruen = aktiv, grau = inaktiv"
     }
 })
 
