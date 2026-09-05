@@ -3468,6 +3468,46 @@ function Build-BiosPanel {
 # -----------------------------------------
 $Script:DashboardSnapshot = $null
 
+# -----------------------------------------
+# BASELINE / DRIFT DETECTION
+# Windows updates silently revert tweaks over time. On each Apply we snapshot
+# which tweaks are currently active into a small file in AppData; on the next
+# launch we re-check that snapshot and offer to re-apply anything Windows put
+# back. This runs ONLY when the app is launched -- no background process, no
+# service, no autostart. It just makes re-running the one-liner smarter.
+# -----------------------------------------
+# Stored as plain text, one tweak name per line (tweak names never contain
+# newlines) -- avoids PowerShell 5.1's ConvertTo-Json single/nested-array quirks.
+$Script:BaselineFile = "$env:LOCALAPPDATA\GameOptimizerPro\baseline.txt"
+
+function Save-Baseline {
+    $activeNames = @()
+    foreach ($t in $AllTweaks) {
+        if ($CheckFunctions.ContainsKey($t.Name)) {
+            try { if ((& $CheckFunctions[$t.Name]) -eq $true) { $activeNames += $t.Name } } catch { }
+        }
+    }
+    try {
+        $dir = Split-Path $Script:BaselineFile
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        Set-Content -Path $Script:BaselineFile -Value $activeNames -Encoding UTF8
+        Write-Log "Baseline saved ($($activeNames.Count) active tweaks)"
+    } catch { Write-Log "Baseline save failed: $_" }
+}
+
+function Get-DriftedTweaks {
+    if (-not (Test-Path $Script:BaselineFile)) { return @() }
+    try { $baseline = @(Get-Content $Script:BaselineFile -ErrorAction Stop | Where-Object { $_ -and $_.Trim() -ne '' }) } catch { return @() }
+    $drifted = @()
+    foreach ($name in $baseline) {
+        $n = $name.Trim()
+        if ($CheckFunctions.ContainsKey($n)) {
+            try { if ((& $CheckFunctions[$n]) -ne $true) { $drifted += $n } } catch { }
+        }
+    }
+    return $drifted
+}
+
 function Get-DashboardLiveInfo {
     $powerPlan = try { ((powercfg /getactivescheme 2>$null) -replace '.*\(([^)]+)\).*', '$1') } catch { "unknown" }
     $timerRes  = if ((Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" "GlobalTimerResolutionRequests") -eq 1) { "0.5ms (enabled)" } else { "default" }
@@ -3478,12 +3518,23 @@ function Get-DashboardLiveInfo {
             if ($v -eq $true) { $active++ } elseif ($v -eq $false) { $inactive++ } else { $unknown++ }
         } else { $unknown++ }
     }
+    # Optimization Score = share of checkable (non one-time) tweaks that are active.
+    $checkable = $active + $inactive
+    $score     = if ($checkable -gt 0) { [math]::Round($active / $checkable * 100) } else { 0 }
+    # Monitor refresh rate (locale-safe numeric via CIM). Current vs. adapter max.
+    $vc    = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Where-Object { $_.CurrentRefreshRate } | Select-Object -First 1
+    $curHz = if ($vc) { [int]$vc.CurrentRefreshRate } else { 0 }
+    $maxHz = if ($vc) { [int]$vc.MaxRefreshRate } else { 0 }
     [PSCustomObject]@{
         PowerPlan = $powerPlan
         TimerRes  = $timerRes
         Active    = $active
         Inactive  = $inactive
         Unknown   = $unknown
+        Checkable = $checkable
+        Score     = $score
+        CurHz     = $curHz
+        MaxHz     = $maxHz
     }
 }
 
@@ -3527,10 +3578,22 @@ function Build-DashboardPanel {
     $infoStack = New-Object Windows.Controls.StackPanel
 
     $liveInfo = Get-DashboardLiveInfo
+
+    # Optimization Score (headline): share of checkable tweaks that are active.
+    $scoreVal = "$($liveInfo.Score)%   [$(Format-Bar $liveInfo.Score 16)]   ($($liveInfo.Active)/$($liveInfo.Checkable) active)"
+    $infoStack.Children.Add((New-DashboardStatRow "Optimization Score" $scoreVal)) | Out-Null
+
     $infoStack.Children.Add((New-DashboardStatRow "GPU / CPU / RAM" "$GPU | $CPU | ${RAM} GB")) | Out-Null
     $infoStack.Children.Add((New-DashboardStatRow "OS"              $OSShort)) | Out-Null
     $infoStack.Children.Add((New-DashboardStatRow "Active Power Plan" $liveInfo.PowerPlan)) | Out-Null
     $infoStack.Children.Add((New-DashboardStatRow "Timer Resolution"  $liveInfo.TimerRes)) | Out-Null
+
+    # Monitor advisor: warn if the display isn't running at the adapter's max refresh rate.
+    $monVal = if ($liveInfo.CurHz -le 0) { "unknown" }
+              elseif ($liveInfo.MaxHz -gt $liveInfo.CurHz) { "$($liveInfo.CurHz) Hz  --  running below max! Adapter supports up to $($liveInfo.MaxHz) Hz. Set it in Windows: Display Settings > Advanced display > Refresh rate." }
+              else { "$($liveInfo.CurHz) Hz (running at max)" }
+    $infoStack.Children.Add((New-DashboardStatRow "Monitor Refresh" $monVal)) | Out-Null
+
     $summaryRow = New-DashboardStatRow "Tweaks Active" "$($liveInfo.Active) active / $($liveInfo.Inactive) inactive / $($liveInfo.Unknown) unknown (of $($AllTweaks.Count) total)"
     $infoStack.Children.Add($summaryRow) | Out-Null
 
@@ -4093,6 +4156,9 @@ $BtnApply.Add_Click({
             Update-TweakDot $Script:TweakDots[$tweak.Name] $tweak.Name | Out-Null
         }
     }
+
+    # Snapshot the now-active tweaks so the next launch can detect Windows-reverted drift.
+    Save-Baseline
 
     [System.Windows.MessageBox]::Show(
         "$done tweaks applied successfully!`n`nSome changes require a restart to take effect.`nLog saved to:`n$LogFile`n`nRegistry backup (.reg files) saved to:`n$Script:LastBackupDir",
@@ -4937,6 +5003,38 @@ foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] Alles OK  --  Sho
 Write-Host "[$(Get-Date -f 'HH:mm:ss')] Alles OK  --  ShowDialog wird aufgerufen" -ForegroundColor DarkGray
 
 # Console was already hidden at startup (where the host allows it).
+
+# --- Baseline drift check: did a Windows update revert tweaks you applied before? ---
+# Runs only at launch (no background process). If the last-applied snapshot has
+# tweaks that are no longer active, offer to re-apply them.
+try {
+    $drifted = Get-DriftedTweaks
+    if ($drifted.Count -gt 0) {
+        $list = ($drifted | ForEach-Object { " - $_" }) -join "`n"
+        $r = [System.Windows.MessageBox]::Show(
+            "$($drifted.Count) tweak(s) you applied earlier are no longer active -- a Windows update most likely reset them:`n`n$list`n`nRe-apply them now? (A registry backup is created first.)",
+            "GameOptimizerPro -- Tweaks were reverted",
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Warning)
+        if ($r -eq [System.Windows.MessageBoxResult]::Yes) {
+            Backup-Registry -Label "PreDriftReapply" | Out-Null
+            $reapplied = 0
+            foreach ($name in $drifted) {
+                $t = $AllTweaks | Where-Object { $_.Name -eq $name } | Select-Object -First 1
+                if ($t) {
+                    try { & $t.Action; $reapplied++; Write-Log "Drift re-apply OK: $name" }
+                    catch { Write-Log "Drift re-apply FAILED: $name -- $_" }
+                }
+            }
+            Save-Baseline
+            [System.Windows.MessageBox]::Show(
+                "Re-applied $reapplied tweak(s). A restart may be needed for some to take effect.",
+                "GameOptimizerPro",
+                [System.Windows.MessageBoxButton]::OK,
+                [System.Windows.MessageBoxImage]::Information) | Out-Null
+        }
+    }
+} catch { Write-Log "Drift check skipped: $_" }
 
 $Window.ShowDialog() | Out-Null
 
