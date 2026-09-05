@@ -961,28 +961,42 @@ $AllTweaks = @(
     # == NETWORK / DNS ====================================================
     [PSCustomObject]@{
         Name     = "Set DNS to Cloudflare (1.1.1.1)"
-        Desc     = "Setzt den DNS-Server auf Cloudflare 1.1.1.1 (Primary) und 1.0.0.1 (Secondary). Cloudflare DNS ist einer der schnellsten und datenschutzfreundlichsten DNS-Anbieter weltweit."
+        Desc     = "Setzt den DNS-Server auf Cloudflare 1.1.1.1 / 1.0.0.1 (IPv4) plus die passenden IPv6-Server (2606:4700:4700::1111/::1001), damit auch IPv6-Anfragen ueber Cloudflare laufen. Einer der schnellsten und datenschutzfreundlichsten DNS-Anbieter weltweit."
         Category = "Network"
         Group    = "DNS"
         Action   = {
             $adapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
+            $ok = 0; $fail = 0
             foreach ($adapter in $adapters) {
-                Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses ("1.1.1.1","1.0.0.1") -ErrorAction SilentlyContinue
+                try {
+                    Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses ("1.1.1.1","1.0.0.1","2606:4700:4700::1111","2606:4700:4700::1001") -ErrorAction Stop
+                    $ok++
+                } catch {
+                    $fail++
+                    Write-Log "WARNING: DNS (Cloudflare) failed on '$($adapter.Name)': $_"
+                }
             }
-            Write-Log "DNS set to Cloudflare 1.1.1.1"
+            Write-Log "DNS set to Cloudflare (1.1.1.1 + IPv6) -- $ok adapter(s) OK, $fail failed"
         }
     },
     [PSCustomObject]@{
         Name     = "Set DNS to Google (8.8.8.8)"
-        Desc     = "Setzt den DNS-Server auf Google 8.8.8.8 (Primary) und 8.8.4.4 (Secondary). Googles DNS ist global verteilt, sehr schnell und zuverlaessig. Alternative zu Cloudflare."
+        Desc     = "Setzt den DNS-Server auf Google 8.8.8.8 / 8.8.4.4 (IPv4) plus die passenden IPv6-Server (2001:4860:4860::8888/::8844), damit auch IPv6-Anfragen ueber Google laufen. Global verteilt, sehr schnell und zuverlaessig. Alternative zu Cloudflare."
         Category = "Network"
         Group    = "DNS"
         Action   = {
             $adapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
+            $ok = 0; $fail = 0
             foreach ($adapter in $adapters) {
-                Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses ("8.8.8.8","8.8.4.4") -ErrorAction SilentlyContinue
+                try {
+                    Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses ("8.8.8.8","8.8.4.4","2001:4860:4860::8888","2001:4860:4860::8844") -ErrorAction Stop
+                    $ok++
+                } catch {
+                    $fail++
+                    Write-Log "WARNING: DNS (Google) failed on '$($adapter.Name)': $_"
+                }
             }
-            Write-Log "DNS set to Google 8.8.8.8"
+            Write-Log "DNS set to Google (8.8.8.8 + IPv6) -- $ok adapter(s) OK, $fail failed"
         }
     },
     [PSCustomObject]@{
@@ -2505,9 +2519,15 @@ $CheckFunctions = @{
         if (-not $IsAMD) { return $null }
         $ac = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
         if (-not (Test-Path $ac)) { return $null }
-        $first = Get-ChildItem $ac -EA SilentlyContinue | Select-Object -First 1
-        if (-not $first) { return $null }
-        (($p=Get-ItemProperty $first.PSPath -Name "EnableULPS" -EA SilentlyContinue) -and $p.EnableULPS -eq 0)
+        # Check EVERY card that actually has an EnableULPS value (the Apply writes to all
+        # AMD cards). On multi-GPU systems (iGPU + dGPU) checking only the first card would
+        # show a false green if another card still has ULPS enabled.
+        $vals = @(Get-ChildItem $ac -EA SilentlyContinue | ForEach-Object {
+            $p = Get-ItemProperty $_.PSPath -Name "EnableULPS" -EA SilentlyContinue
+            if ($null -ne $p) { $p.EnableULPS }
+        })
+        if ($vals.Count -eq 0) { return $null }
+        -not ($vals | Where-Object { $_ -ne 0 })
     }
     "AMD: Shader Cache (Unlimited)"      = { if (-not $IsAMD) { return $null }; (Get-RegVal "HKLM:\SOFTWARE\ATI Technologies\CBT" "ShaderCacheSizePC") -ne $null }
     "AMD: Anti-Lag (Low Latency Mode)"   = {
@@ -2723,8 +2743,8 @@ $TweakDescEN = @{
     "Disable Nagle's Algorithm (TCPNoDelay)"      = "Disables Nagle's Algorithm on all network adapters. Nagle buffers small packets at the cost of latency. Disabling noticeably reduces ping in online games."
     "Disable Large Send Offload (LSO)"            = "Disables Large Send Offload on all active network adapters. Can reduce ping spikes on some systems in online games."
     "Disable Network Throttling Index"            = "Disables Windows network packet throttling under high CPU load. Gives the network stack the highest priority."
-    "Set DNS to Cloudflare (1.1.1.1)"            = "Sets DNS to Cloudflare 1.1.1.1 (Primary) and 1.0.0.1 (Secondary). One of the fastest and most privacy-friendly DNS providers worldwide."
-    "Set DNS to Google (8.8.8.8)"                = "Sets DNS to Google 8.8.8.8 (Primary) and 8.8.4.4 (Secondary). Google's globally distributed, fast and reliable DNS. Alternative to Cloudflare."
+    "Set DNS to Cloudflare (1.1.1.1)"            = "Sets DNS to Cloudflare 1.1.1.1 / 1.0.0.1 (IPv4) plus the matching IPv6 servers (2606:4700:4700::1111/::1001) so IPv6 lookups also go through Cloudflare. One of the fastest and most privacy-friendly DNS providers worldwide."
+    "Set DNS to Google (8.8.8.8)"                = "Sets DNS to Google 8.8.8.8 / 8.8.4.4 (IPv4) plus the matching IPv6 servers (2001:4860:4860::8888/::8844) so IPv6 lookups also go through Google. Globally distributed, fast and reliable. Alternative to Cloudflare."
     "Flush DNS Cache"                             = "Clears the local DNS cache. Useful after DNS changes or connection issues. Fast and has no side effects."
     "Disable TCP Auto-Tuning"                     = "Disables automatic TCP receive window sizing. Can reduce latency spikes on some systems. May slightly reduce throughput on gigabit+ connections."
     "Optimize TCP Settings (ECN/SACK/Timestamps)" = "Optimizes advanced TCP settings: disables ECN, enables SACK, disables TCP Timestamps. Reduces overhead and improves stability in online games."
@@ -3590,7 +3610,14 @@ function Build-DashboardPanel {
     $Window.Add_Closed({
         $monData.Run = $false
         try { $monPs.EndInvoke($monHandle) } catch { }
-        $monPs.Dispose(); $monRs.Close(); $monRs.Dispose()
+        try { $monPs.Dispose() } catch { }
+        try { $monRs.Close() }  catch { }
+        try { $monRs.Dispose() } catch { }
+        # Also tear down the ping-test runspace if a test is still running when the
+        # window is closed -- its DispatcherTimer stops firing after close, so it would
+        # otherwise leak the runspace/thread.
+        try { if ($Script:pingPs) { $Script:pingPs.Stop(); $Script:pingPs.Dispose(); $Script:pingPs = $null } } catch { }
+        try { if ($Script:pingRs) { $Script:pingRs.Close(); $Script:pingRs.Dispose(); $Script:pingRs = $null } } catch { }
     }.GetNewClosure())
 
     $monTimer = New-Object System.Windows.Threading.DispatcherTimer
@@ -3788,16 +3815,16 @@ foreach ($cat in @("Windows","Gaming","Network","RAM & Storage","Windows 11","Au
 
             # Run the pings on a background runspace so the WPF thread never freezes.
             $sync = [hashtable]::Synchronized(@{ Done = $false; Text = "" })
-            $rs = [runspacefactory]::CreateRunspace()
-            $rs.ApartmentState = "MTA"
-            $rs.ThreadOptions  = "ReuseThread"
-            $rs.Open()
-            $rs.SessionStateProxy.SetVariable("sync", $sync)
-            $rs.SessionStateProxy.SetVariable("tgts", $tgts)
+            $Script:pingRs = [runspacefactory]::CreateRunspace()
+            $Script:pingRs.ApartmentState = "MTA"
+            $Script:pingRs.ThreadOptions  = "ReuseThread"
+            $Script:pingRs.Open()
+            $Script:pingRs.SessionStateProxy.SetVariable("sync", $sync)
+            $Script:pingRs.SessionStateProxy.SetVariable("tgts", $tgts)
 
-            $psRun = [powershell]::Create()
-            $psRun.Runspace = $rs
-            [void]$psRun.AddScript({
+            $Script:pingPs = [powershell]::Create()
+            $Script:pingPs.Runspace = $Script:pingRs
+            [void]$Script:pingPs.AddScript({
                 $inv   = [System.Globalization.CultureInfo]::InvariantCulture
                 $count = 10
                 $lines = @()
@@ -3818,7 +3845,7 @@ foreach ($cat in @("Windows","Gaming","Network","RAM & Storage","Windows 11","Au
                 $sync.Text = $lines -join "`n"
                 $sync.Done = $true
             })
-            $handle = $psRun.BeginInvoke()
+            $handle = $Script:pingPs.BeginInvoke()
 
             # Poll for completion on the UI thread and clean up when done.
             $timer = New-Object System.Windows.Threading.DispatcherTimer
@@ -3826,8 +3853,11 @@ foreach ($cat in @("Windows","Gaming","Network","RAM & Storage","Windows 11","Au
             $timer.Add_Tick({
                 if ($sync.Done) {
                     $timer.Stop()
-                    try { $psRun.EndInvoke($handle) } catch { }
-                    $psRun.Dispose(); $rs.Close(); $rs.Dispose()
+                    try { $Script:pingPs.EndInvoke($handle) } catch { }
+                    try { $Script:pingPs.Dispose() } catch { }
+                    try { $Script:pingRs.Close() }   catch { }
+                    try { $Script:pingRs.Dispose() } catch { }
+                    $Script:pingPs = $null; $Script:pingRs = $null
                     $pingResult.Text   = $sync.Text
                     $pingBtn.IsEnabled = $true
                 }
