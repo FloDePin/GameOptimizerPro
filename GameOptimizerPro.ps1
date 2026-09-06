@@ -223,6 +223,28 @@ function Backup-Registry {
 }
 
 # -----------------------------------------
+# POWER PLAN HELPER
+# Windows resets the active power scheme (and its per-setting overrides) on
+# reboot on many systems, so a value written only to the active plan appears
+# "reverted" after a restart. Writing to EVERY scheme keeps the setting in
+# effect no matter which plan Windows activates next. GUIDs are parsed from
+# `powercfg /L` (we read the GUID, never the localized plan name -> locale-safe).
+# -----------------------------------------
+function Set-PowerAllSchemes {
+    param([string]$Sub, [string]$Setting, [int]$AC, [int]$DC = $AC)
+    $guids = @()
+    foreach ($line in (powercfg /L 2>$null)) {
+        if ($line -match '([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})') { $guids += $matches[1] }
+    }
+    if ($guids.Count -eq 0) { $guids = @('SCHEME_CURRENT') }
+    foreach ($g in $guids) {
+        powercfg /SETACVALUEINDEX $g $Sub $Setting $AC 2>$null | Out-Null
+        powercfg /SETDCVALUEINDEX $g $Sub $Setting $DC 2>$null | Out-Null
+    }
+    powercfg /SETACTIVE SCHEME_CURRENT 2>$null | Out-Null
+}
+
+# -----------------------------------------
 # TWEAK DEFINITIONS
 # -----------------------------------------
 
@@ -1577,10 +1599,8 @@ $AllTweaks = @(
         Category = "Power Plan"
         Group    = "USB & PCI"
         Action   = {
-            powercfg /SETACVALUEINDEX SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0 | Out-Null
-            powercfg /SETDCVALUEINDEX SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0 | Out-Null
-            powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
-            Write-Log "USB Selective Suspend disabled via powercfg"
+            Set-PowerAllSchemes "2a737441-1930-4402-8d77-b2bebba308a3" "48e6b7a6-50f5-4782-a5d4-53bb8f07e226" 0
+            Write-Log "USB Selective Suspend disabled (all power schemes)"
         }
     },
     [PSCustomObject]@{
@@ -1589,10 +1609,8 @@ $AllTweaks = @(
         Category = "Power Plan"
         Group    = "USB & PCI"
         Action   = {
-            powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_PCIEXPRESS ASPM 0 | Out-Null
-            powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_PCIEXPRESS ASPM 0 | Out-Null
-            powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
-            Write-Log "PCI-E Link State Power Management disabled"
+            Set-PowerAllSchemes "SUB_PCIEXPRESS" "ASPM" 0
+            Write-Log "PCI-E Link State Power Management disabled (all power schemes)"
         }
     },
     [PSCustomObject]@{
@@ -1601,10 +1619,8 @@ $AllTweaks = @(
         Category = "Power Plan"
         Group    = "Storage"
         Action   = {
-            powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_DISK DISKIDLE 0 | Out-Null
-            powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_DISK DISKIDLE 0 | Out-Null
-            powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
-            Write-Log "Hard Disk Sleep disabled (timeout = 0)"
+            Set-PowerAllSchemes "SUB_DISK" "DISKIDLE" 0
+            Write-Log "Hard Disk Sleep disabled (timeout = 0, all power schemes)"
         }
     },
     [PSCustomObject]@{
@@ -1613,10 +1629,8 @@ $AllTweaks = @(
         Category = "Power Plan"
         Group    = "Display"
         Action   = {
-            powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_VIDEO VIDEOIDLE 900  | Out-Null
-            powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_VIDEO VIDEOIDLE 300  | Out-Null
-            powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
-            Write-Log "Display Sleep set to 15 min (AC) / 5 min (DC)"
+            Set-PowerAllSchemes "SUB_VIDEO" "VIDEOIDLE" 900 300
+            Write-Log "Display Sleep set to 15 min AC / 5 min DC (all power schemes)"
         }
     },
     [PSCustomObject]@{
@@ -1625,10 +1639,8 @@ $AllTweaks = @(
         Category = "Power Plan"
         Group    = "Sleep"
         Action   = {
-            powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 0 | Out-Null
-            powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 0 | Out-Null
-            powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
-            Write-Log "System Sleep disabled"
+            Set-PowerAllSchemes "SUB_SLEEP" "STANDBYIDLE" 0
+            Write-Log "System Sleep disabled (all power schemes)"
         }
     },
     [PSCustomObject]@{
@@ -1637,10 +1649,8 @@ $AllTweaks = @(
         Category = "Power Plan"
         Group    = "CPU"
         Action   = {
-            powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_PROCESSOR PROCTHROTTLEMIN 100 | Out-Null
-            powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_PROCESSOR PROCTHROTTLEMIN 100 | Out-Null
-            powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
-            Write-Log "CPU Minimum Processor State set to 100%"
+            Set-PowerAllSchemes "SUB_PROCESSOR" "PROCTHROTTLEMIN" 100
+            Write-Log "CPU Minimum Processor State set to 100% (all power schemes)"
         }
     },
     [PSCustomObject]@{
@@ -1649,10 +1659,8 @@ $AllTweaks = @(
         Category = "Power Plan"
         Group    = "CPU"
         Action   = {
-            powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_PROCESSOR PROCTHROTTLEMAX 100 | Out-Null
-            powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_PROCESSOR PROCTHROTTLEMAX 100 | Out-Null
-            powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
-            Write-Log "CPU Maximum Processor State set to 100%"
+            Set-PowerAllSchemes "SUB_PROCESSOR" "PROCTHROTTLEMAX" 100
+            Write-Log "CPU Maximum Processor State set to 100% (all power schemes)"
         }
     }
 )
@@ -2279,46 +2287,32 @@ $RevertActions = @{
 
     # == POWER PLAN =======================================================
     "Disable USB Selective Suspend" = {
-        powercfg /SETACVALUEINDEX SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 1 | Out-Null
-        powercfg /SETDCVALUEINDEX SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 1 | Out-Null
-        powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
-        Write-Log "Revert: USB Selective Suspend re-enabled"
+        Set-PowerAllSchemes "2a737441-1930-4402-8d77-b2bebba308a3" "48e6b7a6-50f5-4782-a5d4-53bb8f07e226" 1
+        Write-Log "Revert: USB Selective Suspend re-enabled (all power schemes)"
     }
     "Disable PCI-E Link State Power Management" = {
-        powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_PCIEXPRESS ASPM 2 | Out-Null
-        powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_PCIEXPRESS ASPM 2 | Out-Null
-        powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
-        Write-Log "Revert: PCI-E ASPM set back to Moderate (2)"
+        Set-PowerAllSchemes "SUB_PCIEXPRESS" "ASPM" 2
+        Write-Log "Revert: PCI-E ASPM set back to Moderate (all power schemes)"
     }
     "Disable Hard Disk Sleep" = {
-        powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_DISK DISKIDLE 1800 | Out-Null
-        powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_DISK DISKIDLE 600  | Out-Null
-        powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
-        Write-Log "Revert: Hard Disk Sleep restored (30 min AC / 10 min DC)"
+        Set-PowerAllSchemes "SUB_DISK" "DISKIDLE" 1800 600
+        Write-Log "Revert: Hard Disk Sleep restored (30 min AC / 10 min DC, all power schemes)"
     }
     "Set Display Sleep = 15 Minutes" = {
-        powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_VIDEO VIDEOIDLE 600  | Out-Null
-        powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_VIDEO VIDEOIDLE 120  | Out-Null
-        powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
-        Write-Log "Revert: Display Sleep restored (10 min AC / 2 min DC)"
+        Set-PowerAllSchemes "SUB_VIDEO" "VIDEOIDLE" 600 120
+        Write-Log "Revert: Display Sleep restored (10 min AC / 2 min DC, all power schemes)"
     }
     "Disable Sleep (System)" = {
-        powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 3600 | Out-Null
-        powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 1800 | Out-Null
-        powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
-        Write-Log "Revert: System Sleep restored (60 min AC / 30 min DC)"
+        Set-PowerAllSchemes "SUB_SLEEP" "STANDBYIDLE" 3600 1800
+        Write-Log "Revert: System Sleep restored (60 min AC / 30 min DC, all power schemes)"
     }
     "CPU Minimum Processor State = 100%" = {
-        powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_PROCESSOR PROCTHROTTLEMIN 5 | Out-Null
-        powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_PROCESSOR PROCTHROTTLEMIN 5 | Out-Null
-        powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
-        Write-Log "Revert: CPU Minimum Processor State restored to 5%"
+        Set-PowerAllSchemes "SUB_PROCESSOR" "PROCTHROTTLEMIN" 5
+        Write-Log "Revert: CPU Minimum Processor State restored to 5% (all power schemes)"
     }
     "CPU Maximum Processor State = 100%" = {
-        powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_PROCESSOR PROCTHROTTLEMAX 100 | Out-Null
-        powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_PROCESSOR PROCTHROTTLEMAX 100 | Out-Null
-        powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
-        Write-Log "Revert: CPU Maximum Processor State confirmed at 100%"
+        Set-PowerAllSchemes "SUB_PROCESSOR" "PROCTHROTTLEMAX" 100
+        Write-Log "Revert: CPU Maximum Processor State confirmed at 100% (all power schemes)"
     }
 }
 
