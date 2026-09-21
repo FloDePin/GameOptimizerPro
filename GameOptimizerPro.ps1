@@ -456,22 +456,36 @@ $AllTweaks = @(
         Category = "Windows"
         Group    = "Performance"
         Action   = {
-            # Capture the GUID straight from the duplicatescheme output. Searching
-            # the plan list by name fails on non-English Windows (the plan is named
-            # e.g. "Maximo rendimiento" / "Ultimative Leistung"), so match the GUID
-            # pattern instead -- fully locale-independent.
-            $out  = powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>$null
-            $guid = $null
-            if (($out -join " ") -match "([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})") { $guid = $matches[1] }
+            # Reuse an existing Ultimate Performance plan instead of duplicating a
+            # fresh one on every run -- otherwise each apply piles up another
+            # identical "Ultimative Leistung" scheme. Order: our stored GUID, then
+            # any Ultimate plan already present; only create one if none exists.
+            # GUIDs matched by pattern -> locale-independent.
+            $rx       = "([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})"
+            $existing = powercfg -list 2>$null
+            $stored   = Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "UltimatePerfGuid"
+            $guid     = $null
+            if ($stored -and (($existing -join " ") -match [regex]::Escape($stored))) {
+                $guid = $stored
+            } else {
+                $line = $existing | Select-String "Ultimate Performance|Ultimative Leistung" | Select-Object -First 1
+                if ($line -and $line.ToString() -match $rx) { $guid = $matches[1] }
+            }
             if (-not $guid) {
-                # Plan may already exist -- grab a GUID from any Ultimate-Performance list line
-                $line = powercfg -list | Select-String "Ultimate Performance|Ultimative Leistung" | Select-Object -First 1
-                if ($line -and $line.ToString() -match "([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})") { $guid = $matches[1] }
+                # None present yet -- create exactly one.
+                $out = powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>$null
+                if (($out -join " ") -match $rx) { $guid = $matches[1] }
             }
             if ($guid) {
                 powercfg -setactive $guid 2>$null
                 # Remember the activated GUID so the status check works locale-independently
                 reg add "HKLM\SOFTWARE\GameOptimizerPro" /v UltimatePerfGuid /t REG_SZ /d $guid /f | Out-Null
+                # Clean up EXTRA Ultimate-Performance duplicates from earlier runs (keep
+                # the active one). Only touches Ultimate copies -- never Balanced/High
+                # Performance/Power Saver, and never the active scheme.
+                foreach ($l in ($existing | Select-String "Ultimate Performance|Ultimative Leistung")) {
+                    if (($l.ToString() -match $rx) -and ($matches[1] -ne $guid)) { powercfg -delete $matches[1] 2>$null | Out-Null }
+                }
                 Write-Log "Ultimate Performance Plan activated (GUID: $guid)"
             } else {
                 Write-Log "Ultimate Performance Plan: could not create or locate the plan"
@@ -1844,14 +1858,15 @@ $RevertActions = @{
             powercfg -setactive $balancedGuid
             Write-Log "Revert: Power plan set back to Balanced"
         } else {
-            # Fallback: built-in scheme was removed/recreated -- try matching by name (DE/EN)
+            # Fallback: built-in scheme was removed/recreated -- try matching by name
+            # (DE/EN). Extract the GUID by pattern, not by column index: the "GUID:"
+            # label is localized ("Energieschema-GUID:") so Split()[3] lands on the
+            # wrong token on non-English Windows.
             $match = powercfg -list | Select-String "Balanced|Ausbalanciert" | Select-Object -First 1
-            if ($match) {
-                $guid = $match.ToString().Split()[3]
-                if ($guid) {
-                    powercfg -setactive $guid
-                    Write-Log "Revert: Power plan set back to Balanced (matched by name, GUID: $guid)"
-                }
+            if ($match -and $match.ToString() -match "([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})") {
+                $guid = $matches[1]
+                powercfg -setactive $guid
+                Write-Log "Revert: Power plan set back to Balanced (matched by name, GUID: $guid)"
             } else {
                 Write-Log "Revert WARNING: Balanced power plan not found -- could not revert power plan"
             }
