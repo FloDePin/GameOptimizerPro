@@ -7,7 +7,7 @@ $dest = "$env:TEMP\GameOptimizerPro.ps1"
 # integrity check against corruption/tampering in transit -- it does not
 # replace reading the source, but lets users verify what they're about
 # to run with Admin rights without having to read all 3800 lines by hand.
-$ExpectedHash = "866C86EFFEB53211848A4C0276AB088B8098E40DF8A95D1469AB2196AAC14598"
+$ExpectedHash = "1839E0A2001C2206767FB275C1F6EBFD2B42979F8FBD12F21A65B41253658A98"
 
 # Keep this in sync with $Script:AppVersion in GameOptimizerPro.ps1 (used for
 # display only -- integrity is enforced by $ExpectedHash above, not this string).

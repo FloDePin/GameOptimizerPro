@@ -452,7 +452,7 @@ $AllTweaks = @(
     # == WINDOWS / PERFORMANCE ============================================
     [PSCustomObject]@{
         Name     = "Ultimate Performance Plan"
-        Desc     = "Aktiviert den 'Ultimative Leistung' Energiesparplan. Windows drosselt dann keine CPU-Kerne mehr - maximale Performance zu jeder Zeit. Erhoeht Stromverbrauch."
+        Desc     = "Aktiviert den 'Ultimative Leistung' Energiesparplan und stellt ihn auf 'immer an': die CPU drosselt nicht mehr runter UND der PC geht nicht mehr in den Ruhemodus - Monitor, Festplatten und System bleiben an (kein Timeout). Maximale Performance zu jeder Zeit. Erhoeht den Stromverbrauch."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -477,6 +477,13 @@ $AllTweaks = @(
                 if (($out -join " ") -match $rx) { $guid = $matches[1] }
             }
             if ($guid) {
+                # "Ultimate Performance" = a true always-on desktop plan: never sleep,
+                # never turn off the display or disks, no hibernate timeout -- set on
+                # THIS plan only (AC + DC). This is what users expect from "max power".
+                foreach ($s in @(@("SUB_SLEEP","STANDBYIDLE"), @("SUB_SLEEP","HIBERNATEIDLE"), @("SUB_VIDEO","VIDEOIDLE"), @("SUB_DISK","DISKIDLE"))) {
+                    powercfg /SETACVALUEINDEX $guid $s[0] $s[1] 0 2>$null | Out-Null
+                    powercfg /SETDCVALUEINDEX $guid $s[0] $s[1] 0 2>$null | Out-Null
+                }
                 powercfg -setactive $guid 2>$null
                 # Remember the activated GUID so the status check works locale-independently
                 reg add "HKLM\SOFTWARE\GameOptimizerPro" /v UltimatePerfGuid /t REG_SZ /d $guid /f | Out-Null
@@ -486,7 +493,7 @@ $AllTweaks = @(
                 foreach ($l in ($existing | Select-String "Ultimate Performance|Ultimative Leistung")) {
                     if (($l.ToString() -match $rx) -and ($matches[1] -ne $guid)) { powercfg -delete $matches[1] 2>$null | Out-Null }
                 }
-                Write-Log "Ultimate Performance Plan activated (GUID: $guid)"
+                Write-Log "Ultimate Performance Plan activated + never sleep/display-off (GUID: $guid)"
             } else {
                 Write-Log "Ultimate Performance Plan: could not create or locate the plan"
             }
@@ -2727,7 +2734,7 @@ $TweakDescEN = @{
     "Disable Location Tracking"                   = "Disables the Windows location service system-wide. Apps can no longer request your location."
     "Block Telemetry Hosts (hosts file)"          = "Adds Microsoft telemetry servers to the Windows hosts file, blocking them even if telemetry services are still running."
     "Disable Scheduled Telemetry Tasks"           = "Disables all scheduled Windows tasks that collect and send telemetry data (e.g. Compatibility Appraiser, CEIP)."
-    "Ultimate Performance Plan"                   = "Activates the 'Ultimate Performance' power plan. Windows stops throttling CPU cores for maximum performance at all times. Increases power consumption."
+    "Ultimate Performance Plan"                   = "Activates the 'Ultimate Performance' power plan and sets it to always-on: Windows stops throttling CPU cores AND the PC no longer sleeps -- display, disks and system stay on (no timeout). Maximum performance at all times. Increases power consumption."
     "Disable HPET (High Precision Event Timer)"   = "Disables the High Precision Event Timer. Can reduce system latency and improve gaming performance on some systems with lower frame times."
     "Set 0.5ms Timer Resolution"                  = "Sets Windows timer resolution to 0.5ms (default 15.6ms). Improves frame timing precision and noticeably reduces input lag in games."
     "Disable Prefetch & Superfetch"               = "Disables Prefetch and SysMain (Superfetch). Recommended for SSDs  --  not for HDDs. Reduces background disk writes and RAM usage."
