@@ -245,6 +245,29 @@ function Set-PowerAllSchemes {
 }
 
 # -----------------------------------------
+# POWER SETTING READER (for the status checks)
+# `powercfg /QUERY` prints the possible-settings block (Minimum / Maximum /
+# Increment) BEFORE the two "current AC/DC setting index" lines. Searching the
+# whole output for a hex value therefore matches those STATIC lines too:
+#   SUB_DISK DISKIDLE   -> "Minimum possible setting: 0x00000000"
+#   SUB_SLEEP STANDBYIDLE -> "Minimum possible setting: 0x00000000"
+#   SUB_PROCESSOR PROCTHROTTLEMIN/MAX -> "Maximum possible setting: 0x00000064"
+# which made those four checks report "active" on every system, even when the
+# tweak had never been applied. Only the LAST TWO hex values in the output are
+# the current AC and DC indices, and their labels are localized while the hex
+# is not -> reading them positionally is both correct and locale-safe.
+# Returns the AC index as a lowercase 8-digit hex string, or $null.
+# -----------------------------------------
+function Get-PowerValueAC {
+    param([string]$Sub, [string]$Setting)
+    $out = powercfg /QUERY SCHEME_CURRENT $Sub $Setting 2>$null
+    if (-not $out) { return $null }
+    $hex = @($out | ForEach-Object { if ($_ -match '0x([0-9a-fA-F]{8})') { $matches[1] } })
+    if ($hex.Count -lt 2) { return $null }
+    return $hex[-2].ToLower()
+}
+
+# -----------------------------------------
 # TWEAK DEFINITIONS
 # -----------------------------------------
 
@@ -1881,10 +1904,14 @@ $RevertActions = @{
         reg delete "HKLM\SOFTWARE\GameOptimizerPro" /v UltimatePerfGuid /f 2>$null
     }
     "Disable HPET (High Precision Event Timer)" = {
-        bcdedit /set useplatformclock true 2>$null | Out-Null
+        # Remove all three BCD entries instead of forcing useplatformclock=true.
+        # The Windows default is that NONE of them are set (the kernel picks the
+        # timer source itself); explicitly forcing the platform clock on is a
+        # known DPC-latency regression, i.e. worse than the untweaked state.
+        bcdedit /deletevalue useplatformclock 2>$null | Out-Null
         bcdedit /deletevalue useplatformtick 2>$null | Out-Null
         bcdedit /deletevalue disabledynamictick 2>$null | Out-Null
-        Write-Log "Revert: HPET settings restored"
+        Write-Log "Revert: HPET/timer BCD entries removed (Windows default restored)"
     }
     "Set 0.5ms Timer Resolution" = {
         reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" /v GlobalTimerResolutionRequests /f 2>$null
@@ -1988,8 +2015,12 @@ $RevertActions = @{
         if ($gpuDev) {
             $pnpId   = $gpuDev.PNPDeviceID
             $regPath = "HKLM\SYSTEM\CurrentControlSet\Enum\$pnpId\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties"
-            reg add "$regPath" /v MSISupported /t REG_DWORD /d 0 /f | Out-Null
-            Write-Log "Revert: MSI Mode disabled for $($gpuDev.Name)"
+            # Delete the value rather than writing 0: most current GPU drivers use MSI
+            # by default when the value is absent, so forcing 0 would leave the card on
+            # line-based interrupts -- worse than the untweaked state. Same convention
+            # as the other GPU reverts in this file.
+            reg delete "$regPath" /v MSISupported /f 2>$null
+            Write-Log "Revert: MSI Mode key removed for $($gpuDev.Name) (driver default)"
         }
     }
     "Enable Hardware-Accelerated GPU Scheduling (HAGS)" = {
@@ -2234,7 +2265,16 @@ $RevertActions = @{
         Write-Log "Revert: Sound Scheme set back to Windows Default"
     }
     "Disable Spatial Sound (Windows Sonic)" = {
-        Write-Log "Revert: Spatial Sound  --  re-enable via Settings > Sound > Device properties if needed"
+        # The Apply writes SpatialAudioMode=0 on every render device, so Revert All
+        # has to remove it again -- otherwise the value stays behind and "restore
+        # Windows defaults" is not true for this tweak.
+        $renderPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
+        if (Test-Path $renderPath) {
+            Get-ChildItem $renderPath -ErrorAction SilentlyContinue | ForEach-Object {
+                Remove-ItemProperty -Path $_.PSPath -Name "SpatialAudioMode" -ErrorAction SilentlyContinue
+            }
+        }
+        Write-Log "Revert: Spatial Sound key removed (per-device default restored)"
     }
     "Disable Audio Device Power Save" = {
         reg delete "HKLM\SYSTEM\CurrentControlSet\Services\usbaudio2" /v DisableSelectiveSuspend /f 2>$null
@@ -2556,13 +2596,15 @@ $CheckFunctions = @{
     }
 
     # POWER PLAN
-    "Disable USB Selective Suspend"      = { ($r = powercfg /QUERY SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 2>$null); $r -and ($r | Select-String "0x00000000") }
-    "Disable PCI-E Link State Power Management" = { ($r = powercfg /QUERY SCHEME_CURRENT SUB_PCIEXPRESS ASPM 2>$null); $r -and ($r | Select-String "0x00000000") }
-    "Disable Hard Disk Sleep"            = { ($r = powercfg /QUERY SCHEME_CURRENT SUB_DISK DISKIDLE 2>$null); $r -and ($r | Select-String "0x00000000") }
-    "Set Display Sleep = 15 Minutes"     = { ($r = powercfg /QUERY SCHEME_CURRENT SUB_VIDEO VIDEOIDLE 2>$null); $r -and ($r | Select-String "0x00000384") }
-    "Disable Sleep (System)"             = { ($r = powercfg /QUERY SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 2>$null); $r -and ($r | Select-String "0x00000000") }
-    "CPU Minimum Processor State = 100%" = { ($r = powercfg /QUERY SCHEME_CURRENT SUB_PROCESSOR PROCTHROTTLEMIN 2>$null); $r -and ($r | Select-String "0x00000064") }
-    "CPU Maximum Processor State = 100%" = { ($r = powercfg /QUERY SCHEME_CURRENT SUB_PROCESSOR PROCTHROTTLEMAX 2>$null); $r -and ($r | Select-String "0x00000064") }
+    # Read ONLY the current AC index (see Get-PowerValueAC) -- searching the whole
+    # powercfg output would also hit its static Minimum/Maximum-possible lines.
+    "Disable USB Selective Suspend"      = { $v = Get-PowerValueAC "2a737441-1930-4402-8d77-b2bebba308a3" "48e6b7a6-50f5-4782-a5d4-53bb8f07e226"; if ($null -eq $v) { $null } else { $v -eq "00000000" } }
+    "Disable PCI-E Link State Power Management" = { $v = Get-PowerValueAC "SUB_PCIEXPRESS" "ASPM"; if ($null -eq $v) { $null } else { $v -eq "00000000" } }
+    "Disable Hard Disk Sleep"            = { $v = Get-PowerValueAC "SUB_DISK" "DISKIDLE"; if ($null -eq $v) { $null } else { $v -eq "00000000" } }
+    "Set Display Sleep = 15 Minutes"     = { $v = Get-PowerValueAC "SUB_VIDEO" "VIDEOIDLE"; if ($null -eq $v) { $null } else { $v -eq "00000384" } }
+    "Disable Sleep (System)"             = { $v = Get-PowerValueAC "SUB_SLEEP" "STANDBYIDLE"; if ($null -eq $v) { $null } else { $v -eq "00000000" } }
+    "CPU Minimum Processor State = 100%" = { $v = Get-PowerValueAC "SUB_PROCESSOR" "PROCTHROTTLEMIN"; if ($null -eq $v) { $null } else { $v -eq "00000064" } }
+    "CPU Maximum Processor State = 100%" = { $v = Get-PowerValueAC "SUB_PROCESSOR" "PROCTHROTTLEMAX"; if ($null -eq $v) { $null } else { $v -eq "00000064" } }
 }
 
 # -----------------------------------------
@@ -3242,20 +3284,20 @@ function Update-TweakDot($dot, $tweakName) {
             $isActive = & $CheckFunctions[$tweakName]
             if ($isActive -eq $true) {
                 $dot.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0,200,80))
-                $dot.ToolTip    = "Aktiv  --  Tweak ist bereits angewendet"
+                $dot.ToolTip    = "Active  --  tweak is already applied"
                 return "active"
             } elseif ($isActive -eq $false) {
                 $dot.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(70,70,70))
-                $dot.ToolTip    = "Nicht aktiv"
+                $dot.ToolTip    = "Not active"
                 return "inactive"
             } else {
                 $dot.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(50,50,60))
-                $dot.ToolTip    = "Status unbekannt (einmalige Aktion)"
+                $dot.ToolTip    = "Status unknown (one-time action)"
                 return "unknown"
             }
         } catch {
             $dot.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(50,50,60))
-            $dot.ToolTip    = "Status konnte nicht geprueft werden"
+            $dot.ToolTip    = "Status could not be checked"
             return "unknown"
         }
     } else {
@@ -4022,8 +4064,14 @@ $Script:PresetAggressive = $Script:PresetBalanced + @(
     "Disable Windows Search Indexing","Process Count Reduction (Svchost)",
     "Disable Memory Compression","Disable Write-Cache Buffer Flushing","Disable Hibernation","Clear PageFile on Shutdown",
     "Disable Reserved Storage","Disable Storage Sense","Disable Lock Screen","Enable Start Menu Previous Layout",
-    "Set Display Sleep = 15 Minutes","Disable Sleep (System)"
+    "Disable Sleep (System)"
 )
+# NOTE: "Set Display Sleep = 15 Minutes" is deliberately NOT part of any preset.
+# It writes VIDEOIDLE to every scheme and would overwrite the "never turn the
+# display off" value that "Ultimate Performance Plan" (in Balanced/Aggressive)
+# sets on its own plan -- the display would sleep again despite the Ultimate
+# plan promising otherwise. Both remain selectable manually; the Apply handler
+# warns when the two are combined.
 
 function Set-Preset {
     param([string[]]$Names, [string]$Label)
@@ -4075,7 +4123,7 @@ $BtnOpenBackups.Add_Click({
 })
 
 $BtnVerify.Add_Click({
-    $StatusText.Text = "Verifiziere Tweak-Status..."
+    $StatusText.Text = "Verifying tweak status..."
     $active = 0; $inactive = 0; $unknown = 0
     foreach ($tweak in $AllTweaks) {
         if ($Script:TweakDots.ContainsKey($tweak.Name)) {
@@ -4121,6 +4169,21 @@ $BtnApply.Add_Click({
             [System.Windows.MessageBoxImage]::Warning
         )
         if ($dnsWarn -ne [System.Windows.MessageBoxResult]::Yes) { return }
+    }
+
+    # Power conflict check -- "Ultimate Performance Plan" sets the display timeout
+    # to "never" on its own plan, while "Set Display Sleep = 15 Minutes" writes 15
+    # min to EVERY scheme and runs later, so it silently wins.
+    $ultPlan  = $selected | Where-Object { $_.Name -eq "Ultimate Performance Plan" }
+    $dispSlp  = $selected | Where-Object { $_.Name -eq "Set Display Sleep = 15 Minutes" }
+    if ($ultPlan -and $dispSlp) {
+        $pwrWarn = [System.Windows.MessageBox]::Show(
+            "Power conflict detected!`n`nYou selected both:`n  - Ultimate Performance Plan (keeps the display ON permanently)`n  - Set Display Sleep = 15 Minutes`n`nThe display-sleep tweak is applied last and wins, so your screen WILL still turn off after 15 minutes.`nRecommendation: select only one of the two.`n`nContinue anyway?",
+            "GameOptimizerPro -- Power Conflict",
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Warning
+        )
+        if ($pwrWarn -ne [System.Windows.MessageBoxResult]::Yes) { return }
     }
 
     $confirm = [System.Windows.MessageBox]::Show(
@@ -4293,6 +4356,22 @@ $BtnRevertAll.Add_Click({
         # Count app-restore warnings
         if ($tweakName -match "Remove Cortana|Remove Xbox|Remove.*Teams|Remove OneDrive|Remove Other Bloat") {
             $appWarnings++
+        }
+    }
+
+    # Drop the baseline snapshot. It lists the tweaks that were active at the last
+    # Apply; keeping it after a deliberate Revert All would make the drift check on
+    # the NEXT launch report all of them as "reverted by a Windows update" and offer
+    # to re-apply exactly what the user just undid.
+    try {
+        if (Test-Path $Script:BaselineFile) { Remove-Item $Script:BaselineFile -Force -ErrorAction Stop }
+        Write-Log "Baseline cleared after Revert All"
+    } catch { Write-Log "Baseline could not be cleared: $_" }
+
+    # Refresh the status dots so they reflect the reverted state (Apply does the same)
+    foreach ($tweak in $AllTweaks) {
+        if ($Script:TweakDots.ContainsKey($tweak.Name)) {
+            Update-TweakDot $Script:TweakDots[$tweak.Name] $tweak.Name | Out-Null
         }
     }
 
@@ -5068,7 +5147,7 @@ Stop-Process -Id $PID -Force -ErrorAction SilentlyContinue
 } catch {
     $errMsg  = $_.Exception.Message
     $errLine = $_.InvocationInfo.ScriptLineNumber
-    $errFull = "STARTUP ERROR Zeile $errLine : $errMsg"
+    $errFull = "STARTUP ERROR line $errLine : $errMsg"
     Write-Host $errFull -ForegroundColor Red
     foreach ($p in $logPaths) {
         try { "[$(Get-Date -f 'HH:mm:ss')] $errFull" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { }
@@ -5076,13 +5155,13 @@ Stop-Process -Id $PID -Force -ErrorAction SilentlyContinue
     try {
         Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
         [System.Windows.Forms.MessageBox]::Show(
-            "$errFull`n`nLog-Dateien:`n$($logPaths -join "`n")",
-            "GameOptimizerPro - Fehler",
+            "$errFull`n`nLog files:`n$($logPaths -join "`n")",
+            "GameOptimizerPro - Error",
             [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Error
         )
     } catch {
-        Write-Host "MessageBox fehlgeschlagen: $_" -ForegroundColor Red
-        Read-Host "Fehler oben  --  Enter zum Beenden"
+        Write-Host "MessageBox failed: $_" -ForegroundColor Red
+        Read-Host "Error above  --  press Enter to exit"
     }
 }
