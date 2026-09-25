@@ -94,7 +94,16 @@ $IsNVIDIA   = $GPU -match "NVIDIA"
 $IsAMD      = $GPU -match "AMD|Radeon"
 
 try {
-    $NVMeDisks = @(Get-WmiObject -Query "SELECT * FROM Win32_DiskDrive" | Where-Object { $_.Model -match "NVMe|NVME" })
+    # Most NVMe drives do NOT say "NVMe" in their model string (e.g. "Samsung SSD
+    # 980 PRO 1TB", "WD_BLACK SN850X"), so matching the model alone missed them and
+    # silently skipped the NVMe tweak. With the inbox stornvme driver the PNP ID
+    # carries VEN_NVME; drives on a vendor driver are caught via the storage
+    # stack's BusType (NVMe) matched back by friendly name.
+    $nvmeNames = @()
+    try { $nvmeNames = @(Get-PhysicalDisk -ErrorAction Stop | Where-Object { "$($_.BusType)" -eq "NVMe" -or "$($_.BusType)" -eq "17" } | ForEach-Object { $_.FriendlyName }) } catch { }
+    $NVMeDisks = @(Get-WmiObject -Query "SELECT * FROM Win32_DiskDrive" | Where-Object {
+        $_.Model -match "NVMe" -or $_.PNPDeviceID -match "VEN_NVME" -or ($nvmeNames -contains $_.Model)
+    })
 } catch { $NVMeDisks = @() }
 $HasNVMe  = $NVMeDisks.Count -gt 0
 $NVMeInfo = if ($HasNVMe) { "NVMe: $($NVMeDisks.Count)x" } else { "NVMe: none" }
@@ -171,6 +180,9 @@ $Script:RegistryBackupKeys = @(
     "HKCU\SOFTWARE\NVIDIA Corporation\Global\NVTweak",
     "HKCU\SOFTWARE\Policies\Microsoft\Windows\Explorer",
     "HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}",
+    # Per-folder Explorer view settings (Bags/BagMRU) -- "Disable File Explorer
+    # Automatic Folder Discovery" DELETES these trees, so they must be saved first.
+    "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell",
     "HKCU\Software\Microsoft\GameBar",
     "HKCU\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo",
     "HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications",
@@ -199,7 +211,8 @@ $Script:RegistryBackupKeys = @(
     "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak",
     "HKLM\SYSTEM\CurrentControlSet\Services\stornvme\Parameters\Device",
     "HKLM\SYSTEM\CurrentControlSet\Services\usbaudio",
-    "HKLM\SYSTEM\CurrentControlSet\Services\usbaudio2"
+    "HKLM\SYSTEM\CurrentControlSet\Services\usbaudio2",
+    "HKU\.DEFAULT\Control Panel\Keyboard"
 )
 
 function Backup-Registry {
@@ -208,9 +221,21 @@ function Backup-Registry {
     $backupDir = Join-Path $Script:RegistryBackupRoot "${stamp}_$Label"
     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
 
+    # Per-device keys can't be listed statically (their path contains the PNP
+    # instance ID): MSI mode writes under the GPU, NVMe queue depth and
+    # write-cache flushing write under each disk. Add their Device Parameters.
+    $keys = @($Script:RegistryBackupKeys)
+    try {
+        $devIds  = @(Get-WmiObject Win32_VideoController -ErrorAction Stop | Where-Object { $_.Name -notmatch "Microsoft" } | ForEach-Object { $_.PNPDeviceID })
+        $devIds += @(Get-WmiObject -Query "SELECT * FROM Win32_DiskDrive" -ErrorAction Stop | ForEach-Object { $_.PNPDeviceID })
+        foreach ($id in ($devIds | Where-Object { $_ } | Select-Object -Unique)) {
+            $keys += "HKLM\SYSTEM\CurrentControlSet\Enum\$id\Device Parameters"
+        }
+    } catch { }
+
     $saved = 0
     $skipped = 0
-    foreach ($key in $Script:RegistryBackupKeys) {
+    foreach ($key in $keys) {
         $fileName = ($key -replace '[\\:\*\?"<>\|]', '_') + ".reg"
         $dest = Join-Path $backupDir $fileName
         try {
@@ -2425,7 +2450,10 @@ $CheckFunctions = @{
     "Disable Advertising ID"             = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" "Enabled") -eq 0 }
     "Disable Text & Image Generation (AI)" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" "LetAppsAccessSystemAIModels") -eq 2 }
     "Disable Location Tracking"          = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location" "Value") -eq "Deny" }
-    "Block Telemetry Hosts (hosts file)" = { (Get-Content "$env:SystemRoot\System32\drivers\etc\hosts" -EA SilentlyContinue) -match "0.0.0.0 telemetry.microsoft.com" }
+    # -match on an ARRAY returns the matching lines, not a bool -- the dot logic only
+    # understands $true/$false, so this used to show "unknown" forever. Cast to bool,
+    # anchor the pattern so a commented-out line doesn't count.
+    "Block Telemetry Hosts (hosts file)" = { $h = Get-Content "$env:SystemRoot\System32\drivers\etc\hosts" -EA SilentlyContinue; if ($null -eq $h) { $null } else { [bool](@($h) -match '^\s*0\.0\.0\.0\s+telemetry\.microsoft\.com\s*$') } }
     "Disable Scheduled Telemetry Tasks"  = { ($t = Get-ScheduledTask -TaskName "Microsoft Compatibility Appraiser" -EA SilentlyContinue) -and $t.State -eq "Disabled" }
 
     # PERFORMANCE
@@ -2512,7 +2540,13 @@ $CheckFunctions = @{
     "Disable Memory Compression"         = {
         try { $m = Get-MMAgent -EA Stop; -not $m.MemoryCompression } catch { $null }
     }
-    "Enable SSD TRIM"                    = { (fsutil behavior query DisableDeleteNotify 2>$null) -match "= 0" }
+    # Current Windows prints TWO lines (NTFS + ReFS) -> -match returned an array and the
+    # dot stayed "unknown". Read the NTFS line (older builds print a single line).
+    "Enable SSD TRIM"                    = {
+        $q = @(fsutil behavior query DisableDeleteNotify 2>$null)
+        $line = @($q | Where-Object { $_ -match 'NTFS' }) + @($q | Where-Object { $_ -match '=' }) | Select-Object -First 1
+        if (-not $line) { $null } else { $line -match '=\s*0\b' }
+    }
     "Disable Scheduled Defragmentation"  = {
         $t = Get-ScheduledTask -TaskPath "\Microsoft\Windows\Defrag\" -TaskName "ScheduledDefrag" -EA SilentlyContinue
         $t -and $t.State -eq "Disabled"
@@ -3823,8 +3857,11 @@ function Build-DashboardPanel {
             if ($before -ne $after) {
                 $changeCount++
                 $line = New-Object Windows.Controls.TextBlock
-                $toLabel = @{ $true = "active"; $false = "inactive"; $null = "unknown" }
-                $line.Text       = "$($tweak.Name): $($toLabel[$before]) -> $($toLabel[$after])"
+                # No hashtable here: a $null key is illegal in a PowerShell hash literal
+                # and used to throw on the FIRST changed tweak, aborting the whole Compare.
+                $lblBefore = if ($null -eq $before) { "unknown" } elseif ($before -eq $true) { "active" } else { "inactive" }
+                $lblAfter  = if ($null -eq $after)  { "unknown" } elseif ($after  -eq $true) { "active" } else { "inactive" }
+                $line.Text       = "$($tweak.Name): $lblBefore -> $lblAfter"
                 $line.FontSize   = 12
                 $line.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(221,221,221))
                 $line.Margin     = New-Object Windows.Thickness(0,1,0,1)
@@ -4661,7 +4698,19 @@ $BtnStartup.Add_Click({
             }
 
             # Boot delay column
-            $exeName  = try { [System.IO.Path]::GetFileName($entry.FullCmd.Split('"')[0].Trim()).ToLower() } catch { "" }
+            # Derive the executable the boot log reports. Split('"')[0] was EMPTY for
+            # quoted paths ("C:\...\app.exe" -x) and kept the arguments for unquoted ones
+            # (C:\...\app.exe --flag), so almost no entry ever matched its delay data.
+            $exeName = ""
+            try {
+                $fc = ([string]$entry.FullCmd).Trim()
+                if ($fc.StartsWith('"')) { $exePath = $fc.Split('"')[1] }
+                else {
+                    $ix = $fc.ToLower().IndexOf(".exe")
+                    $exePath = if ($ix -ge 0) { $fc.Substring(0, $ix + 4) } else { $fc }
+                }
+                $exeName = [System.IO.Path]::GetFileName($exePath.Trim()).ToLower()
+            } catch { $exeName = "" }
             if ($exeName -eq "") { $exeName = $entry.Name.ToLower() + ".exe" }
             $delayMs  = if ($bootDelays.ContainsKey($exeName)) { $bootDelays[$exeName] } else { 0 }
 
@@ -4677,7 +4726,7 @@ $BtnStartup.Add_Click({
                 New-Object Windows.Media.SolidColorBrush (Get-DelayColor $delayMs)
             }
             $tbDelay.ToolTip = if ($delayMs -gt 0) {
-                "Letzter gemessener Boot-Delay: $delayMs ms`nQuelle: Windows Diagnostics-Performance Log"
+                "Last measured boot delay: $delayMs ms`nSource: Windows Diagnostics-Performance log"
             } else {
                 "No delay data available.`nWill be available after next restart."
             }
@@ -4690,7 +4739,10 @@ $BtnStartup.Add_Click({
             $row.Children.Add($tbDelay)  | Out-Null
             $swList.Children.Add($row)   | Out-Null
 
-            $swCbMap[$entry.Name] = @{ Cb = $cb; Item = $entry; StatusTb = $tbStatus }
+            # Key by location + name: the same app often appears in two places (HKCU\Run
+            # and HKLM\Run, or both startup folders). Keyed by name alone, the second row
+            # overwrote the first and ticking the first one silently did nothing.
+            $swCbMap["$($entry.Location)|$($entry.Name)"] = @{ Cb = $cb; Item = $entry; StatusTb = $tbStatus }
         }
         $swStatus.Text = "$($allEntries.Count) " + (Get-UIString "sw_legend")
     }
@@ -4750,35 +4802,35 @@ $BtnServices.Add_Click({
 
     # Curated list: Name -> @{ Desc; Safe; Category }
     $KnownServices = @{
-        "DiagTrack"              = @{ Desc="Telemetry & Diagnostics -- sendet Nutzungsdaten an Microsoft";        Safe=$true;  Cat="Privacy" }
-        "dmwappushservice"       = @{ Desc="WAP Push Message Routing -- Teil der Telemetrie-Infrastruktur";     Safe=$true;  Cat="Privacy" }
-        "SysMain"                = @{ Desc="Superfetch -- Praelaed Apps in RAM. Unnoetig bei SSDs.";            Safe=$true;  Cat="Performance" }
-        "WSearch"                = @{ Desc="Windows Search -- Indexiert Festplatte. Hohe CPU/Disk-Last.";       Safe=$true;  Cat="Performance" }
-        "RemoteRegistry"         = @{ Desc="Remote Registry -- Erlaubt Fernzugriff auf Registry. Sicherheitsrisiko."; Safe=$true;  Cat="Security" }
-        "Fax"                    = @{ Desc="Fax-Dienst -- Wird von fast niemandem gebraucht.";                 Safe=$true;  Cat="Bloat" }
-        "MapsBroker"             = @{ Desc="Maps Broker -- Fuer Windows Maps App. Kaum genutzt.";             Safe=$true;  Cat="Bloat" }
-        "RetailDemo"             = @{ Desc="Retail Demo Service -- Nur fuer Store-Demogeraete.";              Safe=$true;  Cat="Bloat" }
-        "WerSvc"                 = @{ Desc="Windows Error Reporting -- Sendet Absturzberichte an Microsoft."; Safe=$true;  Cat="Privacy" }
-        "XblGameSave"            = @{ Desc="Xbox Game Save -- Cloud-Saves fuer Xbox. Unnoetig ohne Xbox.";    Safe=$true;  Cat="Bloat" }
-        "XblAuthManager"         = @{ Desc="Xbox Live Auth -- Authentifizierung fuer Xbox. Unnoetig.";        Safe=$true;  Cat="Bloat" }
-        "XboxNetApiSvc"          = @{ Desc="Xbox Live Networking -- Xbox Netzwerkdienst.";                    Safe=$true;  Cat="Bloat" }
-        "xbgm"                   = @{ Desc="Xbox Game Monitoring -- Ueberwacht Xbox-Spiele.";                 Safe=$true;  Cat="Bloat" }
-        "Spooler"                = @{ Desc="Print Spooler -- Nur benoetigt wenn Drucker angeschlossen.";      Safe=$false; Cat="System" }
-        "BITS"                   = @{ Desc="Background Intelligent Transfer -- Windows Update Downloader.";   Safe=$false; Cat="System" }
-        "wuauserv"               = @{ Desc="Windows Update -- Automatische Updates. Vorsicht beim Deaktivieren!"; Safe=$false; Cat="System" }
-        "TabletInputService"     = @{ Desc="Touch Keyboard & Handwriting -- Nur fuer Touchscreens/Tablets."; Safe=$true;  Cat="Performance" }
-        "WMPNetworkSvc"          = @{ Desc="Windows Media Player Network -- Medienfreigabe im Netzwerk.";    Safe=$true;  Cat="Bloat" }
-        "lfsvc"                  = @{ Desc="Geolocation Service -- Standortabfragen durch Apps.";            Safe=$true;  Cat="Privacy" }
-        "SharedAccess"           = @{ Desc="Internet Connection Sharing -- Nur fuer ICS/Hotspot benoetigt."; Safe=$true;  Cat="Network" }
-        "PhoneSvc"               = @{ Desc="Phone Service -- Telefonie-Features. Selten benoetigt.";         Safe=$true;  Cat="Bloat" }
-        "wisvc"                  = @{ Desc="Windows Insider Service -- Nur fuer Insider-Builds.";            Safe=$true;  Cat="Bloat" }
-        "WpcMonSvc"              = @{ Desc="Parental Controls -- Jugendschutz-Monitoring.";                  Safe=$true;  Cat="Bloat" }
-        "CscService"             = @{ Desc="Offline Files -- Cached Offline-Zugriff. Meist unnoetig.";       Safe=$true;  Cat="Performance" }
-        "TrkWks"                 = @{ Desc="Distributed Link Tracking -- Verfolgt verschobene Dateien.";     Safe=$true;  Cat="Performance" }
-        "WdiServiceHost"         = @{ Desc="Diagnostic Service Host -- Windows Diagnose-Tools.";             Safe=$true;  Cat="Bloat" }
-        "icssvc"                 = @{ Desc="Windows Mobile Hotspot -- Mobiler Hotspot. Meist unnoetig.";     Safe=$true;  Cat="Bloat" }
-        "vmicvss"                = @{ Desc="Hyper-V VSS -- Nur fuer Hyper-V VMs.";                          Safe=$true;  Cat="Bloat" }
-        "HvHost"                 = @{ Desc="Hyper-V Host -- Nur fuer Hyper-V VMs.";                          Safe=$true;  Cat="Bloat" }
+        "DiagTrack"              = @{ Desc="Telemetry & Diagnostics -- sends usage data to Microsoft.";        Safe=$true;  Cat="Privacy" }
+        "dmwappushservice"       = @{ Desc="WAP Push Message Routing -- part of the telemetry infrastructure.";     Safe=$true;  Cat="Privacy" }
+        "SysMain"                = @{ Desc="Superfetch -- preloads apps into RAM. Unnecessary on SSDs.";            Safe=$true;  Cat="Performance" }
+        "WSearch"                = @{ Desc="Windows Search -- indexes your drives. High CPU/disk load.";       Safe=$true;  Cat="Performance" }
+        "RemoteRegistry"         = @{ Desc="Remote Registry -- allows remote access to the registry. Security risk."; Safe=$true;  Cat="Security" }
+        "Fax"                    = @{ Desc="Fax service -- used by almost nobody.";                 Safe=$true;  Cat="Bloat" }
+        "MapsBroker"             = @{ Desc="Maps Broker -- for the Windows Maps app. Rarely used.";             Safe=$true;  Cat="Bloat" }
+        "RetailDemo"             = @{ Desc="Retail Demo Service -- only for store demo devices.";              Safe=$true;  Cat="Bloat" }
+        "WerSvc"                 = @{ Desc="Windows Error Reporting -- sends crash reports to Microsoft."; Safe=$true;  Cat="Privacy" }
+        "XblGameSave"            = @{ Desc="Xbox Game Save -- Xbox cloud saves. Unnecessary without Xbox.";    Safe=$true;  Cat="Bloat" }
+        "XblAuthManager"         = @{ Desc="Xbox Live Auth -- Xbox authentication. Unnecessary without Xbox.";        Safe=$true;  Cat="Bloat" }
+        "XboxNetApiSvc"          = @{ Desc="Xbox Live Networking -- Xbox network service.";                    Safe=$true;  Cat="Bloat" }
+        "xbgm"                   = @{ Desc="Xbox Game Monitoring -- monitors Xbox games.";                 Safe=$true;  Cat="Bloat" }
+        "Spooler"                = @{ Desc="Print Spooler -- only needed if a printer is connected.";      Safe=$false; Cat="System" }
+        "BITS"                   = @{ Desc="Background Intelligent Transfer -- the Windows Update downloader.";   Safe=$false; Cat="System" }
+        "wuauserv"               = @{ Desc="Windows Update -- automatic updates. Be careful disabling this!"; Safe=$false; Cat="System" }
+        "TabletInputService"     = @{ Desc="Touch Keyboard & Handwriting -- only for touchscreens/tablets."; Safe=$true;  Cat="Performance" }
+        "WMPNetworkSvc"          = @{ Desc="Windows Media Player Network -- media sharing on the network.";    Safe=$true;  Cat="Bloat" }
+        "lfsvc"                  = @{ Desc="Geolocation Service -- location requests from apps.";            Safe=$true;  Cat="Privacy" }
+        "SharedAccess"           = @{ Desc="Internet Connection Sharing -- only needed for ICS/hotspot."; Safe=$true;  Cat="Network" }
+        "PhoneSvc"               = @{ Desc="Phone Service -- telephony features. Rarely needed.";         Safe=$true;  Cat="Bloat" }
+        "wisvc"                  = @{ Desc="Windows Insider Service -- only for Insider builds.";            Safe=$true;  Cat="Bloat" }
+        "WpcMonSvc"              = @{ Desc="Parental Controls -- family safety monitoring.";                  Safe=$true;  Cat="Bloat" }
+        "CscService"             = @{ Desc="Offline Files -- cached offline access. Usually unnecessary.";       Safe=$true;  Cat="Performance" }
+        "TrkWks"                 = @{ Desc="Distributed Link Tracking -- tracks moved files.";     Safe=$true;  Cat="Performance" }
+        "WdiServiceHost"         = @{ Desc="Diagnostic Service Host -- Windows diagnostic tools.";             Safe=$true;  Cat="Bloat" }
+        "icssvc"                 = @{ Desc="Windows Mobile Hotspot -- mobile hotspot. Usually unnecessary.";     Safe=$true;  Cat="Bloat" }
+        "vmicvss"                = @{ Desc="Hyper-V VSS -- only for Hyper-V VMs.";                          Safe=$true;  Cat="Bloat" }
+        "HvHost"                 = @{ Desc="Hyper-V Host -- only for Hyper-V VMs.";                          Safe=$true;  Cat="Bloat" }
     }
 
     # Build XAML sub-window
@@ -5006,7 +5058,7 @@ $BtnServices.Add_Click({
 
             # Safe label
             $tbSafe = New-Object Windows.Controls.TextBlock
-            $tbSafe.Text  = if ($info.Safe) { "Ja" } else { "Nein" }
+            $tbSafe.Text  = if ($info.Safe) { "Yes" } else { "No" }
             $tbSafe.Width = 60
             $tbSafe.FontSize = 11
             $tbSafe.FontWeight = "SemiBold"
@@ -5037,6 +5089,17 @@ $BtnServices.Add_Click({
     $svcDisable.Add_Click({
         $sel = $svcCbMap.GetEnumerator() | Where-Object { $_.Value.Cb.IsChecked -eq $true }
         if (-not $sel) { $svcStatus.Text = Get-UIString "svc_none_sel"; return }
+        # Services marked Safe=$false (Windows Update, BITS, Print Spooler) break core
+        # features when disabled. The red dot alone is easy to miss -- confirm first.
+        $risky = @($sel | Where-Object { -not $_.Value.Safe } | ForEach-Object { $_.Key })
+        if ($risky.Count -gt 0) {
+            $r = [System.Windows.MessageBox]::Show(
+                "You selected $($risky.Count) system service(s) marked as NOT safe to disable:`n`n  - " + ($risky -join "`n  - ") + "`n`nDisabling Windows Update / BITS stops all Windows updates (including security fixes); disabling the Print Spooler stops all printing.`n`nDisable them anyway?",
+                "GameOptimizerPro -- System services",
+                [System.Windows.MessageBoxButton]::YesNo,
+                [System.Windows.MessageBoxImage]::Warning)
+            if ($r -ne [System.Windows.MessageBoxResult]::Yes) { return }
+        }
         $count = 0
         foreach ($entry in $sel) {
             $name = $entry.Key

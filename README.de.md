@@ -40,20 +40,20 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 | Tab | Features | Description |
 |-----|----------|-------------|
 | 🎚️ Presets | 3 Stufen | Ein-Klick **Minimal / Balanced / Aggressive** Tweak-Auswahl (kumulativ, sicher als Standard) |
-| 🪟 Windows | 30 Tweaks | Debloat, Datenschutz, Win11-Tweaks, Performance-Tweaks + CTT Essentials + Quality of Life |
-| 🌐 Network | 10 Tweaks | Nagle, LSO, DNS, TCP-Tuning, QoS, Adapter Power Saving, Delivery Optimization + asynchroner Ping-Test (Latenz, Paketverlust, Jitter zu Gateway/1.1.1.1/8.8.8.8) |
+| 🪟 Windows | 41 Tweaks | Debloat, Datenschutz, Win11-Tweaks, Performance-Tweaks + CTT Essentials + Quality of Life |
+| 🌐 Network | 11 Tweaks | Nagle, LSO, DNS, TCP-Tuning, QoS, Adapter Power Saving, Delivery Optimization + asynchroner Ping-Test (Latenz, Paketverlust, Jitter zu Gateway/1.1.1.1/8.8.8.8) |
 | 🔊 Audio | 6 Tweaks | Audio-Tweaks, eigener Tab |
 | 🎮 GPU Tweaks | 7 Tweaks | 4 NVIDIA + 3 AMD Tweaks, GPU-Erkennung, Brand-Grauausblendung |
 | ⚡ Power Plan | 7 Tweaks | USB, PCI-E, HDD, Display, Sleep, CPU Min/Max |
-| 🚀 Startup Manager | ✅ | Eigenes Fenster, HKCU/HKLM/Run32, Disable/Enable/Refresh |
+| 🚀 Startup Manager | ✅ | Eigenes Fenster, HKCU/HKLM/Run32 + Autostart-Ordner, Disable/Enable/Refresh |
 | 🔧 **[BIOS] BIOS Guide** | ✅ | Hardware-spezifische BIOS-Empfehlungen mit Menüpfaden |
 | 📊 **[DASH] Dashboard** | ✅ | Live-Ressourcen-Monitor (CPU/RAM/Disk/Netz), Status, Snapshot & Vorher/Nachher-Vergleich |
 | 🧹 Deep Clean | 6 Tools | Browser-Caches, Windows-Update-Cache, Thumbnails, Papierkorb, Prefetch, Logs & Crash-Dumps (zeigt freigegebene MB) |
-| 🌍 Language DE/EN | ✅ | 80+ EN-Beschreibungen, Toggle-Button, live umschaltbar |
+| 🌍 Language DE/EN | ✅ | 106 EN-Beschreibungen, Toggle-Button, live umschaltbar |
 
 ---
 
-## 🪟 Windows Tab - 30 Tweaks
+## 🪟 Windows Tab - 41 Tweaks
 
 ### 🧹 Debloat & System Cleanup
 - **Remove Cortana** — Entfernt den Windows Sprachassistenten
@@ -121,7 +121,7 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 
 ### 🖥️ Startup-Programme verwalten
 - **Eigenes Fenster** — Dedizierte UI für Startup-Verwaltung
-- **Registry-Integration** — HKCU/HKLM/Run32-Einträge
+- **Registry-Integration** — HKCU/HKLM/Run32-Einträge + beide Autostart-Ordner
 - **3-State-Management** — Disable/Enable/Refresh Funktionalität
 - **Schnelle Kontrolle** — Starten/Stoppen von Auto-Start-Programmen
 
@@ -155,7 +155,7 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 ## 🌍 Language Toggle - DE/EN
 
 ### 🗣️ Zweisprachige Tweak-Beschreibungen (DE/EN)
-- **80+ Tweak-Beschreibungen auf Deutsch & Englisch** — im Info-Popup jedes Tweaks
+- **106 Tweak-Beschreibungen auf Deutsch & Englisch** — im Info-Popup jedes Tweaks
 - **Toggle-Button** — schaltet alle Beschreibungen live zwischen DE und EN, kein Neustart
 - **Interface-Beschriftungen bleiben Englisch** — der Umschalter betrifft die Beschreibungen, nicht die UI-Elemente
 
@@ -181,7 +181,7 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 ### GPU Kompatibilität
 - ✅ **NVIDIA** — GeForce RTX Serie (alle modernen GPUs)
 - ✅ **AMD** — Radeon RX Serie (alle modernen GPUs)
-- ⚠️ **Intel Arc** — Begrenzte Unterstützung (nutzt AMD-Tweaks)
+- ⚠️ **Intel Arc** — Alle allgemeinen Tweaks funktionieren; die NVIDIA/AMD-spezifischen GPU-Tweaks sind ausgegraut
 
 ### CPU Kompatibilität (BIOS Guide)
 - ✅ **AMD Zen 5** — Ryzen 7000X3D / 9000 Series (Threadripper)

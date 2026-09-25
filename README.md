@@ -40,20 +40,20 @@ The tool offers a modern, user-friendly interface with:
 | Tab | Features | Description |
 |-----|----------|-------------|
 | 🎚️ Presets | 3 levels | One-click **Minimal / Balanced / Aggressive** tweak selection (cumulative, safe-by-default) |
-| 🪟 Windows | 30 Tweaks | Debloat, privacy, Win11 tweaks, performance tweaks + CTT Essentials + Quality of Life |
-| 🌐 Network | 10 Tweaks | Nagle, LSO, DNS, TCP tuning, QoS, adapter power saving, delivery optimization + async ping test (latency, packet loss, jitter to gateway/1.1.1.1/8.8.8.8) |
+| 🪟 Windows | 41 Tweaks | Debloat, privacy, Win11 tweaks, performance tweaks + CTT Essentials + Quality of Life |
+| 🌐 Network | 11 Tweaks | Nagle, LSO, DNS, TCP tuning, QoS, adapter power saving, delivery optimization + async ping test (latency, packet loss, jitter to gateway/1.1.1.1/8.8.8.8) |
 | 🔊 Audio | 6 Tweaks | Audio tweaks, dedicated tab |
 | 🎮 GPU Tweaks | 7 Tweaks | 4 NVIDIA + 3 AMD tweaks, GPU detection, brand grey-out |
 | ⚡ Power Plan | 7 Tweaks | USB, PCI-E, HDD, display, sleep, CPU min/max |
-| 🚀 Startup Manager | ✅ | Own window, HKCU/HKLM/Run32, disable/enable/refresh |
+| 🚀 Startup Manager | ✅ | Own window, HKCU/HKLM/Run32 + startup folders, disable/enable/refresh |
 | 🔧 **[BIOS] BIOS Guide** | ✅ | Hardware-specific BIOS recommendations with menu paths |
 | 📊 **[DASH] Dashboard** | ✅ | Live resource monitor (CPU/RAM/disk/network), status, snapshot & before/after comparison |
 | 🧹 Deep Clean | 6 Tools | Browser caches, Windows Update cache, thumbnails, recycle bin, prefetch, logs & crash dumps (shows MB freed) |
-| 🌍 Language DE/EN | ✅ | 80+ EN descriptions, toggle button, switches live |
+| 🌍 Language DE/EN | ✅ | 106 EN descriptions, toggle button, switches live |
 
 ---
 
-## 🪟 Windows Tab - 30 Tweaks
+## 🪟 Windows Tab - 41 Tweaks
 
 ### 🧹 Debloat & System Cleanup
 - **Remove Cortana** — Completely removes Windows' voice assistant
@@ -133,7 +133,7 @@ Registry keys sourced **1:1 from Chris Titus Tech WinUtil** for guaranteed accur
 
 ### 🖥️ Manage Startup Programs
 - **Own Window** — Dedicated UI for startup management
-- **Registry Integration** — HKCU/HKLM/Run32 entries
+- **Registry Integration** — HKCU/HKLM/Run32 entries + both startup folders
 - **3-State Management** — Disable/enable/refresh functionality
 - **Quick Control** — Start/stop auto-start programs
 
@@ -167,7 +167,7 @@ Registry keys sourced **1:1 from Chris Titus Tech WinUtil** for guaranteed accur
 ## 🌍 Language Toggle - DE/EN
 
 ### 🗣️ Bilingual Tweak Descriptions (DE/EN)
-- **80+ tweak descriptions in German & English** — shown in each tweak's info popup
+- **106 tweak descriptions in German & English** — shown in each tweak's info popup
 - **Toggle Button** — switches all descriptions between DE and EN live, no restart
 - **Interface labels stay English** — the toggle affects the tweak descriptions, not the UI chrome
 
@@ -193,7 +193,7 @@ Registry keys sourced **1:1 from Chris Titus Tech WinUtil** for guaranteed accur
 ### GPU Compatibility
 - ✅ **NVIDIA** — GeForce RTX series (all modern GPUs)
 - ✅ **AMD** — Radeon RX series (all modern GPUs)
-- ⚠️ **Intel Arc** — Limited support (uses AMD tweaks)
+- ⚠️ **Intel Arc** — All general tweaks work; the NVIDIA/AMD-specific GPU tweaks are greyed out
 
 ### CPU Compatibility (BIOS Guide)
 - ✅ **AMD Zen 5** — Ryzen 7000X3D / 9000 series (Threadripper)
