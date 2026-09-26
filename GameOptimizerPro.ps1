@@ -142,19 +142,28 @@ function Write-Log {
 
 # -----------------------------------------
 # DEEP CLEAN HELPER
-# Measures the total size of files matching the given paths, then deletes
-# them. Returns the number of bytes freed (files locked/in-use are skipped
-# by -ErrorAction SilentlyContinue and simply not counted as failures).
+# Deletes everything matching the given paths and returns the number of bytes
+# ACTUALLY freed. Files that are locked/in use survive the delete (skipped via
+# -ErrorAction SilentlyContinue), so the size is measured before AND after --
+# counting only "before" reported locked files (e.g. an open browser's cache)
+# as freed although they were still on disk.
 # -----------------------------------------
+function Get-PathItemsSize {
+    param([string]$Path)
+    $s = (Get-ChildItem -Path $Path -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer } | Measure-Object -Property Length -Sum).Sum
+    return [int64]$s
+}
 function Clear-PathItems {
     param([string[]]$Paths)
-    $freed = 0
+    [int64]$freed = 0
     foreach ($p in $Paths) {
-        $items = Get-ChildItem -Path $p -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer }
-        foreach ($it in $items) { $freed += $it.Length }
+        $before = Get-PathItemsSize $p
         Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue
+        $after  = Get-PathItemsSize $p
+        # Clamp: an app may write new files meanwhile (after > before) -- never report negative
+        if ($before -gt $after) { $freed += ($before - $after) }
     }
-    return [int64]$freed
+    return $freed
 }
 function Format-FreedMB { param([int64]$Bytes) return ([math]::Round($Bytes / 1MB, 1)).ToString("0.#", [System.Globalization.CultureInfo]::InvariantCulture) }
 
@@ -1303,7 +1312,11 @@ $AllTweaks = @(
             )
             foreach ($path in $tempPaths) {
                 if (Test-Path $path) {
+                    # Skip GameOptimizerPro's own files in %TEMP% (this session's log,
+                    # the startup log, the downloaded script) -- deleting them wiped the
+                    # log of the very run the user may want to open afterwards.
                     Get-ChildItem -Path $path -Recurse -Force -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Name -notlike "GameOptimizerPro*" } |
                         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
                 }
             }
@@ -2686,7 +2699,6 @@ $Script:TweakDots = @{}           # tweakName -> dot Border (for Verify button r
 $Script:UIStrings = @{
     # Header / subtitle
     "subtitle"          = @{ EN = "Windows & Gaming Optimizer v$($Script:AppVersion) -- by FloDePin";      DE = "Windows & Gaming Optimizer v$($Script:AppVersion) -- von FloDePin" }
-    "hw_detecting"      = @{ EN = "Detecting hardware...";                                DE = "Erkenne Hardware..." }
 
     # Tab headers
     "tab_windows"       = @{ EN = "[WIN]  Windows";        DE = "[WIN]  Windows" }
@@ -2712,8 +2724,6 @@ $Script:UIStrings = @{
 
     # Status bar
     "status_ready"      = @{ EN = "Ready -- select tweaks and click Apply Selected.";     DE = "Bereit -- Tweaks auswaehlen und 'Auswahl anwenden' klicken." }
-    "status_lang_en"    = @{ EN = "Language switched to English.";                          DE = "Language switched to English." }
-    "status_lang_de"    = @{ EN = "Sprache auf Deutsch umgestellt.";                        DE = "Sprache auf Deutsch umgestellt." }
 
     # Startup Manager
     "sw_title"          = @{ EN = "Startup Manager";       DE = "Autostart-Manager" }
