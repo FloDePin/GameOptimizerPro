@@ -40,7 +40,7 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 | Tab | Features | Description |
 |-----|----------|-------------|
 | 🎚️ Presets | 3 Stufen | Ein-Klick **Minimal / Balanced / Aggressive** Tweak-Auswahl (kumulativ, sicher als Standard) |
-| 🪟 Windows | 41 Tweaks | Debloat, Datenschutz, Win11-Tweaks, Performance-Tweaks + CTT Essentials + Quality of Life |
+| 🪟 Windows | 43 Tweaks | Debloat, Datenschutz, Win11-Tweaks, Performance-Tweaks + CTT Essentials + Quality of Life |
 | 🌐 Network | 11 Tweaks | Nagle, LSO, DNS, TCP-Tuning, QoS, Adapter Power Saving, Delivery Optimization + asynchroner Ping-Test (Latenz, Paketverlust, Jitter zu Gateway/1.1.1.1/8.8.8.8) |
 | 🔊 Audio | 6 Tweaks | Audio-Tweaks, eigener Tab |
 | 🎮 GPU Tweaks | 7 Tweaks | 4 NVIDIA + 3 AMD Tweaks, GPU-Erkennung, Brand-Grauausblendung |
@@ -49,11 +49,11 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 | 🔧 **[BIOS] BIOS Guide** | ✅ | Hardware-spezifische BIOS-Empfehlungen mit Menüpfaden |
 | 📊 **[DASH] Dashboard** | ✅ | Live-Ressourcen-Monitor (CPU/RAM/Disk/Netz), Status, Snapshot & Vorher/Nachher-Vergleich |
 | 🧹 Deep Clean | 6 Tools | Browser-Caches, Windows-Update-Cache, Thumbnails, Papierkorb, Prefetch, Logs & Crash-Dumps (zeigt freigegebene MB) |
-| 🌍 Language DE/EN | ✅ | 106 EN-Beschreibungen, Toggle-Button, live umschaltbar |
+| 🌍 Language DE/EN | ✅ | 108 EN-Beschreibungen, Toggle-Button, live umschaltbar |
 
 ---
 
-## 🪟 Windows Tab - 41 Tweaks
+## 🪟 Windows Tab - 43 Tweaks
 
 ### 🧹 Debloat & System Cleanup
 - **Remove Cortana** — Entfernt den Windows Sprachassistenten
@@ -61,12 +61,14 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 - **Remove Microsoft Teams (Personal)** — Entfernt die persönliche Teams-Installation
 - **Remove Copilot** — Deaktiviert Windows Copilot
 - **Remove OneDrive** — Entfernt die OneDrive-Integration
-- **Remove Windows Recall** — Deaktiviert Windows Recall Feature
+- **Remove Windows Recall** — Deaktiviert und entfernt Windows Recall (offizielle Richtlinie; vorhandene Snapshots werden gelöscht)
 - **Remove Other Bloatware** — Entfernt zusätzliche vorinstallierte Bloatware
 
 ### 🔐 Privacy-Einstellungen
 - **Disable Telemetry & Data Collection** — Deaktiviert Datenerfassung
 - **Disable Activity History** — Deaktiviert die Aktivitätsverlauf-Speicherung
+- **Disable Click to Do & Settings Agent (AI)** — Schaltet die KI-Bildschirmanalyse und den KI-Agenten in der Einstellungen-Suche ab (Copilot+ PCs)
+- **Disable AI in Paint & Notepad** — Offizielle Richtlinien für Cocreator, Image Creator, generatives Füllen und Notepad-KI
 
 ### 📦 Windows 11 & 10 Optimization
 - **OS-Scan** — Scannt das Betriebssystem auf Optimierungspotenziale
@@ -155,7 +157,7 @@ Das Tool bietet eine moderne, benutzerfreundliche Oberfläche mit:
 ## 🌍 Language Toggle - DE/EN
 
 ### 🗣️ Zweisprachige Tweak-Beschreibungen (DE/EN)
-- **106 Tweak-Beschreibungen auf Deutsch & Englisch** — im Info-Popup jedes Tweaks
+- **108 Tweak-Beschreibungen auf Deutsch & Englisch** — im Info-Popup jedes Tweaks
 - **Toggle-Button** — schaltet alle Beschreibungen live zwischen DE und EN, kein Neustart
 - **Interface-Beschriftungen bleiben Englisch** — der Umschalter betrifft die Beschreibungen, nicht die UI-Elemente
 
@@ -262,8 +264,8 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ### v1.0 — Erste öffentliche Veröffentlichung
 Ein vollständiger, gehärteter Windows- & Gaming-Optimierer. Jeder Tweak hat volles **Apply + Revert + Live-Status-Check**, und jedes Apply legt zuerst einen **Systemwiederherstellungspunkt** und ein **`.reg`-Registry-Backup** an (gespeichert unter `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`, sicher vor der Temp-Bereinigung).
 
-**Tweak-Bibliothek (106 Tweaks, alle reversibel):**
-- 🪟 **Windows** — Debloat, Privatsphäre, Performance, CTT-Essentials & Quality-of-Life-Tweaks, inkl. Abschalten der geräteweiten generativen KI (Text- & Bildgenerierung)
+**Tweak-Bibliothek (108 Tweaks, alle reversibel):**
+- 🪟 **Windows** — Debloat, Privatsphäre, Performance, CTT-Essentials & Quality-of-Life-Tweaks, inkl. Abschalten der geräteweiten generativen KI (Text- & Bildgenerierung), Click to Do, des KI-Agenten in den Einstellungen und der KI in Paint & Notepad
 - 🎮 **Gaming & GPU** — MSI-Modus, HAGS, NVIDIA/AMD-Treiber-Tweaks, GPU-Timeout-Toleranz (TDR), Shader-Cache-Tools
 - 🌐 **Netzwerk** — Latenz (Nagle/LSO/Throttling), DNS (Cloudflare/Google), TCP-Tuning, QoS, Adapter-Energie
 - 🔊 **Audio** — MMCSS/Audio-Priorität, Spatial Sound, Sound-Schema & Geräte-Energie
@@ -281,7 +283,7 @@ Ein vollständiger, gehärteter Windows- & Gaming-Optimierer. Jeder Tweak hat vo
 - 🛡️ Startup-**Sanity-Check** verhindert, dass ein Status-Check je mit einer Revert-Aktion verwechselt wird
 - 🌍 Durchgängig **locale-unabhängig** (SIDs, feste GUIDs, CIM-Perf-Counter) — funktioniert auf nicht-englischem Windows
 - 🔒 **SHA256-Integritätskette** — `install.ps1` pinnt den veröffentlichten Hash und prüft ihn gegen `CHECKSUMS.txt`, bevor irgendetwas mit Admin-Rechten läuft
-- ✅ Verifiziert: **106/106** Tweaks haben Apply + Revert + Status-Check, keine Kollisionen
+- ✅ Verifiziert: **108/108** Tweaks haben Apply + Revert + Status-Check, keine Kollisionen
 
 
 ---

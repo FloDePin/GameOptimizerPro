@@ -201,6 +201,7 @@ $Script:RegistryBackupKeys = @(
     "HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR",
     "HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
     "HKCU\Software\Policies\Microsoft\Windows\WindowsCopilot",
+    "HKCU\Software\Policies\Microsoft\Windows\WindowsAI",
     "HKCU\System\GameConfigStore",
     "HKLM\SOFTWARE\ATI Technologies\CBT",
     "HKLM\SOFTWARE\Microsoft\Dfrg\BootOptimizeFunction",
@@ -211,10 +212,12 @@ $Script:RegistryBackupKeys = @(
     "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved",
     "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render",
     "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection",
+    "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Paint",
     "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
     "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run",
     "HKLM\SOFTWARE\Policies\Microsoft\Dsh",
     "HKLM\SOFTWARE\Policies\Microsoft\Windows",
+    "HKLM\SOFTWARE\Policies\WindowsNotepad",
     "HKLM\SYSTEM\CurrentControlSet\Control",
     "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters",
     "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak",
@@ -371,13 +374,17 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Remove Windows Recall"
-        Desc     = "Deaktiviert Windows Recall - das KI-Feature das Screenshots deiner Aktivitaeten macht und lokal speichert. Datenschutzkritisch."
+        Desc     = "Deaktiviert und entfernt Windows Recall - das KI-Feature, das Screenshots deiner Aktivitaeten macht und lokal speichert. Nutzt die offiziellen Microsoft-Richtlinien: Snapshots aus + Recall-Komponente vom System entfernt (vorhandene Snapshots werden geloescht). Neustart noetig."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v DisableAIDataAnalysis /t REG_DWORD /d 1 /f | Out-Null
+            # Official policy "Allow Recall to be enabled" = 0: Recall becomes unavailable
+            # and Windows REMOVES its bits (plus any saved snapshots) at the next restart.
+            # DisableAIDataAnalysis alone only stops new snapshots.
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v AllowRecallEnablement /t REG_DWORD /d 0 /f | Out-Null
             Disable-WindowsOptionalFeature -Online -FeatureName "Recall" -NoRestart -ErrorAction SilentlyContinue | Out-Null
-            Write-Log "Recall disabled"
+            Write-Log "Recall disabled + removal enforced by policy (AllowRecallEnablement=0, takes effect after restart)"
         }
     },
     [PSCustomObject]@{
@@ -446,6 +453,34 @@ $AllTweaks = @(
         Action   = {
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" /v LetAppsAccessSystemAIModels /t REG_DWORD /d 2 /f | Out-Null
             Write-Log "Text & Image Generation (on-device AI) disabled for all apps (Force Deny)"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Click to Do & Settings Agent (AI)"
+        Desc     = "Schaltet 'Click to Do' ab (KI, die auf Tastendruck einen Screenshot macht und den Bildschirminhalt analysiert) sowie den KI-Agenten in der Suche der Einstellungen (neu in 26H2). Offizielle Microsoft-Richtlinien. Beide Funktionen laufen nur auf Copilot+ PCs mit NPU -- auf anderen PCs ist der Tweak harmlos. Hinweis: Die Settings-Agent-Richtlinie ist offiziell fuer Enterprise/Education dokumentiert; Home/Pro koennen sie ignorieren."
+        Category = "Windows"
+        Group    = "Privacy"
+        Action   = {
+            # Official WindowsAI policies (WindowsCopilot.admx). DisableClickToDo exists
+            # for machine AND user scope -- set both so a per-user default can't win.
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v DisableClickToDo /t REG_DWORD /d 1 /f | Out-Null
+            reg add "HKCU\Software\Policies\Microsoft\Windows\WindowsAI" /v DisableClickToDo /t REG_DWORD /d 1 /f | Out-Null
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v DisableSettingsAgent /t REG_DWORD /d 1 /f | Out-Null
+            Write-Log "Click to Do + Settings agent disabled (WindowsAI policies)"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable AI in Paint & Notepad"
+        Desc     = "Deaktiviert die KI-Funktionen in Paint (Cocreator, Image Creator, generatives Fuellen) und in Notepad (Umschreiben/Zusammenfassen per Copilot) ueber die offiziellen Microsoft-Richtlinien. Beide Apps bleiben ganz normal nutzbar."
+        Category = "Windows"
+        Group    = "Privacy"
+        Action   = {
+            $paint = "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Paint"
+            reg add $paint /v DisableCocreator      /t REG_DWORD /d 1 /f | Out-Null
+            reg add $paint /v DisableImageCreator   /t REG_DWORD /d 1 /f | Out-Null
+            reg add $paint /v DisableGenerativeFill /t REG_DWORD /d 1 /f | Out-Null
+            reg add "HKLM\SOFTWARE\Policies\WindowsNotepad" /v DisableAIFeatures /t REG_DWORD /d 1 /f | Out-Null
+            Write-Log "AI features in Paint (Cocreator/Image Creator/Generative Fill) and Notepad disabled"
         }
     },
     [PSCustomObject]@{
@@ -1773,7 +1808,8 @@ $RevertActions = @{
     }
     "Remove Windows Recall" = {
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v DisableAIDataAnalysis /f 2>$null
-        Write-Log "Revert Recall: policy key removed"
+        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v AllowRecallEnablement /f 2>$null
+        Write-Log "Revert Recall: policies removed (Recall can be re-added via Windows Features / Windows Update)"
     }
     "Remove Other Bloatware" = {
         Write-Log "Revert Bloatware: apps were removed  --  needs System Restore to reinstall"
@@ -1881,6 +1917,20 @@ $RevertActions = @{
     "Disable Text & Image Generation (AI)" = {
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" /v LetAppsAccessSystemAIModels /f 2>$null
         Write-Log "Revert: Text & Image Generation policy removed (back to user control)"
+    }
+    "Disable Click to Do & Settings Agent (AI)" = {
+        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v DisableClickToDo /f 2>$null
+        reg delete "HKCU\Software\Policies\Microsoft\Windows\WindowsAI" /v DisableClickToDo /f 2>$null
+        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v DisableSettingsAgent /f 2>$null
+        Write-Log "Revert: Click to Do + Settings agent policies removed (Windows default)"
+    }
+    "Disable AI in Paint & Notepad" = {
+        $paint = "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Paint"
+        reg delete $paint /v DisableCocreator /f 2>$null
+        reg delete $paint /v DisableImageCreator /f 2>$null
+        reg delete $paint /v DisableGenerativeFill /f 2>$null
+        reg delete "HKLM\SOFTWARE\Policies\WindowsNotepad" /v DisableAIFeatures /f 2>$null
+        Write-Log "Revert: Paint + Notepad AI policies removed (Windows default)"
     }
     "Disable Location Tracking" = {
         reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location" /v Value /t REG_SZ /d Allow /f | Out-Null
@@ -2430,9 +2480,13 @@ $CheckFunctions = @{
     "Remove Cortana"                     = { $null -eq (Get-AppxPackage -AllUsers "*Microsoft.549981C3F5F10*" -EA SilentlyContinue | Select-Object -First 1) }
     "Remove Xbox Apps"                   = { $null -eq (Get-AppxPackage -AllUsers "*XboxGamingOverlay*" -EA SilentlyContinue | Select-Object -First 1) }
     "Remove Microsoft Teams (Personal)"  = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications" "ConfigureChatAutoInstall") -eq 0 }
-    "Remove Copilot"                     = { (Get-RegVal "HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot" "TurnOffWindowsCopilot") -eq 1 }
+    # Check the APP, not the policy: Microsoft marks TurnOffWindowsCopilot as deprecated
+    # and it doesn't apply to the new Copilot app -- the policy could stay green while
+    # an update had quietly reinstalled Copilot. NonRemovable system packages are
+    # skipped because the Apply can't remove them either.
+    "Remove Copilot"                     = { $null -eq (Get-AppxPackage -AllUsers "*Copilot*" -EA SilentlyContinue | Where-Object { -not $_.NonRemovable } | Select-Object -First 1) }
     "Remove OneDrive"                    = { -not (Test-Path "$env:LOCALAPPDATA\Microsoft\OneDrive\OneDrive.exe") }
-    "Remove Windows Recall"              = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableAIDataAnalysis") -eq 1 }
+    "Remove Windows Recall"              = { ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableAIDataAnalysis") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "AllowRecallEnablement") -eq 0) }
     "Remove Other Bloatware"             = { $null -eq (Get-AppxPackage -AllUsers "*CandyCrush*" -EA SilentlyContinue | Select-Object -First 1) }
 
     # PRIVACY
@@ -2462,6 +2516,8 @@ $CheckFunctions = @{
     "Disable Activity History"           = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" "EnableActivityFeed") -eq 0 }
     "Disable Advertising ID"             = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" "Enabled") -eq 0 }
     "Disable Text & Image Generation (AI)" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" "LetAppsAccessSystemAIModels") -eq 2 }
+    "Disable Click to Do & Settings Agent (AI)" = { ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableClickToDo") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableSettingsAgent") -eq 1) }
+    "Disable AI in Paint & Notepad"      = { $p = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Paint"; ((Get-RegVal $p "DisableCocreator") -eq 1) -and ((Get-RegVal $p "DisableImageCreator") -eq 1) -and ((Get-RegVal $p "DisableGenerativeFill") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\WindowsNotepad" "DisableAIFeatures") -eq 1) }
     "Disable Location Tracking"          = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location" "Value") -eq "Deny" }
     # -match on an ARRAY returns the matching lines, not a bool -- the dot logic only
     # understands $true/$false, so this used to show "unknown" forever. Cast to bool,
@@ -2811,12 +2867,14 @@ $TweakDescEN = @{
     "Remove Microsoft Teams (Personal)"           = "Removes the consumer version of Microsoft Teams and blocks automatic reinstallation via registry."
     "Remove Copilot"                              = "Disables and removes Windows Copilot AI assistant. Prevents Copilot from running in the background and sending data."
     "Remove OneDrive"                             = "Completely uninstalls OneDrive including autostart and Explorer integration. Local files remain untouched."
-    "Remove Windows Recall"                       = "Disables Windows Recall  --  the AI feature that takes screenshots of your activity. Major privacy concern."
+    "Remove Windows Recall"                       = "Disables AND removes Windows Recall  --  the AI feature that takes screenshots of your activity. Uses Microsoft's official policies: snapshots off + Recall component removed from the system (existing snapshots are deleted). Restart required."
     "Remove Other Bloatware"                      = "Removes pre-installed apps: Candy Crush, TikTok, Disney+, Facebook, Solitaire, Clipchamp, ToDo, Paint3D and more."
     "Disable Telemetry & Data Collection"         = "Disables all Windows telemetry services (DiagTrack, dmwappushservice). Windows stops sending usage data to Microsoft."
     "Disable Activity History"                    = "Disables Windows Timeline/Activity History. Windows stops tracking which apps and files you open."
     "Disable Advertising ID"                      = "Disables the advertising ID Windows assigns each user. Apps can no longer track you across devices for targeted ads."
     "Disable Text & Image Generation (AI)"        = "Disables device-wide Text and Image Generation (on-device generative AI) for all apps via policy (Force Deny). Affects only local on-device AI, not cloud AI services."
+    "Disable Click to Do & Settings Agent (AI)"   = "Turns off 'Click to Do' (AI that takes a screenshot on demand and analyzes what's on screen) and the AI agent in the Settings search (new in 26H2). Official Microsoft policies. Both only run on Copilot+ PCs with an NPU -- harmless on other PCs. Note: the Settings-agent policy is officially documented for Enterprise/Education; Home/Pro may ignore it."
+    "Disable AI in Paint & Notepad"               = "Disables the AI features in Paint (Cocreator, Image Creator, Generative Fill) and in Notepad (Copilot rewrite/summarize) via Microsoft's official policies. Both apps keep working normally."
     "Disable Location Tracking"                   = "Disables the Windows location service system-wide. Apps can no longer request your location."
     "Block Telemetry Hosts (hosts file)"          = "Adds Microsoft telemetry servers to the Windows hosts file, blocking them even if telemetry services are still running."
     "Disable Scheduled Telemetry Tasks"           = "Disables all scheduled Windows tasks that collect and send telemetry data (e.g. Compatibility Appraiser, CEIP)."
@@ -4090,6 +4148,7 @@ $Script:PresetMinimal = @(
 )
 $Script:PresetBalanced = $Script:PresetMinimal + @(
     "Remove Xbox Apps","Remove Copilot","Remove Windows Recall","Remove Other Bloatware",
+    "Disable Click to Do & Settings Agent (AI)","Disable AI in Paint & Notepad",
     "Block Telemetry Hosts (hosts file)",
     "Ultimate Performance Plan","Disable HPET (High Precision Event Timer)","Set 0.5ms Timer Resolution",
     "Disable Prefetch & Superfetch","Optimize Visual Effects (Performance Mode)","Disable Bing in Windows Search",

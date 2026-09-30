@@ -40,7 +40,7 @@ The tool offers a modern, user-friendly interface with:
 | Tab | Features | Description |
 |-----|----------|-------------|
 | 🎚️ Presets | 3 levels | One-click **Minimal / Balanced / Aggressive** tweak selection (cumulative, safe-by-default) |
-| 🪟 Windows | 41 Tweaks | Debloat, privacy, Win11 tweaks, performance tweaks + CTT Essentials + Quality of Life |
+| 🪟 Windows | 43 Tweaks | Debloat, privacy, Win11 tweaks, performance tweaks + CTT Essentials + Quality of Life |
 | 🌐 Network | 11 Tweaks | Nagle, LSO, DNS, TCP tuning, QoS, adapter power saving, delivery optimization + async ping test (latency, packet loss, jitter to gateway/1.1.1.1/8.8.8.8) |
 | 🔊 Audio | 6 Tweaks | Audio tweaks, dedicated tab |
 | 🎮 GPU Tweaks | 7 Tweaks | 4 NVIDIA + 3 AMD tweaks, GPU detection, brand grey-out |
@@ -49,11 +49,11 @@ The tool offers a modern, user-friendly interface with:
 | 🔧 **[BIOS] BIOS Guide** | ✅ | Hardware-specific BIOS recommendations with menu paths |
 | 📊 **[DASH] Dashboard** | ✅ | Live resource monitor (CPU/RAM/disk/network), status, snapshot & before/after comparison |
 | 🧹 Deep Clean | 6 Tools | Browser caches, Windows Update cache, thumbnails, recycle bin, prefetch, logs & crash dumps (shows MB freed) |
-| 🌍 Language DE/EN | ✅ | 106 EN descriptions, toggle button, switches live |
+| 🌍 Language DE/EN | ✅ | 108 EN descriptions, toggle button, switches live |
 
 ---
 
-## 🪟 Windows Tab - 41 Tweaks
+## 🪟 Windows Tab - 43 Tweaks
 
 ### 🧹 Debloat & System Cleanup
 - **Remove Cortana** — Completely removes Windows' voice assistant
@@ -61,12 +61,14 @@ The tool offers a modern, user-friendly interface with:
 - **Remove Microsoft Teams (Personal)** — Removes the personal Teams installation
 - **Remove Copilot** — Disables Windows Copilot
 - **Remove OneDrive** — Removes the OneDrive integration
-- **Remove Windows Recall** — Disables the Windows Recall feature
+- **Remove Windows Recall** — Disables and removes Windows Recall (official policy; existing snapshots are deleted)
 - **Remove Other Bloatware** — Removes additional pre-installed bloatware
 
 ### 🔐 Privacy Settings
 - **Disable Telemetry & Data Collection** — Disables data collection
 - **Disable Activity History** — Disables activity history storage
+- **Disable Click to Do & Settings Agent (AI)** — Turns off AI screen analysis and the AI agent in Settings search (Copilot+ PCs)
+- **Disable AI in Paint & Notepad** — Official policies for Cocreator, Image Creator, Generative Fill and Notepad AI
 
 ### 📦 Windows 11 & 10 Optimization
 - **OS Scan** — Scans the operating system for optimization potential
@@ -167,7 +169,7 @@ Registry keys sourced **1:1 from Chris Titus Tech WinUtil** for guaranteed accur
 ## 🌍 Language Toggle - DE/EN
 
 ### 🗣️ Bilingual Tweak Descriptions (DE/EN)
-- **106 tweak descriptions in German & English** — shown in each tweak's info popup
+- **108 tweak descriptions in German & English** — shown in each tweak's info popup
 - **Toggle Button** — switches all descriptions between DE and EN live, no restart
 - **Interface labels stay English** — the toggle affects the tweak descriptions, not the UI chrome
 
@@ -274,8 +276,8 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ### v1.0 — Initial public release
 A complete, hardened Windows & gaming optimizer. Every tweak ships with a full **Apply + Revert + live status check**, and each Apply first creates a **System Restore Point** and a **`.reg` registry backup** (stored in `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`, safe from temp cleanup).
 
-**Tweak library (106 tweaks, all reversible):**
-- 🪟 **Windows** — debloat, privacy, performance, CTT-Essentials & Quality-of-Life tweaks, including disabling on-device generative AI (Text & Image Generation)
+**Tweak library (108 tweaks, all reversible):**
+- 🪟 **Windows** — debloat, privacy, performance, CTT-Essentials & Quality-of-Life tweaks, including disabling on-device generative AI (Text & Image Generation), Click to Do, the Settings AI agent and AI in Paint & Notepad
 - 🎮 **Gaming & GPU** — MSI mode, HAGS, NVIDIA/AMD driver tweaks, GPU timeout (TDR) tolerance, shader-cache tools
 - 🌐 **Network** — latency (Nagle/LSO/throttling), DNS (Cloudflare/Google), TCP tuning, QoS, adapter power
 - 🔊 **Audio** — MMCSS/audio-priority, spatial sound, sound-scheme & device-power tweaks
@@ -293,7 +295,7 @@ A complete, hardened Windows & gaming optimizer. Every tweak ships with a full *
 - 🛡️ Startup **sanity check** guards against a status-check ever being confused with a revert action
 - 🌍 **Locale-independent** throughout (SIDs, fixed GUIDs, CIM perf counters) — works on non-English Windows
 - 🔒 **SHA256 integrity chain** — `install.ps1` pins the published hash and verifies it against `CHECKSUMS.txt` before running anything with Admin rights
-- ✅ Verified: **106/106** tweaks have Apply + Revert + Status-Check, no collisions
+- ✅ Verified: **108/108** tweaks have Apply + Revert + Status-Check, no collisions
 
 
 ---
