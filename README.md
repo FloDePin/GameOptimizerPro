@@ -292,6 +292,7 @@ A complete, hardened Windows & gaming optimizer. Every tweak ships with a full *
 - ⚡ **Power Plan** — Ultimate Performance, HPET, 0.5 ms timer resolution
 
 **Tools & UX:**
+- ⚡ **Fast start** — the window is ready in about half the time (~9 s → ~4.5 s on a test PC), with a loading screen from the first moment
 - 🎨 **New interface in the style of GameOptimizerPro v2.1** — sidebar navigation, dashboard with optimization score, tweak list with search, status dots, badges and inline DE/EN descriptions
 - 🎚️ **Presets** — Minimal / Balanced / Aggressive (cumulative; destructive actions are never auto-selected), with a preview of every preset
 - 📊 **Dashboard** with a **Live Resource Monitor** (CPU/RAM/disk/network on a background runspace, no UI stutter)

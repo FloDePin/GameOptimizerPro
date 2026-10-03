@@ -74,15 +74,60 @@ foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] Admin-Check OK" |
 Write-Host "[$(Get-Date -f 'HH:mm:ss')] Admin-Check OK" -ForegroundColor DarkGray
 
 # -----------------------------------------
+# SPLASH -- visible within a moment of the launch while hardware detection and the
+# 108 status checks run (a few seconds). Closed once the main window has rendered.
+# Purely cosmetic: if anything about it fails, startup simply continues without it.
+# -----------------------------------------
+$Script:Splash = $null
+function Set-Splash([string]$Text, [int]$Pct) {
+    if (-not $Script:Splash) { return }
+    try {
+        $Script:SplashText.Text = $Text; $Script:SplashBar.Value = $Pct
+        $Script:Splash.Dispatcher.Invoke([Action] {}, [System.Windows.Threading.DispatcherPriority]::Background)   # let it repaint
+    } catch { }
+}
+function Close-Splash {
+    if ($Script:Splash) { try { $Script:Splash.Close() } catch { }; $Script:Splash = $null }
+}
+try {
+    [xml]$splashXaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="GameOptimizerPro" Width="440" Height="152" WindowStyle="None" ResizeMode="NoResize" WindowStartupLocation="CenterScreen"
+        Background="#0b0e13" BorderBrush="#242b36" BorderThickness="1" FontFamily="Segoe UI" TextOptions.TextFormattingMode="Display">
+    <Grid Margin="26,22,26,22">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <DockPanel>
+            <TextBlock DockPanel.Dock="Right" Text="v$($Script:AppVersion)" FontSize="12" Foreground="#7d8896" VerticalAlignment="Center"/>
+            <TextBlock FontSize="20" FontWeight="SemiBold" Foreground="#e6edf3"><Run Text="GameOptimizer"/><Run Text="Pro" Foreground="#e53935"/></TextBlock>
+        </DockPanel>
+        <TextBlock Grid.Row="1" x:Name="SplashText" Text="Starting ..." FontSize="12.5" Foreground="#98a3b3" VerticalAlignment="Center"/>
+        <ProgressBar Grid.Row="2" x:Name="SplashBar" Height="4" Minimum="0" Maximum="100" Value="3" Foreground="#e53935" Background="#1b212b" BorderThickness="0"/>
+    </Grid>
+</Window>
+"@
+    $Script:Splash     = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $splashXaml))
+    $Script:SplashText = $Script:Splash.FindName("SplashText")
+    $Script:SplashBar  = $Script:Splash.FindName("SplashBar")
+    $Script:Splash.Show()
+    Set-Splash "Detecting hardware ..." 5
+} catch { $Script:Splash = $null }
+
+# -----------------------------------------
 # HARDWARE DETECTION
 # -----------------------------------------
+# The WMI results are kept in $Script:VideoCtrls / $Script:CpuObj and reused by the
+# dashboard, so every class is queried only once per start.
 try {
-    $GPU = (Get-WmiObject Win32_VideoController | Where-Object { $_.Name -notmatch "Microsoft" } | Select-Object -First 1).Name
-} catch { $GPU = $null }
+    $Script:VideoCtrls = @(Get-WmiObject Win32_VideoController)
+    $GPU = ($Script:VideoCtrls | Where-Object { $_.Name -notmatch "Microsoft" } | Select-Object -First 1).Name
+} catch { $GPU = $null; $Script:VideoCtrls = @() }
 if ([string]::IsNullOrWhiteSpace($GPU)) { $GPU = "Unknown GPU" }
 
 try {
-    $CPU = (Get-WmiObject Win32_Processor | Select-Object -First 1).Name
+    # Only the properties we need: a full Win32_Processor query also samples the CPU
+    # load, which alone costs ~1 s on every start.
+    $Script:CpuObj = Get-WmiObject -Query "SELECT Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed FROM Win32_Processor" | Select-Object -First 1
+    $CPU = $Script:CpuObj.Name
 } catch { $CPU = $null }
 if ([string]::IsNullOrWhiteSpace($CPU)) { $CPU = "Unknown CPU" } else { $CPU = ($CPU -replace '\s+', ' ').Trim() }   # WMI pads the name with spaces
 
@@ -98,9 +143,11 @@ try {
     # 980 PRO 1TB", "WD_BLACK SN850X"), so matching the model alone missed them and
     # silently skipped the NVMe tweak. With the inbox stornvme driver the PNP ID
     # carries VEN_NVME; drives on a vendor driver are caught via the storage
-    # stack's BusType (NVMe) matched back by friendly name.
+    # stack's BusType (17 = NVMe) matched back by friendly name. MSFT_PhysicalDisk is
+    # read straight from WMI -- Get-PhysicalDisk returns the same objects but loads
+    # the Storage module first (~0.5 s).
     $nvmeNames = @()
-    try { $nvmeNames = @(Get-PhysicalDisk -ErrorAction Stop | Where-Object { "$($_.BusType)" -eq "NVMe" -or "$($_.BusType)" -eq "17" } | ForEach-Object { $_.FriendlyName }) } catch { }
+    try { $nvmeNames = @(Get-WmiObject -Namespace "root\Microsoft\Windows\Storage" -Class MSFT_PhysicalDisk -ErrorAction Stop | Where-Object { "$($_.BusType)" -eq "NVMe" -or "$($_.BusType)" -eq "17" } | ForEach-Object { $_.FriendlyName }) } catch { }
     $NVMeDisks = @(Get-WmiObject -Query "SELECT * FROM Win32_DiskDrive" | Where-Object {
         $_.Model -match "NVMe" -or $_.PNPDeviceID -match "VEN_NVME" -or ($nvmeNames -contains $_.Model)
     })
@@ -126,9 +173,34 @@ $IsWin11 = $OSBuild -ge 22000
 $IsWin10 = $OSBuild -ge 10240 -and $OSBuild -lt 22000
 $OSShort = if ($IsWin11) { "Win11 (Build $OSBuild)" } elseif ($IsWin10) { "Win10 (Build $OSBuild)" } else { $OSName }
 
-$HWInfo  = "GPU: $GPU   |   CPU: $CPU   |   RAM: $RAM GB   |   $NVMeInfo   |   $OSShort"
+# Active network connection (name, adapter, link speed, IPv4 gateway + DNS) via .NET.
+# Get-NetIPConfiguration returns the same data but needs ~1.2 s on a cold start.
+# Prefers the connection that has a default gateway; read once, then cached.
+function Get-NetSummary {
+    if ($Script:NetSummary) { return $Script:NetSummary }
+    $best = $null
+    try {
+        foreach ($ni in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+            if ("$($ni.OperationalStatus)" -ne 'Up' -or "$($ni.NetworkInterfaceType)" -in @('Loopback', 'Tunnel')) { continue }
+            $ipp = $ni.GetIPProperties()
+            $gw  = @($ipp.GatewayAddresses | Where-Object { "$($_.Address.AddressFamily)" -eq 'InterNetwork' -and "$($_.Address)" -ne '0.0.0.0' } | ForEach-Object { "$($_.Address)" })
+            $dns = @($ipp.DnsAddresses | Where-Object { "$($_.AddressFamily)" -eq 'InterNetwork' } | ForEach-Object { "$_" })
+            $speed = ''
+            if ($ni.Speed -ge 1000000000) { $speed = [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:0.#} Gbps', $ni.Speed / 1e9) }
+            elseif ($ni.Speed -gt 0)      { $speed = [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:0} Mbps', $ni.Speed / 1e6) }
+            $info = @{ Name = $ni.Name; Desc = $ni.Description; Speed = $speed; Gateway = $(if ($gw.Count) { $gw[0] }); Dns = $dns }
+            if ($gw.Count) { $best = $info; break }
+            if (-not $best) { $best = $info }
+        }
+    } catch { }
+    $Script:NetSummary = $best
+    return $best
+}
+
+$HWInfo  ="GPU: $GPU   |   CPU: $CPU   |   RAM: $RAM GB   |   $NVMeInfo   |   $OSShort"
 foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] Hardware erkannt: $HWInfo" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
 Write-Host "[$(Get-Date -f 'HH:mm:ss')] Hardware erkannt: $HWInfo" -ForegroundColor DarkGray
+Set-Splash "Loading tweak definitions ..." 15
 
 # -----------------------------------------
 # LOGGING
@@ -2493,6 +2565,17 @@ function Get-RegVal($Path, $Name) {
     try { (Get-ItemProperty $Path -Name $Name -ErrorAction Stop).$Name } catch { $null }
 }
 
+# State of a scheduled task via the Task Scheduler COM API (read-only): 'Disabled',
+# 'Ready' (= enabled) or $null if the task doesn't exist. Get-ScheduledTask returns
+# the same but needs ~350 ms per call (it loads a module and lists every task).
+function Get-TaskState([string]$Path, [string]$Name) {
+    try {
+        if (-not $Script:TaskSvc) { $svc = New-Object -ComObject Schedule.Service; $svc.Connect(); $Script:TaskSvc = $svc }
+        $task = $Script:TaskSvc.GetFolder($Path).GetTask($Name)
+        if ($task.Enabled) { 'Ready' } else { 'Disabled' }
+    } catch { $null }
+}
+
 $CheckFunctions = @{
 
     # BLOATWARE
@@ -2542,7 +2625,7 @@ $CheckFunctions = @{
     # understands $true/$false, so this used to show "unknown" forever. Cast to bool,
     # anchor the pattern so a commented-out line doesn't count.
     "Block Telemetry Hosts (hosts file)" = { $h = Get-Content "$env:SystemRoot\System32\drivers\etc\hosts" -EA SilentlyContinue; if ($null -eq $h) { $null } else { [bool](@($h) -match '^\s*0\.0\.0\.0\s+telemetry\.microsoft\.com\s*$') } }
-    "Disable Scheduled Telemetry Tasks"  = { ($t = Get-ScheduledTask -TaskName "Microsoft Compatibility Appraiser" -EA SilentlyContinue) -and $t.State -eq "Disabled" }
+    "Disable Scheduled Telemetry Tasks"  = { (Get-TaskState "\Microsoft\Windows\Application Experience" "Microsoft Compatibility Appraiser") -eq "Disabled" }
 
     # PERFORMANCE
     "Ultimate Performance Plan"          = { $g = Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "UltimatePerfGuid"; $a = (powercfg /getactivescheme 2>$null) -join " "; ($g -and $a -match [regex]::Escape($g)) -or ($a -match "Ultimate Performance|Ultimative Leistung") }
@@ -2635,10 +2718,7 @@ $CheckFunctions = @{
         $line = @($q | Where-Object { $_ -match 'NTFS' }) + @($q | Where-Object { $_ -match '=' }) | Select-Object -First 1
         if (-not $line) { $null } else { $line -match '=\s*0\b' }
     }
-    "Disable Scheduled Defragmentation"  = {
-        $t = Get-ScheduledTask -TaskPath "\Microsoft\Windows\Defrag\" -TaskName "ScheduledDefrag" -EA SilentlyContinue
-        $t -and $t.State -eq "Disabled"
-    }
+    "Disable Scheduled Defragmentation"  = { (Get-TaskState "\Microsoft\Windows\Defrag" "ScheduledDefrag") -eq "Disabled" }
     "Optimize NVMe Queue Depth"          = {
         if (-not $HasNVMe) { return $null }
         $d = $NVMeDisks | Select-Object -First 1
@@ -2961,6 +3041,7 @@ foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] Tweaks definiert 
 Write-Host "[$(Get-Date -f 'HH:mm:ss')] Tweaks definiert ($($AllTweaks.Count) Stueck)" -ForegroundColor DarkGray
 foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] XAML wird geladen..." | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
 Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML wird geladen..." -ForegroundColor DarkGray
+Set-Splash "Building the interface ..." 22
 
 [xml]$XAML = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -3659,6 +3740,8 @@ $SubtitleText.Text = "v$($Script:AppVersion)$($Script:Mid)by FloDePin"
 # =============================================================================
 $CheckBoxMap         = @{}   # Name -> CheckBox
 $Script:TweakState   = @{}   # Name -> active | inactive | unknown
+$Script:CheckRaw     = @{}   # Name -> T (returned $true) | F (anything else) | E (threw); latest result, reused by the drift check
+$Script:SplashRows   = 0     # rows built so far (splash progress)
 $Script:TweakBadges  = @{}   # Name -> "active" badge
 $Script:TweakRows    = @{}   # Name -> @{ Card; Desc; Tweak }
 $Script:GroupHeaders = @()   # @{ Root; Names; Cat }
@@ -3733,7 +3816,8 @@ function Update-TweakDot($dot, $tweakName) {
         try {
             $isActive = & $CheckFunctions[$tweakName]
             if ($isActive -eq $true) { $state = "active" } elseif ($isActive -eq $false) { $state = "inactive" }
-        } catch { $state = "unknown" }
+            $Script:CheckRaw[$tweakName] = $(if ($isActive -eq $true) { 'T' } else { 'F' })
+        } catch { $state = "unknown"; $Script:CheckRaw[$tweakName] = 'E' }
     }
     $Script:TweakState[$tweakName] = $state
     switch ($state) {
@@ -3910,11 +3994,8 @@ foreach ($c in $Script:Cats) {
     }
     if ($c.Key -eq 'Network') {
         try {
-            $activeAdapter = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
-            $ipConfig   = if ($activeAdapter) { Get-NetIPConfiguration -InterfaceIndex $activeAdapter.InterfaceIndex -ErrorAction SilentlyContinue }
-            $gw         = if ($ipConfig) { ($ipConfig.IPv4DefaultGateway | Select-Object -First 1).NextHop }
-            $dnsServers = if ($ipConfig) { ($ipConfig.DNSServer | Where-Object { $_.AddressFamily -eq 2 } | Select-Object -ExpandProperty ServerAddresses) -join ", " }
-            $txt = if ($activeAdapter) { "$($activeAdapter.Name): $($activeAdapter.InterfaceDescription) ($($activeAdapter.LinkSpeed))$($Script:Mid)gateway $(if ($gw) { $gw } else { 'unknown' })$($Script:Mid)DNS $(if ($dnsServers) { $dnsServers } else { 'unknown' })" } else { "No active network adapter detected." }
+            $ns = Get-NetSummary
+            $txt = if ($ns) { "$($ns.Name): $($ns.Desc)$(if ($ns.Speed) { " ($($ns.Speed))" })$($Script:Mid)gateway $(if ($ns.Gateway) { $ns.Gateway } else { 'unknown' })$($Script:Mid)DNS $(if ($ns.Dns.Count) { $ns.Dns -join ', ' } else { 'unknown' })" } else { "No active network adapter detected." }
         } catch { $txt = "Network info unavailable." }
         $n = New-Banner "$txt  (Ping test: Dashboard)" $Script:UI.CYAN 0xE839
         $panel.Children.Add($n) | Out-Null; $Script:CatNotices += $n
@@ -3930,6 +4011,8 @@ foreach ($c in $Script:Cats) {
         $Script:GroupHeaders += @{ Root = $hdr; Names = $names; Cat = $cat.Key }
         foreach ($tweak in ($AllTweaks | Where-Object { $_.Category -eq $cat.Key -and $_.Group -eq $group })) {
             $panel.Children.Add((New-TweakRow $tweak)) | Out-Null
+            $Script:SplashRows++
+            if ($Script:SplashRows % 4 -eq 0) { Set-Splash "Checking tweak status ... $($Script:SplashRows) / $($AllTweaks.Count)" (25 + [int](60 * $Script:SplashRows / $AllTweaks.Count)) }
         }
     }
 }
@@ -3963,11 +4046,15 @@ function Save-Baseline {
 }
 
 function Get-DriftedTweaks {
+    # -Known: check results already gathered this session (Name -> T/F/E, see
+    # $Script:CheckRaw), so the launch check doesn't run every check a second time.
+    param([hashtable]$Known = @{})
     if (-not (Test-Path $Script:BaselineFile)) { return @() }
     try { $baseline = @(Get-Content $Script:BaselineFile -ErrorAction Stop | Where-Object { $_ -and $_.Trim() -ne '' }) } catch { return @() }
     $drifted = @()
     foreach ($name in $baseline) {
         $n = $name.Trim()
+        if ($Known.ContainsKey($n)) { if ($Known[$n] -eq 'F') { $drifted += $n }; continue }
         if ($CheckFunctions.ContainsKey($n)) {
             try { if ((& $CheckFunctions[$n]) -ne $true) { $drifted += $n } } catch { }
         }
@@ -4394,7 +4481,7 @@ $Script:BiosCats = @(
     @{ Key = 'Memory'; Label = 'Memory'; Color = $Script:UI.VIOLET }, @{ Key = 'CPU'; Label = 'CPU'; Color = $Script:UI.ACC },
     @{ Key = 'GPU'; Label = 'GPU'; Color = $Script:UI.GREEN }, @{ Key = 'Power'; Label = 'Power'; Color = $Script:UI.AMBER },
     @{ Key = 'Boot'; Label = 'Boot & security'; Color = $Script:UI.SLATE })
-$boardInfo = try { Get-CimInstance Win32_BaseBoard -ErrorAction Stop | Select-Object -First 1 } catch { $null }
+$boardInfo = try { Get-WmiObject Win32_BaseBoard -ErrorAction Stop | Select-Object -First 1 } catch { $null }
 $Script:Bios = @{
     Detected       = Get-BiosProfileId $CPU
     DetectedVendor = Get-BiosVendor "$($boardInfo.Manufacturer)"
@@ -4635,9 +4722,9 @@ function Build-DashboardPage {
     $DashboardPanel.Children.Add((New-PageHeader 'Dashboard' 'System overview, optimization score and live values' $U.RED)) | Out-Null
 
     # ---- hardware cards ----
-    $cpuO = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
-    $gpuO = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch 'Microsoft' } | Select-Object -First 1
-    $memO = @(Get-CimInstance Win32_PhysicalMemory -ErrorAction SilentlyContinue)
+    $cpuO = $Script:CpuObj                                   # read once at startup
+    $gpuO = $Script:VideoCtrls | Where-Object { $_.Name -notmatch 'Microsoft' } | Select-Object -First 1
+    $memO = @(Get-WmiObject Win32_PhysicalMemory -ErrorAction SilentlyContinue)
     $vram = 0
     try { $vram = [math]::Round(((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0*' -ErrorAction SilentlyContinue | Where-Object { $_.'HardwareInformation.qwMemorySize' } | Select-Object -First 1).'HardwareInformation.qwMemorySize') / 1GB) } catch { }
     $ddr = switch ([int]($memO | Select-Object -First 1).SMBIOSMemoryType) { 34 { 'DDR5' } 26 { 'DDR4' } 24 { 'DDR3' } default { '' } }
@@ -4661,7 +4748,7 @@ function Build-DashboardPage {
     $D.ScoreBar  = New-Bar 0 $U.GREEN 8
     $mon = New-VStack @() @(0, 12, 0, 0)
     $mi = 1
-    foreach ($m in @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Where-Object { $_.CurrentRefreshRate })) {
+    foreach ($m in @($Script:VideoCtrls | Where-Object { $_.CurrentRefreshRate })) {
         $atMax = [int]$m.CurrentRefreshRate -ge [int]$m.MaxRefreshRate
         $adv = if ($atMax) { "  $($Script:EmDash.Trim()) maximum, nothing to do" } else { "  $($Script:EmDash.Trim()) can do $($m.MaxRefreshRate) Hz! Set it in Windows: Display settings > Advanced display > Refresh rate" }
         $mon.Children.Add((New-HStack @((New-Icon 0xE7F4 13 $U.CYAN @(0, 0, 10, 0)), (New-Text "Monitor $mi$(if ($mi -eq 1) { ' (primary)' })" 12.5 $U.TEXT 'SemiBold'),
@@ -4682,7 +4769,7 @@ function Build-DashboardPage {
     $liveBody = New-VStack @((New-CardTitle 'Live monitor' $U.CYAN (New-Text 'updates every 1.5 s, background thread' 11 $U.DIM)), $lr.Cpu.Root, $lr.Ram.Root, $lr.Disk.Root, $lr.Net.Root)
     $liveCard = New-Card $liveBody @(0, 0, 7, 14); $row.Children.Add($liveCard) | Out-Null
 
-    $gwAddr = try { (Get-NetIPConfiguration -ErrorAction Stop | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1).IPv4DefaultGateway.NextHop } catch { $null }
+    $gwAddr = try { (Get-NetSummary).Gateway } catch { $null }
     $pingRows = New-VStack @()
     $pingInfo = New-Text "10 pings per target: average latency, packet loss and jitter. Gateway $(if ($gwAddr) { $gwAddr } else { 'unknown' })." 12 $U.DIM 'Normal' -Wrap -Margin 0, 0, 0, 4
     $pingRows.Children.Add($pingInfo) | Out-Null
@@ -5090,6 +5177,7 @@ function Set-Preset {
 # =============================================================================
 # BUILD THE PAGES  (here, because the Presets page needs the preset lists above)
 # =============================================================================
+Set-Splash "Building the dashboard ..." 88
 Build-DashboardPage
 Build-PresetsPage
 Build-BiosPlatformList
@@ -6235,11 +6323,14 @@ Write-Host "[$(Get-Date -f 'HH:mm:ss')] Alles OK  --  ShowDialog wird aufgerufen
 
 # Console was already hidden at startup (where the host allows it).
 
+Set-Splash "Almost done ..." 97
+$Window.Add_ContentRendered({ Close-Splash })   # main window is on screen -> splash goes
+
 # --- Baseline drift check: did a Windows update revert tweaks you applied before? ---
 # Runs only at launch (no background process). If the last-applied snapshot has
 # tweaks that are no longer active, offer to re-apply them.
 try {
-    $drifted = Get-DriftedTweaks
+    $drifted = Get-DriftedTweaks -Known $Script:CheckRaw
     if ($drifted.Count -gt 0) {
         $list = ($drifted | ForEach-Object { " - $_" }) -join "`n"
         $r = [System.Windows.MessageBox]::Show(
@@ -6284,6 +6375,7 @@ Stop-Process -Id $PID -Force -ErrorAction SilentlyContinue
     $errMsg  = $_.Exception.Message
     $errLine = $_.InvocationInfo.ScriptLineNumber
     $errFull = "STARTUP ERROR line $errLine : $errMsg"
+    try { if ($Script:Splash) { $Script:Splash.Close() } } catch { }
     Write-Host $errFull -ForegroundColor Red
     foreach ($p in $logPaths) {
         try { "[$(Get-Date -f 'HH:mm:ss')] $errFull" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { }

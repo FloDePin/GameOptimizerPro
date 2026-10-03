@@ -280,6 +280,7 @@ Ein vollständiger, gehärteter Windows- & Gaming-Optimierer. Jeder Tweak hat vo
 - ⚡ **Energieplan** — Ultimate Performance, HPET, 0,5-ms-Timer-Auflösung
 
 **Tools & UX:**
+- ⚡ **Schneller Start** — das Fenster ist in etwa der halben Zeit da (~9 s → ~4,5 s auf einem Test-PC), mit Ladebildschirm vom ersten Moment an
 - 🎨 **Neue Oberfläche im Stil von GameOptimizerPro v2.1** — Seitenleiste, Dashboard mit Optimierungs-Score, Tweak-Liste mit Suche, Status-Punkten, Badges und DE/EN-Beschreibung direkt am Tweak
 - 🎚️ **Presets** — Minimal / Balanced / Aggressive (kumulativ; destruktive Aktionen werden nie automatisch ausgewählt), mit Vorschau jedes Presets
 - 📊 **Dashboard** mit **Live-Ressourcen-Monitor** (CPU/RAM/Disk/Netzwerk auf Background-Runspace, kein UI-Ruckeln)

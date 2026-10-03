@@ -7,7 +7,7 @@ $dest = "$env:TEMP\GameOptimizerPro.ps1"
 # integrity check against corruption/tampering in transit -- it does not
 # replace reading the source, but lets users verify what they're about
 # to run with Admin rights without having to read all 3800 lines by hand.
-$ExpectedHash = "DAA1AF01BDAE4B4BDC1FB5EFC02A9CFF4B3C96C3C8C222D1BE24BFB3D4F8BCB7"
+$ExpectedHash = "5F3474FA0D8892B3584F6A8CB6CD5A2D96F23C9BB62828F9F212322C88E7F91A"
 
 # Keep this in sync with $Script:AppVersion in GameOptimizerPro.ps1 (used for
 # display only -- integrity is enforced by $ExpectedHash above, not this string).
@@ -20,6 +20,9 @@ Write-Host ""
 Write-Host "  Downloading GameOptimizerPro v$ScriptVersion..." -ForegroundColor Cyan
 
 try {
+    # Without the progress bar: PowerShell 5.1 redraws it for every chunk, which
+    # makes the download several times slower.
+    $ProgressPreference = "SilentlyContinue"
     Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
     Write-Host "  Download complete!" -ForegroundColor Green
 } catch {
@@ -68,7 +71,7 @@ $launched = $false
 if ($isAdmin) {
     # Already admin -- launch the GUI in its own hidden PowerShell process.
     try {
-        Start-Process powershell.exe -ArgumentList "-STA -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dest`"" -WindowStyle Hidden
+        Start-Process powershell.exe -ArgumentList "-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dest`"" -WindowStyle Hidden
         $launched = $true
     } catch {
         Write-Host "  [ERROR] Script launch failed: $_" -ForegroundColor Red
@@ -79,7 +82,7 @@ if ($isAdmin) {
     try {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName        = "powershell.exe"
-        $psi.Arguments       = "-STA -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dest`""
+        $psi.Arguments       = "-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dest`""
         $psi.Verb            = "runas"
         $psi.UseShellExecute = $true
         $psi.WindowStyle     = "Hidden"
