@@ -26,12 +26,12 @@ irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1
 ## 📸 Visual Preview
 
 ### GUI Overview
-The tool offers a modern, user-friendly interface with:
-- 🎨 **Dark-Mode UI** — Modern WPF/XAML interface
-- 🖱️ **Intuitive Navigation** — 7 tabs for all functions
-- ℹ️ **Info Buttons** — Detailed explanations for every tweak
-- 📊 **System Info** — GPU, CPU, RAM status in real time
-- 🔧 **BIOS Guide** — Hardware-detected optimization recommendations
+The interface follows the design of GameOptimizerPro v2.1:
+- 🎨 **Dark-Mode UI** — WPF/XAML with a sidebar: Dashboard · Tweaks · Presets · BIOS Guide · Startup Manager · Services · Backups & Log
+- 📊 **Dashboard** — hardware cards, optimization score, live monitor, ping test, snapshot & compare
+- 🗂️ **Tweak list** — 8 category tabs, search across all tweaks, status dot + badges per tweak, description shown right under each tweak (DE/EN)
+- 🎚️ **Presets page** — preview of each preset (green = already active), status per category
+- 🔧 **BIOS Guide** — 16 platforms (AM5 / AM4 / Intel) with the menu path for ASUS, MSI, Gigabyte and ASRock; your platform is detected and pre-selected
 
 ---
 
@@ -40,16 +40,19 @@ The tool offers a modern, user-friendly interface with:
 | Tab | Features | Description |
 |-----|----------|-------------|
 | 🎚️ Presets | 3 levels | One-click **Minimal / Balanced / Aggressive** tweak selection (cumulative, safe-by-default) |
-| 🪟 Windows | 43 Tweaks | Debloat, privacy, Win11 tweaks, performance tweaks + CTT Essentials + Quality of Life |
-| 🌐 Network | 11 Tweaks | Nagle, LSO, DNS, TCP tuning, QoS, adapter power saving, delivery optimization + async ping test (latency, packet loss, jitter to gateway/1.1.1.1/8.8.8.8) |
-| 🔊 Audio | 6 Tweaks | Audio tweaks, dedicated tab |
+| 🪟 Windows | 43 Tweaks | Debloat, privacy, performance tweaks + CTT Essentials + Quality of Life |
+| 🎮 Gaming | 12 Tweaks | Game Mode, Game Bar, MMCSS, CPU priority, fullscreen optimizations, MSI mode, HAGS |
+| 🌐 Network | 11 Tweaks | Nagle, LSO, DNS, TCP tuning, QoS, adapter power saving, delivery optimization |
+| 💾 RAM & Storage | 15 Tweaks | Page file, memory compression, hibernation, SSD/NVMe tweaks, temp cleanup + Deep Clean (6 tools, shows MB freed) |
+| 🪟 Windows 11 | 7 Tweaks | Classic right-click menu, left taskbar, widgets, chat icon, Start recommendations, End Task, Snap hover menu |
+| 🔊 Audio | 6 Tweaks | Audio enhancements, MMCSS audio profile, service priority, sound scheme, spatial sound, device power |
 | 🎮 GPU Tweaks | 7 Tweaks | 4 NVIDIA + 3 AMD tweaks, GPU detection, brand grey-out |
 | ⚡ Power Plan | 7 Tweaks | USB, PCI-E, HDD, display, sleep, CPU min/max |
+| 📊 **Dashboard** | ✅ | Hardware cards, optimization score + monitor check (resolution/Hz), live monitor (CPU/RAM/disk/network), ping test (latency, packet loss, jitter), snapshot & compare, safety-net status |
+| 🔧 **BIOS Guide** | 16 platforms | AM5 / AM4 / Intel LGA1851 / 1700 / 1200 / 1151 + generic, menu paths for ASUS / MSI / Gigabyte / ASRock, live check of EXPO/XMP, Resizable BAR, CSM and Secure Boot |
 | 🚀 Startup Manager | ✅ | Own window, HKCU/HKLM/Run32 + startup folders, disable/enable/refresh |
-| 🔧 **[BIOS] BIOS Guide** | ✅ | Hardware-specific BIOS recommendations with menu paths |
-| 📊 **[DASH] Dashboard** | ✅ | Live resource monitor (CPU/RAM/disk/network), status, snapshot & before/after comparison |
-| 🧹 Deep Clean | 6 Tools | Browser caches, Windows Update cache, thumbnails, recycle bin, prefetch, logs & crash dumps (shows MB freed) |
-| 🌍 Language DE/EN | ✅ | 108 EN descriptions, toggle button, switches live |
+| 🗄️ Backups & Log | ✅ | Registry backups, log, System Restore, Revert all and drift check in one place |
+| 🌍 Language DE/EN | ✅ | 108 tweak descriptions + the whole BIOS Guide in German and English, switches live |
 
 ---
 
@@ -141,36 +144,41 @@ Registry keys sourced **1:1 from Chris Titus Tech WinUtil** for guaranteed accur
 
 ---
 
-## 🔧 [BIOS] BIOS Guide Tab
+## 🔧 BIOS Guide
 
-### 🎯 Hardware-Specific BIOS Recommendations
-- **Automatic Hardware Detection** — Detects CPU, motherboard, and GPU
-- **Concrete Menu Paths** — Exact BIOS navigation with detailed descriptions
-- **Safety Rating** — Every recommendation comes with a risk badge (Safe / Moderate)
-- **3 Predefined Profiles:**
-  - **Zen 5/4 (AM5)** — Ryzen 7000/9000 series with Gigabyte/ASUS/MSI
-  - **Intel 13th/14th Gen** — i9-13900/14900 with corresponding boards
-  - **Zen 3 (AM4)** — Ryzen 5000 series for older AM4 systems
+### 🎯 Every Common Platform, Not Just One Setup
+The BIOS Guide covers **16 platforms**. Your CPU and board maker are detected and pre-selected, and you can open any other platform as a reference:
 
-### 📋 Example Recommendations for Ryzen 7 9800X3D + Gigabyte X870 + RTX 4080:
-- **Enable EXPO Profile 1** — Without it, RAM runs at 4800 MHz instead of its rated speed (Safe)
-- **PBO set to Auto** — Optimizes Precision Boost Overdrive (Safe)
-- **Enable Resizable BAR** — Better GPU/CPU communication (Safe)
-- **FCLK/UCLK Ratio for X3D CPUs** — Optimal memory timing (Moderate)
-- **Curve Optimizer for Extra Performance** — CPU undervolting possible (Moderate)
+| Platform | Profiles |
+|----------|----------|
+| **AMD AM5** | Ryzen 9000X3D · Ryzen 9000 · Ryzen 7000X3D · Ryzen 7000 · Ryzen 8000G / 8000F |
+| **AMD AM4** | Ryzen 5000X3D · Ryzen 5000 · Ryzen 5000G–2000G (APU) · Ryzen 3000 · Ryzen 1000 / 2000 |
+| **Intel** | Core Ultra 200S (LGA1851) · Core 13th / 14th gen · Core 12th gen (LGA1700) · Core 10th / 11th gen (LGA1200) · Core 8th / 9th gen (LGA1151) |
+| **Other** | Generic profile for laptops, Threadripper and unknown CPUs |
+
+### 📋 What Every Setting Card Shows
+- **Default vs. recommended value** — e.g. "Default: Off → Recommended: Profile 1 (DDR5-6000 CL30)"
+- **Menu path for your board maker** — ASUS, MSI, Gigabyte, ASRock (switchable; a generic path for other boards)
+- **Impact + risk badge** — high / medium / low impact, safe / moderate
+- **Explanation in German or English** — what the setting does and what to do if the PC doesn't boot afterwards
+- **Platform-specific settings** — EXPO/XMP/DOCP, Resizable BAR, CSM, Secure Boot, BIOS update (incl. the 13th/14th gen Vmin Shift fix), PBO, Curve Optimizer, FCLK, Memory Context Restore, C-States, core scheduling on dual-CCD X3D, iGPU, Intel Default Settings power limits, MCE, E-cores, 200S Boost, board-maker auto-install, PCIe slot speed
+- **Filters** — Memory / CPU / GPU / Power / Boot & security, plus "only what's left to do"
+
+### 🔍 Live Check From Windows
+Four settings are read directly from Windows (no admin rights needed): **EXPO/XMP** (RAM speed vs. JEDEC base clock), **Resizable BAR** (NVIDIA), **CSM / UEFI** and **Secure Boot**. A green dot means already set, red means still to do.
 
 ### 📖 Read-Only Guide
-- No automatic changes — informational only
-- User must make BIOS changes manually
-- Ideal as a checklist before tuning
+- No automatic changes — the BIOS Guide never writes anything
+- You make the BIOS changes yourself, with the menu path right on the card
 
 ---
 
 ## 🌍 Language Toggle - DE/EN
 
 ### 🗣️ Bilingual Tweak Descriptions (DE/EN)
-- **108 tweak descriptions in German & English** — shown in each tweak's info popup
-- **Toggle Button** — switches all descriptions between DE and EN live, no restart
+- **108 tweak descriptions in German & English** — shown right under each tweak (full text as tooltip)
+- **BIOS Guide in German & English** — all explanations and notes
+- **Toggle Button** — "Info: DE / EN" in the sidebar switches everything live, no restart
 - **Interface labels stay English** — the toggle affects the tweak descriptions, not the UI chrome
 
 ---
@@ -198,21 +206,20 @@ Registry keys sourced **1:1 from Chris Titus Tech WinUtil** for guaranteed accur
 - ⚠️ **Intel Arc** — All general tweaks work; the NVIDIA/AMD-specific GPU tweaks are greyed out
 
 ### CPU Compatibility (BIOS Guide)
-- ✅ **AMD Zen 5** — Ryzen 7000X3D / 9000 series (Threadripper)
-- ✅ **AMD Zen 4** — Ryzen 5000X3D / 7000 series
-- ✅ **Intel 13th/14th Gen** — Core i9-13900/14900, i7-13700/14700
-- ✅ **AMD Zen 3** — Ryzen 5000 series (AM4)
-- ⚠️ **Other CPUs** — BIOS Guide shows generic recommendations
+- ✅ **AMD AM5** — Ryzen 7000 / 7000X3D / 8000G / 9000 / 9000X3D
+- ✅ **AMD AM4** — Ryzen 1000 / 2000 / 3000 / 5000 / 5000X3D and the G-series APUs
+- ✅ **Intel** — Core 8th–14th gen and Core Ultra 200S (desktop)
+- ⚠️ **Laptops, Threadripper, other CPUs** — BIOS Guide shows the generic profile
 
 ---
 
 ## 🛡️ Safety & Security
 
 ✅ **System Restore Point** — Automatically created before any tweaks are applied  
-✅ **Registry Backup** — Before every Apply/Revert, all affected registry keys are additionally exported as `.reg` files to `%TEMP%\GameOptimizerPro_Backups\` (independent of the System Restore Point limit)  
+✅ **Registry Backup** — Before every Apply/Revert, all affected registry keys are additionally exported as `.reg` files to `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups\` (independent of the System Restore Point limit)  
 ✅ **Detailed Logging** — All actions are logged to `%TEMP%\GameOptimizerPro_*.log`  
 ✅ **Hardware Detection** — GPU-specific tweaks are filtered automatically  
-✅ **BIOS Guide Read-Only** — No automatic system changes from the BIOS tab  
+✅ **BIOS Guide Read-Only** — No automatic system changes from the BIOS Guide  
 ✅ **Fully Reversible** — All tweaks can be undone via System Restore or the registry backup  
 ✅ **Checksum Verification** — `install.ps1` checks the download against the SHA256 hash published in [CHECKSUMS.txt](CHECKSUMS.txt) before running the script with Admin rights  
 ✅ **No Malware** — Open source, fully auditable
@@ -221,14 +228,14 @@ Registry keys sourced **1:1 from Chris Titus Tech WinUtil** for guaranteed accur
 
 ## 🎨 GUI Features
 
-- **Modern Dark-Mode UI** — Built on WPF/XAML
-- **Info Buttons (?)** — Hover over `?` for explanations of every tweak
-- **7 Tabs for Categories** — Windows | Audio | GPU Tweaks | Power Plan | Startup Manager | **[BIOS] BIOS Guide** | Language
-- **Bulk Selection** — Select All / Deselect All buttons
-- **Live Logging** — Log file can be opened at any time
-- **Hardware Info** — Shows GPU, CPU, RAM
-- **Language Toggle** — German/English switch
-- **BIOS Recommendations** — Hardware-detected optimization suggestions
+- **Modern Dark-Mode UI** — Built on WPF/XAML, design tokens from GameOptimizerPro v2.1
+- **Sidebar Navigation** — Dashboard | Tweaks | Presets | BIOS Guide | Startup Manager | Services | Backups & Log
+- **8 Category Tabs + Search** — the search finds tweaks across all categories
+- **Status at a Glance** — green dot = active, ring = inactive, grey = one-time action; badges for "removes app", "restart", "NVIDIA only", "Windows 11 only"
+- **Descriptions Inline** — every tweak explains itself right under its name; a click on the text ticks the box
+- **Bulk Selection** — All / None buttons, presets with preview
+- **Live Logging** — Log file and registry backups one click away in the status bar
+- **Hardware Info** — GPU, CPU, RAM, board, OS and monitor on the dashboard
 
 ---
 
@@ -252,11 +259,11 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 - A restart is required after GPU tweaks!
 - Check the log file: `%TEMP%\GameOptimizerPro_*.log`
 
-### Problem: BIOS Guide shows no recommendations
+### Problem: BIOS Guide shows the wrong platform
 **Solution:**
-- Make sure your CPU is supported
-- BIOS recommendations require Admin rights for hardware detection
-- Check the log file for detected hardware
+- Pick your platform in the list on the left and your board maker at the top — every profile is available manually
+- Laptops, Threadripper and unknown CPUs get the generic profile on purpose
+- "Check system state" re-reads EXPO/XMP, Resizable BAR, CSM and Secure Boot
 
 ### Problem: Tweaks weren't applied
 **Solution:**
@@ -285,10 +292,11 @@ A complete, hardened Windows & gaming optimizer. Every tweak ships with a full *
 - ⚡ **Power Plan** — Ultimate Performance, HPET, 0.5 ms timer resolution
 
 **Tools & UX:**
-- 🎚️ **Presets** — Minimal / Balanced / Aggressive (cumulative; destructive actions are never auto-selected)
+- 🎨 **New interface in the style of GameOptimizerPro v2.1** — sidebar navigation, dashboard with optimization score, tweak list with search, status dots, badges and inline DE/EN descriptions
+- 🎚️ **Presets** — Minimal / Balanced / Aggressive (cumulative; destructive actions are never auto-selected), with a preview of every preset
 - 📊 **Dashboard** with a **Live Resource Monitor** (CPU/RAM/disk/network on a background runspace, no UI stutter)
 - 📶 **Ping Test** across 3 targets — average latency, packet loss % and jitter
-- 🧰 **BIOS Guide** — hardware-detected, read-only recommendations for AM5 / AM4 / Intel
+- 🧰 **BIOS Guide** — 16 platforms (AM5 / AM4 / Intel), menu paths for ASUS / MSI / Gigabyte / ASRock, live check of EXPO/XMP, Resizable BAR, CSM and Secure Boot; read-only
 - 🚀 **Startup Manager** — covers both the Run keys and the Startup folders
 
 **Safety & robustness:**

@@ -84,7 +84,7 @@ if ([string]::IsNullOrWhiteSpace($GPU)) { $GPU = "Unknown GPU" }
 try {
     $CPU = (Get-WmiObject Win32_Processor | Select-Object -First 1).Name
 } catch { $CPU = $null }
-if ([string]::IsNullOrWhiteSpace($CPU)) { $CPU = "Unknown CPU" }
+if ([string]::IsNullOrWhiteSpace($CPU)) { $CPU = "Unknown CPU" } else { $CPU = ($CPU -replace '\s+', ' ').Trim() }   # WMI pads the name with spaces
 
 try {
     $RAM = [math]::Round((Get-WmiObject Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
@@ -166,11 +166,6 @@ function Clear-PathItems {
     return $freed
 }
 function Format-FreedMB { param([int64]$Bytes) return ([math]::Round($Bytes / 1MB, 1)).ToString("0.#", [System.Globalization.CultureInfo]::InvariantCulture) }
-
-# -----------------------------------------
-# LIVE MONITOR HELPER (locale-safe: uses CIM perf classes, not Get-Counter)
-# -----------------------------------------
-function Format-Bar { param([double]$Pct, [int]$Width = 12) $f = [math]::Round($Pct / 100 * $Width); if ($f -gt $Width) { $f = $Width }; if ($f -lt 0) { $f = 0 }; return ('#' * $f) + ('-' * ($Width - $f)) }
 
 # -----------------------------------------
 # REGISTRY BACKUP
@@ -1443,7 +1438,12 @@ $AllTweaks = @(
         Category = "Windows 11"
         Group    = "Taskbar & Shell"
         Action   = {
-            reg add "HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /ve /t REG_SZ /d "" /f | Out-Null
+            # NO `/d ""` here: Windows PowerShell 5.1 drops empty-string arguments when
+            # calling native programs, so reg.exe received `/d /f`, stored the literal
+            # text "/f" and -- because /f was consumed as data -- prompted
+            # "Overwrite (Yes/No)?" on every re-apply. In the hidden GUI process nobody
+            # can answer, so Apply hung forever. `/ve /f` alone writes an empty default.
+            reg add "HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /ve /f | Out-Null
             Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
             Write-Log "Win11: Classic right-click menu restored"
         }
@@ -1566,7 +1566,14 @@ $AllTweaks = @(
         Group    = "System Sounds"
         Action   = {
             reg add "HKCU\AppEvents\Schemes" /ve /t REG_SZ /d ".None" /f | Out-Null
-            Write-Log "Windows Sound Scheme disabled (.None)"
+            # The scheme NAME alone silences nothing: Windows plays whatever each event's
+            # ".Current" entry points to. Empty them all -- exactly what the Sound control
+            # panel does when you pick "No Sounds". (Each ".Default" keeps the stock sound.)
+            $n = 0
+            Get-ChildItem "HKCU:\AppEvents\Schemes\Apps" -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.PSChildName -eq ".Current" } |
+                ForEach-Object { Set-ItemProperty -Path $_.PSPath -Name "(default)" -Value "" -ErrorAction SilentlyContinue; $n++ }
+            Write-Log "Windows Sound Scheme disabled (.None, $n event sounds silenced)"
         }
     },
     [PSCustomObject]@{
@@ -1896,10 +1903,12 @@ $RevertActions = @{
     }
 
     "Disable Telemetry & Data Collection" = {
-        Start-Service DiagTrack -ErrorAction SilentlyContinue
+        # Start type FIRST: Start-Service on a still-Disabled service fails silently, so
+        # the old order left telemetry stopped until the next reboot. Defaults:
+        # DiagTrack = Automatic, dmwappushservice = Manual (trigger-started by Windows).
         Set-Service DiagTrack -StartupType Automatic -ErrorAction SilentlyContinue
-        Start-Service dmwappushservice -ErrorAction SilentlyContinue
-        Set-Service dmwappushservice -StartupType Automatic -ErrorAction SilentlyContinue
+        Start-Service DiagTrack -ErrorAction SilentlyContinue
+        Set-Service dmwappushservice -StartupType Manual -ErrorAction SilentlyContinue
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection" /v AllowTelemetry /f 2>$null
         reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection" /v AllowTelemetry /f 2>$null
         Write-Log "Revert: Telemetry services re-enabled"
@@ -2349,8 +2358,18 @@ $RevertActions = @{
         Write-Log "Revert: SystemResponsiveness restored (unless still in use by another tweak)"
     }
     "Disable Windows Sound Scheme" = {
-        reg add "HKCU\AppEvents\Schemes" /ve /t REG_SZ /d "Windows Default" /f | Out-Null
-        Write-Log "Revert: Sound Scheme set back to Windows Default"
+        # ".Default" is the scheme KEY of "Windows Default" (that text is only its display
+        # name -- the old revert wrote it as the key, which doesn't exist). Copy every
+        # event's stock sound from ".Default" back into ".Current".
+        reg add "HKCU\AppEvents\Schemes" /ve /t REG_SZ /d ".Default" /f | Out-Null
+        $n = 0
+        Get-ChildItem "HKCU:\AppEvents\Schemes\Apps" -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.PSChildName -eq ".Current" } |
+            ForEach-Object {
+                $def = (Get-ItemProperty -Path (Join-Path $_.PSParentPath ".Default") -ErrorAction SilentlyContinue)."(default)"
+                if ($null -ne $def) { Set-ItemProperty -Path $_.PSPath -Name "(default)" -Value $def -ErrorAction SilentlyContinue; $n++ }
+            }
+        Write-Log "Revert: Sound Scheme set back to Windows Default ($n event sounds restored)"
     }
     "Disable Spatial Sound (Windows Sonic)" = {
         # The Apply writes SpatialAudioMode=0 on every render device, so Revert All
@@ -2662,7 +2681,15 @@ $CheckFunctions = @{
     "Optimize MMCSS Audio Profile"       = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Audio" "Latency Sensitive") -eq "True" }
     "Set Audio Service High Priority"    = { (Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "SR_AudioPriority") -eq 1 }
     "Disable Windows Sound Scheme"       = {
-        try { (Get-ItemProperty "HKCU:\AppEvents\Schemes" -EA Stop)."(default)" -eq ".None" } catch { $null }
+        # Active only if the scheme is ".None" AND no event still points to a sound file
+        # (the name alone doesn't silence anything -- see the Apply).
+        try {
+            if ((Get-ItemProperty "HKCU:\AppEvents\Schemes" -EA Stop)."(default)" -ne ".None") { return $false }
+            $loud = Get-ChildItem "HKCU:\AppEvents\Schemes\Apps" -Recurse -EA SilentlyContinue |
+                Where-Object { $_.PSChildName -eq ".Current" -and (Get-ItemProperty $_.PSPath -EA SilentlyContinue)."(default)" } |
+                Select-Object -First 1
+            $null -eq $loud
+        } catch { $null }
     }
     "Disable Spatial Sound (Windows Sonic)" = { $null }
     "Disable Audio Device Power Save"    = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Services\usbaudio2" "DisableSelectiveSuspend") -eq 1 }
@@ -2753,33 +2780,8 @@ $Script:TweakDots = @{}           # tweakName -> dot Border (for Verify button r
 # Get-UIString "id" returns the text in the current language.
 # -----------------------------------------
 $Script:UIStrings = @{
-    # Header / subtitle
-    "subtitle"          = @{ EN = "Windows & Gaming Optimizer v$($Script:AppVersion) -- by FloDePin";      DE = "Windows & Gaming Optimizer v$($Script:AppVersion) -- von FloDePin" }
-
-    # Tab headers
-    "tab_windows"       = @{ EN = "[WIN]  Windows";        DE = "[WIN]  Windows" }
-    "tab_gaming"        = @{ EN = "[GAME] Gaming";         DE = "[GAME] Gaming" }
-    "tab_network"       = @{ EN = "[NET]  Network";        DE = "[NET]  Netzwerk" }
-    "tab_ram"           = @{ EN = "[RAM]  RAM & Storage";  DE = "[RAM]  RAM & Speicher" }
-    "tab_win11"         = @{ EN = "[W11]  Windows 11";     DE = "[W11]  Windows 11" }
-    "tab_audio"         = @{ EN = "[AUDIO] Audio";         DE = "[AUDIO] Audio" }
-    "tab_gpu"           = @{ EN = "[GPU]  GPU Tweaks";     DE = "[GPU]  GPU-Tweaks" }
-    "tab_power"         = @{ EN = "[PWR]  Power Plan";     DE = "[PWR]  Energieplan" }
-    "tab_bios"          = @{ EN = "[BIOS] BIOS Guide";     DE = "[BIOS] BIOS-Guide" }
-    "tab_dashboard"     = @{ EN = "[DASH] Dashboard";      DE = "[DASH] Dashboard" }
-
-    # Main buttons
-    "btn_selectall"     = @{ EN = "[x] Select All";        DE = "[x] Alle auswaehlen" }
-    "btn_deselectall"   = @{ EN = "[ ] Deselect All";      DE = "[ ] Alle abwaehlen" }
-    "btn_verify"        = @{ EN = "$([char]0x2713) Verify"; DE = "$([char]0x2713) Pruefen" }
-    "btn_apply"         = @{ EN = ">> Apply Selected";     DE = ">> Auswahl anwenden" }
-    "btn_revertall"     = @{ EN = "$([char]0x21A9) Revert All"; DE = "$([char]0x21A9) Alles zuruecksetzen" }
-    "btn_startup"       = @{ EN = "$([System.Char]::ConvertFromUtf32(0x1F680)) Startup Mgr"; DE = "$([System.Char]::ConvertFromUtf32(0x1F680)) Autostart" }
-    "btn_services"      = @{ EN = "$([char]0x2699) Services Mgr"; DE = "$([char]0x2699) Dienste" }
-    "btn_openlog"       = @{ EN = "[Log] Open Log";        DE = "[Log] Log oeffnen" }
-
     # Status bar
-    "status_ready"      = @{ EN = "Ready -- select tweaks and click Apply Selected.";     DE = "Bereit -- Tweaks auswaehlen und 'Auswahl anwenden' klicken." }
+    "status_ready"      = @{ EN = "Ready -- pick a preset or tick tweaks, then click 'Apply selected'.";     DE = "Bereit -- Preset waehlen oder Tweaks anhaken, dann 'Apply selected' klicken." }
 
     # Startup Manager
     "sw_title"          = @{ EN = "Startup Manager";       DE = "Autostart-Manager" }
@@ -2964,249 +2966,454 @@ Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML wird geladen..." -ForegroundColor D
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="GameOptimizerPro v$($Script:AppVersion) -- by FloDePin"
-        Height="720" Width="860"
-        ResizeMode="CanMinimize"
-        WindowStartupLocation="CenterScreen"
-        Background="#1a1a2e">
+        Width="1360" Height="880" MinWidth="1120" MinHeight="680"
+        WindowStartupLocation="CenterScreen" Background="#0b0e13" FontFamily="Segoe UI"
+        TextOptions.TextFormattingMode="Display" UseLayoutRounding="True">
 
     <Window.Resources>
-        <Style TargetType="Button" x:Key="PrimaryBtn">
-            <Setter Property="Background" Value="#0f3460"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="Padding" Value="16,8"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="#e94560"/>
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter Property="Background" Value="#c73652"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <Style TargetType="Button" x:Key="InfoBtn">
-            <Setter Property="Background" Value="#16213e"/>
-            <Setter Property="Foreground" Value="#aaaaaa"/>
-            <Setter Property="FontSize" Value="11"/>
-            <Setter Property="Width" Value="22"/>
-            <Setter Property="Height" Value="22"/>
+        <!-- Design tokens follow GameOptimizerPro v2.1 (ui/theme.py) -->
+        <Style TargetType="Button" x:Key="GopBtn">
+            <Setter Property="Background" Value="#1b212b"/>
+            <Setter Property="Foreground" Value="#e6edf3"/>
+            <Setter Property="BorderBrush" Value="#313b4a"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="BorderBrush" Value="#444"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Padding" Value="14,7"/>
             <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="ToolTipService.InitialShowDelay" Value="0"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}" CornerRadius="11"
-                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="9" Padding="{TemplateBinding Padding}">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="#e94560"/>
-                                <Setter Property="BorderBrush" Value="#e94560"/>
-                                <Setter Property="Foreground" Value="White"/>
-                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.86"/></Trigger>
+                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.7"/></Trigger>
+                            <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Bd" Property="Opacity" Value="0.4"/></Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
-        <Style TargetType="CheckBox">
-            <Setter Property="Foreground" Value="#dddddd"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="Margin" Value="0,0,8,0"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-        </Style>
-        <Style TargetType="TabItem">
-            <Setter Property="Background" Value="#16213e"/>
-            <Setter Property="Foreground" Value="#aaaaaa"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Padding" Value="14,8"/>
+        <Style TargetType="Button" x:Key="LinkBtn">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#b3bdcb"/>
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
-                    <ControlTemplate TargetType="TabItem">
-                        <Border Name="Border" Background="{TemplateBinding Background}" CornerRadius="6,6,0,0" Margin="2,0" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter x:Name="ContentSite" VerticalAlignment="Center" HorizontalAlignment="Center"
-                                              ContentSource="Header" RecognizesAccessKey="True"/>
-                        </Border>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="Transparent" Padding="2,2"><ContentPresenter VerticalAlignment="Center"/></Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="Border" Property="Background" Value="#e94560"/>
-                                <Setter Property="Foreground" Value="White"/>
-                            </Trigger>
-                            <MultiTrigger>
-                                <MultiTrigger.Conditions>
-                                    <Condition Property="IsMouseOver" Value="True"/>
-                                    <Condition Property="IsSelected" Value="False"/>
-                                </MultiTrigger.Conditions>
-                                <Setter TargetName="Border" Property="Background" Value="#0f3460"/>
-                                <Setter Property="Foreground" Value="White"/>
-                            </MultiTrigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter Property="Foreground" Value="#ffffff"/></Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
-        <Style TargetType="ScrollViewer">
-            <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+        <Style TargetType="Button" x:Key="NavBtn">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid>
+                            <Border Background="{TemplateBinding Background}" CornerRadius="8"/>
+                            <Border x:Name="Hv" Background="#ffffff" CornerRadius="8" Opacity="0"/>
+                            <ContentPresenter Margin="12,0,0,0" HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Hv" Property="Opacity" Value="0.045"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="Button" x:Key="TabBtn">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#b3bdcb"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Padding" Value="11,5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid>
+                            <Border Background="{TemplateBinding Background}" CornerRadius="7"/>
+                            <Border x:Name="Hv" Background="#ffffff" CornerRadius="7" Opacity="0"/>
+                            <ContentPresenter Margin="{TemplateBinding Padding}" VerticalAlignment="Center"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Hv" Property="Opacity" Value="0.05"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="CheckBox" x:Key="GopCheck">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid Width="18" Height="18" Background="Transparent">
+                            <Border x:Name="Bx" CornerRadius="4" BorderThickness="1.5" BorderBrush="#4f5a69" Background="Transparent"/>
+                            <TextBlock x:Name="Mk" Text="&#xE73E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="11"
+                                       Foreground="#ffffff" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bx" Property="BorderBrush" Value="#7d8896"/></Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bx" Property="Background" Value="#3b82f6"/>
+                                <Setter TargetName="Bx" Property="BorderBrush" Value="#3b82f6"/>
+                                <Setter TargetName="Mk" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.35"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="TextBox" x:Key="SearchBox">
+            <Setter Property="Foreground" Value="#e6edf3"/>
+            <Setter Property="CaretBrush" Value="#e6edf3"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="Bd" Background="#10141b" BorderBrush="#242b36" BorderThickness="1" CornerRadius="8" Padding="30,6,8,6">
+                            <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Bd" Property="BorderBrush" Value="#3b82f6"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="ToolTip">
+            <Setter Property="Background" Value="#1b212b"/>
+            <Setter Property="Foreground" Value="#e6edf3"/>
+            <Setter Property="BorderBrush" Value="#313b4a"/>
+            <Setter Property="MaxWidth" Value="520"/>
+            <Setter Property="ContentTemplate">
+                <Setter.Value>
+                    <DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap"/></DataTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="ScrollBar">
+            <Setter Property="Width" Value="10"/>
+            <Setter Property="MinWidth" Value="10"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="Transparent">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.Thumb>
+                                    <Thumb>
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb"><Border CornerRadius="4" Background="#313b4a" Margin="2,0,2,0"/></ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="Orientation" Value="Horizontal">
+                    <Setter Property="Width" Value="Auto"/>
+                    <Setter Property="MinWidth" Value="0"/>
+                    <Setter Property="Height" Value="10"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ScrollBar">
+                                <Grid Background="Transparent">
+                                    <Track x:Name="PART_Track">
+                                        <Track.Thumb>
+                                            <Thumb>
+                                                <Thumb.Template>
+                                                    <ControlTemplate TargetType="Thumb"><Border CornerRadius="4" Background="#313b4a" Margin="0,2,0,2"/></ControlTemplate>
+                                                </Thumb.Template>
+                                            </Thumb>
+                                        </Track.Thumb>
+                                    </Track>
+                                </Grid>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+            </Style.Triggers>
         </Style>
     </Window.Resources>
 
-    <Grid Margin="16">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
+    <Grid Background="#0b0e13">
+        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="32"/></Grid.RowDefinitions>
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="224"/><ColumnDefinition Width="1"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
 
-        <!-- HEADER -->
-        <StackPanel Grid.Row="0" Margin="0,0,0,12">
-            <TextBlock Text="GameOptimizerPro" FontSize="26" FontWeight="Bold" Foreground="#e94560"/>
-            <TextBlock Name="SubtitleText" Text="Windows &amp; Gaming Optimizer v$($Script:AppVersion) -- by FloDePin" FontSize="12" Foreground="#888" Margin="2,2,0,0"/>
-        </StackPanel>
+            <!-- ============ SIDEBAR ============ -->
+            <DockPanel Background="#0e1218">
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="16,18,0,20">
+                    <Border Width="38" Height="38" CornerRadius="10" Background="#31181d">
+                        <TextBlock Text="&#xE945;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="17" Foreground="#00d9ff"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <StackPanel Margin="11,0,0,0" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="GameOptimizer" FontSize="14.5" FontWeight="SemiBold" Foreground="#e6edf3"/>
+                            <TextBlock Text="Pro" FontSize="14.5" FontWeight="SemiBold" Foreground="#e53935"/>
+                        </StackPanel>
+                        <TextBlock Name="SubtitleText" Text="v$($Script:AppVersion) - by FloDePin" FontSize="11" Foreground="#7d8896"/>
+                    </StackPanel>
+                </StackPanel>
 
-        <!-- HW INFO -->
-        <Border Grid.Row="1" Background="#16213e" CornerRadius="8" Padding="12,8" Margin="0,0,0,12">
-            <TextBlock Name="HwInfoText" Text="Detecting hardware..." FontSize="11" Foreground="#00d4aa" FontFamily="Consolas" TextWrapping="Wrap" LineHeight="18"/>
-        </Border>
+                <StackPanel DockPanel.Dock="Bottom" Margin="0,0,0,12">
+                    <Border Background="#151a22" BorderBrush="#242b36" BorderThickness="1" CornerRadius="10" Padding="14,12" Margin="14,0,14,12">
+                        <StackPanel>
+                            <TextBlock Text="SYSTEM" FontSize="10" FontWeight="SemiBold" Foreground="#4f5a69" Margin="0,0,0,6"/>
+                            <TextBlock Name="HwInfoText" Text="Detecting hardware..." FontSize="12" Foreground="#e6edf3" LineHeight="18" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </Border>
+                    <Grid Margin="16,0,14,0">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Ellipse Width="7" Height="7" Fill="#22c55e" Margin="0,0,6,0"/>
+                            <TextBlock Text="Administrator" FontSize="11" Foreground="#22c55e"/>
+                        </StackPanel>
+                        <Button Name="BtnLang" Style="{StaticResource GopBtn}" HorizontalAlignment="Right" Padding="10,4" FontSize="11.5"
+                                ToolTip="Switches the tweak and BIOS descriptions between English and German. The interface itself stays English."/>
+                    </Grid>
+                </StackPanel>
 
-        <!-- TABS -->
-        <TabControl Grid.Row="2" Background="#16213e" BorderBrush="#333" Padding="0">
+                <StackPanel>
+                    <Grid Height="38" Margin="0,1,0,1">
+                        <Border Name="NavBarDashboard" Width="3" HorizontalAlignment="Left" Margin="0,7,0,7" CornerRadius="0,2,2,0" Visibility="Hidden"/>
+                        <Button Name="NavDashboard" Style="{StaticResource NavBtn}" Margin="12,0,12,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Name="NavIcoDashboard" Text="&#xEC4A;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" Width="28" VerticalAlignment="Center"/>
+                                <TextBlock Name="NavTxtDashboard" Text="Dashboard" FontSize="13.5" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    <Grid Height="38" Margin="0,1,0,1">
+                        <Border Name="NavBarTweaks" Width="3" HorizontalAlignment="Left" Margin="0,7,0,7" CornerRadius="0,2,2,0" Visibility="Hidden"/>
+                        <Button Name="NavTweaks" Style="{StaticResource NavBtn}" Margin="12,0,12,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Name="NavIcoTweaks" Text="&#xE9F5;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" Width="28" VerticalAlignment="Center"/>
+                                <TextBlock Name="NavTxtTweaks" Text="Tweaks" FontSize="13.5" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    <Grid Height="38" Margin="0,1,0,1">
+                        <Border Name="NavBarPresets" Width="3" HorizontalAlignment="Left" Margin="0,7,0,7" CornerRadius="0,2,2,0" Visibility="Hidden"/>
+                        <Button Name="NavPresets" Style="{StaticResource NavBtn}" Margin="12,0,12,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Name="NavIcoPresets" Text="&#xE734;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" Width="28" VerticalAlignment="Center"/>
+                                <TextBlock Name="NavTxtPresets" Text="Presets" FontSize="13.5" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    <Grid Height="38" Margin="0,1,0,1">
+                        <Border Name="NavBarBios" Width="3" HorizontalAlignment="Left" Margin="0,7,0,7" CornerRadius="0,2,2,0" Visibility="Hidden"/>
+                        <Button Name="NavBios" Style="{StaticResource NavBtn}" Margin="12,0,12,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Name="NavIcoBios" Text="&#xE950;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" Width="28" VerticalAlignment="Center"/>
+                                <TextBlock Name="NavTxtBios" Text="BIOS Guide" FontSize="13.5" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    <Grid Height="38" Margin="0,1,0,1">
+                        <Button Name="BtnStartup" Style="{StaticResource NavBtn}" Margin="12,0,12,0" ToolTip="Opens the Startup Manager in its own window">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE7E8;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" Width="28" Foreground="#7d8896" VerticalAlignment="Center"/>
+                                <TextBlock Text="Startup Manager" FontSize="13.5" Foreground="#b3bdcb" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    <Grid Height="38" Margin="0,1,0,1">
+                        <Button Name="BtnServices" Style="{StaticResource NavBtn}" Margin="12,0,12,0" ToolTip="Opens the Services Manager in its own window">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE90F;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" Width="28" Foreground="#7d8896" VerticalAlignment="Center"/>
+                                <TextBlock Text="Services" FontSize="13.5" Foreground="#b3bdcb" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    <Grid Height="38" Margin="0,1,0,1">
+                        <Border Name="NavBarBackups" Width="3" HorizontalAlignment="Left" Margin="0,7,0,7" CornerRadius="0,2,2,0" Visibility="Hidden"/>
+                        <Button Name="NavBackups" Style="{StaticResource NavBtn}" Margin="12,0,12,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Name="NavIcoBackups" Text="&#xE81C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" Width="28" VerticalAlignment="Center"/>
+                                <TextBlock Name="NavTxtBackups" Text="Backups &amp; Log" FontSize="13.5" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                </StackPanel>
+            </DockPanel>
+            <Border Grid.Column="1" Background="#242b36"/>
 
-            <!-- WINDOWS TAB -->
-            <TabItem Name="TabWindows" Header="[WIN]  Windows">
-                <ScrollViewer Background="#1a1a2e" Padding="8">
-                    <StackPanel Name="WindowsPanel" Margin="4"/>
+            <!-- ============ PAGES ============ -->
+            <Grid Grid.Column="2">
+                <ScrollViewer Name="PageDashboard" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="26,22,22,16">
+                    <StackPanel Name="DashboardPanel"/>
                 </ScrollViewer>
-            </TabItem>
 
-            <!-- GAMING TAB -->
-            <TabItem Name="TabGaming" Header="[GAME] Gaming">
-                <ScrollViewer Background="#1a1a2e" Padding="8">
-                    <StackPanel Name="GamingPanel" Margin="4"/>
+                <DockPanel Name="PageTweaks" Visibility="Collapsed" Margin="26,22,22,10">
+                    <StackPanel DockPanel.Dock="Top">
+                        <Grid Margin="0,0,4,18">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <Border Width="3" CornerRadius="2" Background="#e53935" Margin="0,2,16,2"/>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="Tweaks" FontSize="26" FontWeight="SemiBold" Foreground="#e6edf3"/>
+                                <TextBlock Text="Windows, gaming, network and audio tweaks -- every one with live status check, Apply and Revert" FontSize="12.5" Foreground="#7d8896" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Name="BtnSelectAll" Style="{StaticResource GopBtn}" Content="All" Margin="8,0,0,0"/>
+                                <Button Name="BtnDeselectAll" Style="{StaticResource GopBtn}" Content="None" Margin="8,0,0,0"/>
+                                <Button Name="BtnApply" Style="{StaticResource GopBtn}" Background="#e53935" BorderBrush="#e53935" Foreground="#ffffff" Margin="8,0,0,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE768;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Apply selected" FontWeight="SemiBold"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Name="BtnRevertAll" Style="{StaticResource GopBtn}" Background="#f59e0b" BorderBrush="#f59e0b" Foreground="#1a1205" Margin="8,0,0,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE7A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Revert all" FontWeight="SemiBold"/>
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+                        <Grid Margin="0,0,4,12">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="230"/></Grid.ColumnDefinitions>
+                            <Border HorizontalAlignment="Left" CornerRadius="9" Background="#1b212b" Padding="3">
+                                <StackPanel Name="CatTabs" Orientation="Horizontal"/>
+                            </Border>
+                            <Grid Grid.Column="1" VerticalAlignment="Center">
+                                <TextBox Name="SearchBox" Style="{StaticResource SearchBox}"/>
+                                <TextBlock Text="&#xE721;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Foreground="#4f5a69" Margin="11,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                                <TextBlock Name="SearchHint" Text="Search tweaks ..." FontSize="12.5" Foreground="#4f5a69" Margin="31,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                            </Grid>
+                        </Grid>
+                        <Grid Margin="2,0,6,12">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Ellipse Width="7" Height="7" Fill="#22c55e" Margin="0,0,5,0"/>
+                                <TextBlock Text="active (verified)" FontSize="11.5" Foreground="#22c55e" Margin="0,0,16,0"/>
+                                <Ellipse Width="7" Height="7" Stroke="#4f5a69" StrokeThickness="1.4" Margin="0,0,5,0"/>
+                                <TextBlock Text="inactive" FontSize="11.5" Foreground="#7d8896" Margin="0,0,16,0"/>
+                                <Ellipse Width="7" Height="7" Fill="#4f5a69" Margin="0,0,5,0"/>
+                                <TextBlock Text="one-time action" FontSize="11.5" Foreground="#7d8896"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                <TextBlock Name="CountsText" FontSize="11.5" Foreground="#b3bdcb" Margin="0,0,16,0" VerticalAlignment="Center"/>
+                                <Button Name="BtnVerify" Style="{StaticResource LinkBtn}" ToolTip="Re-checks the live status of every tweak and ticks the ones that are already active">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Verify status" FontSize="12" FontWeight="SemiBold" Foreground="#e6edf3"/>
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                    <ScrollViewer Name="TweakScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel Name="TweakHost" Margin="0,0,6,0">
+                            <StackPanel Name="WindowsPanel"/>
+                            <StackPanel Name="GamingPanel"/>
+                            <StackPanel Name="NetworkPanel"/>
+                            <StackPanel Name="RamStoragePanel"/>
+                            <StackPanel Name="Win11Panel"/>
+                            <StackPanel Name="AudioPanel"/>
+                            <StackPanel Name="GpuPanel"/>
+                            <StackPanel Name="PowerPanel"/>
+                            <TextBlock Name="SearchEmpty" Text="No tweak matches this search." FontSize="13" Foreground="#7d8896" Margin="4,20,0,0" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+
+                <ScrollViewer Name="PagePresets" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="26,22,22,16">
+                    <StackPanel Name="PresetsPanel"/>
                 </ScrollViewer>
-            </TabItem>
 
-            <!-- NETWORK TAB -->
-            <TabItem Name="TabNetwork" Header="[NET]  Network">
-                <ScrollViewer Background="#1a1a2e" Padding="8">
-                    <StackPanel Name="NetworkPanel" Margin="4"/>
+                <Grid Name="PageBios" Visibility="Collapsed" Margin="26,22,22,10">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <Grid Margin="0,0,4,18">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <Border Width="3" CornerRadius="2" Background="#f59e0b" Margin="0,2,16,2"/>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="BIOS Guide" FontSize="26" FontWeight="SemiBold" Foreground="#e6edf3"/>
+                            <TextBlock Text="Every platform with the BIOS settings that matter and the menu path for your board maker -- yours is detected and pre-selected. Read-only: you set everything in the BIOS yourself."
+                                       FontSize="12.5" Foreground="#7d8896" Margin="0,3,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                            <TextBlock Name="BiosDetectStatus" FontSize="12" Foreground="#7d8896" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <Button Name="BtnBiosDetect" Style="{StaticResource GopBtn}" Background="#f59e0b" BorderBrush="#f59e0b" Foreground="#1a1205">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="Check system state" FontWeight="SemiBold"/>
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="262"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Border Background="#151a22" BorderBrush="#242b36" BorderThickness="1" CornerRadius="10" Padding="8,10,4,10" VerticalAlignment="Top">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel Name="BiosPlatformList" Margin="0,0,4,0"/>
+                            </ScrollViewer>
+                        </Border>
+                        <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel Name="BiosPanel" Margin="0,0,6,0"/>
+                        </ScrollViewer>
+                    </Grid>
+                </Grid>
+
+                <ScrollViewer Name="PageBackups" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="26,22,22,16">
+                    <StackPanel Name="BackupsPanel"/>
                 </ScrollViewer>
-            </TabItem>
+            </Grid>
+        </Grid>
 
-            <!-- RAM & STORAGE TAB -->
-            <TabItem Name="TabRam" Header="[RAM]  RAM &amp; Storage">
-                <ScrollViewer Background="#1a1a2e" Padding="8">
-                    <StackPanel Name="RamStoragePanel" Margin="4"/>
-                </ScrollViewer>
-            </TabItem>
-
-            <!-- WINDOWS 11 TAB -->
-            <TabItem Name="TabWin11" Header="[W11]  Windows 11">
-                <ScrollViewer Background="#1a1a2e" Padding="8">
-                    <StackPanel Name="Win11Panel" Margin="4"/>
-                </ScrollViewer>
-            </TabItem>
-
-            <!-- AUDIO TAB -->
-            <TabItem Name="TabAudio" Header="[AUDIO] Audio">
-                <ScrollViewer Background="#1a1a2e" Padding="8">
-                    <StackPanel Name="AudioPanel" Margin="4"/>
-                </ScrollViewer>
-            </TabItem>
-
-            <!-- GPU TWEAKS TAB -->
-            <TabItem Name="TabGpu" Header="[GPU]  GPU Tweaks">
-                <ScrollViewer Background="#1a1a2e" Padding="8">
-                    <StackPanel Name="GpuPanel" Margin="4"/>
-                </ScrollViewer>
-            </TabItem>
-
-            <!-- POWER PLAN TAB -->
-            <TabItem Name="TabPower" Header="[PWR]  Power Plan">
-                <ScrollViewer Background="#1a1a2e" Padding="8">
-                    <StackPanel Name="PowerPanel" Margin="4"/>
-                </ScrollViewer>
-            </TabItem>
-
-            <!-- BIOS GUIDE TAB -->
-            <TabItem Name="TabBios" Header="[BIOS] BIOS Guide">
-                <ScrollViewer Background="#1a1a2e" Padding="8">
-                    <StackPanel Name="BiosPanel" Margin="4"/>
-                </ScrollViewer>
-            </TabItem>
-
-            <!-- DASHBOARD TAB -->
-            <TabItem Name="TabDashboard" Header="[DASH] Dashboard">
-                <ScrollViewer Background="#1a1a2e" Padding="8">
-                    <StackPanel Name="DashboardPanel" Margin="4"/>
-                </ScrollViewer>
-            </TabItem>
-
-        </TabControl>
-
-        <!-- BUTTONS -->
-        <StackPanel Grid.Row="3" Margin="0,12,0,0" HorizontalAlignment="Right">
-            <!-- Row 0: Presets -->
-            <WrapPanel HorizontalAlignment="Right" Margin="0,0,0,6">
-                <TextBlock Text="Presets:" Foreground="#4ec9ff" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <Button Name="BtnPresetMin" Content="&#x1F7E2; Minimal"    Style="{StaticResource PrimaryBtn}" Margin="4,0" Background="#1a6b3c"/>
-                <Button Name="BtnPresetBal" Content="&#x1F7E1; Balanced"   Style="{StaticResource PrimaryBtn}" Margin="4,0" Background="#8a6d1a"/>
-                <Button Name="BtnPresetAgg" Content="&#x1F534; Aggressive" Style="{StaticResource PrimaryBtn}" Margin="4,0" Background="#8a1a1a"/>
-            </WrapPanel>
-            <!-- Row 1: Main action buttons -->
-            <WrapPanel HorizontalAlignment="Right" Margin="0,0,0,6">
-                <Button Name="BtnSelectAll"   Content="[x] Select All"        Style="{StaticResource PrimaryBtn}" Margin="4,0"/>
-                <Button Name="BtnDeselectAll" Content="[ ] Deselect All"      Style="{StaticResource PrimaryBtn}" Margin="4,0"/>
-                <Button Name="BtnVerify"      Content="&#x2713; Verify"       Style="{StaticResource PrimaryBtn}" Margin="4,0" Background="#0f5c8c"/>
-                <Button Name="BtnApply"       Content="&gt;&gt; Apply Selected" Style="{StaticResource PrimaryBtn}" Margin="4,0" Background="#e94560"/>
-                <Button Name="BtnRevertAll"   Content="&#x21A9; Revert All"   Style="{StaticResource PrimaryBtn}" Margin="4,0" Background="#c47a00"/>
-                <Button Name="BtnLang"        Content="[DE/EN]"                Style="{StaticResource PrimaryBtn}" Margin="4,0" Background="#2a2a6e"/>
-            </WrapPanel>
-            <!-- Row 2: Manager + Log -->
-            <WrapPanel HorizontalAlignment="Right">
-                <Button Name="BtnStartup"     Content="&#x1F680; Startup Mgr" Style="{StaticResource PrimaryBtn}" Margin="4,0" Background="#1a6b3c"/>
-                <Button Name="BtnServices"    Content="&#x2699; Services Mgr" Style="{StaticResource PrimaryBtn}" Margin="4,0" Background="#1a3a6b"/>
-                <Button Name="BtnOpenLog"     Content="[Log] Open Log"        Style="{StaticResource PrimaryBtn}" Margin="4,0"/>
-                <Button Name="BtnOpenBackups" Content="[Backup] Open Backups" Style="{StaticResource PrimaryBtn}" Margin="4,0"/>
-            </WrapPanel>
-        </StackPanel>
-
-        <!-- STATUS -->
-        <Border Grid.Row="4" Background="#16213e" CornerRadius="6" Padding="10,6" Margin="0,14,0,0">
-            <TextBlock Name="StatusText" Text="Ready -- select tweaks and click Apply Selected." Foreground="#aaaaaa" FontSize="12" FontFamily="Consolas"/>
+        <!-- ============ STATUS BAR ============ -->
+        <Border Grid.Row="1" Background="#0e1218" BorderBrush="#242b36" BorderThickness="0,1,0,0" Padding="16,0,16,0">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <DockPanel VerticalAlignment="Center">
+                    <Ellipse Width="7" Height="7" Fill="#22c55e" Margin="0,0,8,0" DockPanel.Dock="Left"/>
+                    <TextBlock Name="StatusText" Text="Ready" FontSize="11.5" Foreground="#b3bdcb" TextTrimming="CharacterEllipsis"/>
+                </DockPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                    <Button Name="BtnOpenBackups" Style="{StaticResource LinkBtn}" Margin="0,0,18,0">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE81C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Registry backups"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Name="BtnOpenLog" Style="{StaticResource LinkBtn}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE838;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="Open log"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Grid>
         </Border>
     </Grid>
 </Window>
 "@
 
-# Parse XAML
-# Parse XAML  --  eigener try/catch damit Fehler sichtbar bleibt
+# Parse XAML  --  own try/catch so a XAML error stays visible
 try {
     $Reader = New-Object System.Xml.XmlNodeReader $XAML
     $Window = [Windows.Markup.XamlReader]::Load($Reader)
     foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] XAML geladen, Fenster erstellt" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
-Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML geladen, Fenster erstellt" -ForegroundColor DarkGray
+    Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML geladen, Fenster erstellt" -ForegroundColor DarkGray
 } catch {
     foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] XAML FEHLER: $_" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
-Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML FEHLER: $_" -ForegroundColor DarkGray
+    Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML FEHLER: $_" -ForegroundColor DarkGray
     [System.Windows.Forms.MessageBox]::Show(
-        "XAML-Ladefehler:`n$_`n`nDetails: $startupLog",
+        "XAML load error:`n$_`n`nDetails: $startupLog",
         "GameOptimizerPro - XAML Error",
         [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Error
@@ -3214,8 +3421,16 @@ Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML FEHLER: $_" -ForegroundColor DarkGr
     exit
 }
 
+# Fit the window into small screens (e.g. 1366x768 laptops) instead of overflowing them
+try {
+    $wa = [System.Windows.SystemParameters]::WorkArea
+    if ($wa.Width -lt ($Window.Width + 20))  { $Window.Width  = [math]::Max(960, $wa.Width - 20);  $Window.MinWidth  = [math]::Min($Window.MinWidth,  $Window.Width) }
+    if ($wa.Height -lt ($Window.Height + 20)) { $Window.Height = [math]::Max(600, $wa.Height - 20); $Window.MinHeight = [math]::Min($Window.MinHeight, $Window.Height) }
+} catch { }
+
 # Get controls
 $HwInfoText     = $Window.FindName("HwInfoText")
+$SubtitleText   = $Window.FindName("SubtitleText")
 $WindowsPanel   = $Window.FindName("WindowsPanel")
 $GamingPanel    = $Window.FindName("GamingPanel")
 $NetworkPanel   = $Window.FindName("NetworkPanel")
@@ -3225,13 +3440,15 @@ $AudioPanel     = $Window.FindName("AudioPanel")
 $GpuPanel       = $Window.FindName("GpuPanel")
 $PowerPanel     = $Window.FindName("PowerPanel")
 $BiosPanel      = $Window.FindName("BiosPanel")
+$BiosPlatformList = $Window.FindName("BiosPlatformList")
+$BiosDetectStatus = $Window.FindName("BiosDetectStatus")
+$BtnBiosDetect  = $Window.FindName("BtnBiosDetect")
 $DashboardPanel = $Window.FindName("DashboardPanel")
+$PresetsPanel   = $Window.FindName("PresetsPanel")
+$BackupsPanel   = $Window.FindName("BackupsPanel")
 $BtnApply       = $Window.FindName("BtnApply")
 $BtnSelectAll   = $Window.FindName("BtnSelectAll")
 $BtnDeselect    = $Window.FindName("BtnDeselectAll")
-$BtnPresetMin   = $Window.FindName("BtnPresetMin")
-$BtnPresetBal   = $Window.FindName("BtnPresetBal")
-$BtnPresetAgg   = $Window.FindName("BtnPresetAgg")
 $BtnOpenLog     = $Window.FindName("BtnOpenLog")
 $BtnOpenBackups = $Window.FindName("BtnOpenBackups")
 $BtnServices    = $Window.FindName("BtnServices")
@@ -3240,393 +3457,483 @@ $BtnRevertAll   = $Window.FindName("BtnRevertAll")
 $BtnStartup     = $Window.FindName("BtnStartup")
 $BtnLang        = $Window.FindName("BtnLang")
 $StatusText     = $Window.FindName("StatusText")
+$CatTabs        = $Window.FindName("CatTabs")
+$SearchBox      = $Window.FindName("SearchBox")
+$SearchHint     = $Window.FindName("SearchHint")
+$SearchEmpty    = $Window.FindName("SearchEmpty")
+$CountsText     = $Window.FindName("CountsText")
+$TweakScroll    = $Window.FindName("TweakScroll")
 
-# --- Localizable static elements (for full language switch) ---
-$SubtitleText   = $Window.FindName("SubtitleText")
-$TabWindows     = $Window.FindName("TabWindows")
-$TabGaming      = $Window.FindName("TabGaming")
-$TabNetwork     = $Window.FindName("TabNetwork")
-$TabRam         = $Window.FindName("TabRam")
-$TabWin11       = $Window.FindName("TabWin11")
-$TabAudio       = $Window.FindName("TabAudio")
-$TabGpu         = $Window.FindName("TabGpu")
-$TabPower       = $Window.FindName("TabPower")
-$TabBios        = $Window.FindName("TabBios")
-$TabDashboard   = $Window.FindName("TabDashboard")
+# =============================================================================
+# DESIGN SYSTEM  --  tokens + element builders (GameOptimizerPro v2.1 look)
+# =============================================================================
+$Script:UI = @{
+    APP = '#0b0e13'; SIDE = '#0e1218'; CARD = '#151a22'; CARD2 = '#1b212b'; INPUT = '#10141b'; BORDER = '#242b36'; BORDER2 = '#313b4a'
+    TEXT = '#e6edf3'; TEXT2 = '#b3bdcb'; DIM = '#7d8896'; MUTED = '#4f5a69'; DESC = '#98a3b3'
+    RED = '#e53935'; CYAN = '#00b4d8'; ACC = '#00d9ff'; AMBER = '#f59e0b'; GREEN = '#22c55e'; BLUE = '#3b82f6'
+    VIOLET = '#a78bfa'; ORANGE = '#f97316'; WIN = '#4f9cf9'; WIN11 = '#60a5fa'; NV = '#76b900'; ERR = '#ef4444'; SLATE = '#9ca3af'
+}
+$Script:IconFont   = New-Object Windows.Media.FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets")
+$Script:Mid        = " $([char]0x00B7) "     # separator dot (kept out of the source: script stays ASCII)
+$Script:EmDash     = " $([char]0x2014) "     # em dash for display
+$Script:BrushCache = @{}
+$Script:BtnStyle   = $Window.FindResource("GopBtn")
+$Script:CheckStyle = $Window.FindResource("GopCheck")
+$Script:TabStyle   = $Window.FindResource("TabBtn")
 
-# -----------------------------------------
-# APPLY-LANGUAGE  --  set every static main-window element to current language.
-# The two manager windows read the language when they open, so they are
-# already correct in whatever language is active at open time.
-# -----------------------------------------
-function Apply-Language {
-    if ($SubtitleText) { $SubtitleText.Text = Get-UIString "subtitle" }
-
-    if ($TabWindows) { $TabWindows.Header = Get-UIString "tab_windows" }
-    if ($TabGaming)  { $TabGaming.Header  = Get-UIString "tab_gaming" }
-    if ($TabNetwork) { $TabNetwork.Header = Get-UIString "tab_network" }
-    if ($TabRam)     { $TabRam.Header     = Get-UIString "tab_ram" }
-    if ($TabWin11)   { $TabWin11.Header   = Get-UIString "tab_win11" }
-    if ($TabAudio)   { $TabAudio.Header   = Get-UIString "tab_audio" }
-    if ($TabGpu)     { $TabGpu.Header     = Get-UIString "tab_gpu" }
-    if ($TabPower)   { $TabPower.Header   = Get-UIString "tab_power" }
-    if ($TabBios)    { $TabBios.Header    = Get-UIString "tab_bios" }
-    if ($TabDashboard) { $TabDashboard.Header = Get-UIString "tab_dashboard" }
-
-    if ($BtnSelectAll) { $BtnSelectAll.Content = Get-UIString "btn_selectall" }
-    if ($BtnDeselect)  { $BtnDeselect.Content  = Get-UIString "btn_deselectall" }
-    if ($BtnVerify)    { $BtnVerify.Content    = Get-UIString "btn_verify" }
-    if ($BtnApply)     { $BtnApply.Content     = Get-UIString "btn_apply" }
-    if ($BtnRevertAll) { $BtnRevertAll.Content = Get-UIString "btn_revertall" }
-    if ($BtnStartup)   { $BtnStartup.Content   = Get-UIString "btn_startup" }
-    if ($BtnServices)  { $BtnServices.Content  = Get-UIString "btn_services" }
-    if ($BtnOpenLog)   { $BtnOpenLog.Content   = Get-UIString "btn_openlog" }
+function Brush([string]$Hex) {
+    if (-not $Script:BrushCache.ContainsKey($Hex)) {
+        $b = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($Hex))
+        $b.Freeze(); $Script:BrushCache[$Hex] = $b
+    }
+    $Script:BrushCache[$Hex]
+}
+function Mix-Hex([string]$A, [string]$B, [double]$T) {
+    $ca = [Windows.Media.ColorConverter]::ConvertFromString($A); $cb = [Windows.Media.ColorConverter]::ConvertFromString($B)
+    '#{0:x2}{1:x2}{2:x2}' -f [int][math]::Round($ca.R + ($cb.R - $ca.R) * $T), [int][math]::Round($ca.G + ($cb.G - $ca.G) * $T), [int][math]::Round($ca.B + ($cb.B - $ca.B) * $T)
+}
+function Th { param([double[]]$V) if ($V.Count -eq 1) { New-Object Windows.Thickness($V[0]) } else { New-Object Windows.Thickness($V[0], $V[1], $V[2], $V[3]) } }
+function New-Text {
+    param([string]$Text, [double]$Size = 13, [string]$Color = $Script:UI.TEXT, [string]$Weight = 'Normal', [switch]$Wrap, [double[]]$Margin, [switch]$Mono)
+    $tb = New-Object Windows.Controls.TextBlock
+    $tb.Text = $Text; $tb.FontSize = $Size; $tb.Foreground = Brush $Color; $tb.FontWeight = $Weight
+    if ($Wrap) { $tb.TextWrapping = [Windows.TextWrapping]::Wrap }
+    if ($Margin) { $tb.Margin = Th $Margin }
+    if ($Mono) { $tb.FontFamily = New-Object Windows.Media.FontFamily("Consolas") }
+    $tb.VerticalAlignment = 'Center'
+    $tb
+}
+function New-Icon {
+    param([int]$Glyph, [double]$Size = 14, [string]$Color = $Script:UI.DIM, [double[]]$Margin)
+    $tb = New-Object Windows.Controls.TextBlock
+    $tb.Text = [string][char]$Glyph; $tb.FontFamily = $Script:IconFont; $tb.FontSize = $Size; $tb.Foreground = Brush $Color
+    $tb.VerticalAlignment = 'Center'
+    if ($Margin) { $tb.Margin = Th $Margin }
+    $tb
+}
+function New-HStack { param([object[]]$Children, [double[]]$Margin)
+    $sp = New-Object Windows.Controls.StackPanel; $sp.Orientation = 'Horizontal'
+    foreach ($c in $Children) { if ($c) { $sp.Children.Add($c) | Out-Null } }
+    if ($Margin) { $sp.Margin = Th $Margin }
+    $sp
+}
+function New-VStack { param([object[]]$Children, [double[]]$Margin)
+    $sp = New-Object Windows.Controls.StackPanel
+    foreach ($c in $Children) { if ($c) { $sp.Children.Add($c) | Out-Null } }
+    if ($Margin) { $sp.Margin = Th $Margin }
+    $sp
+}
+function New-Card {
+    param($Child, [double[]]$Margin = @(0, 0, 0, 14), [double[]]$Padding = @(18, 16, 18, 16), [string]$Background = $Script:UI.CARD)
+    $b = New-Object Windows.Controls.Border
+    $b.Background = Brush $Background; $b.BorderBrush = Brush $Script:UI.BORDER; $b.BorderThickness = Th 1
+    $b.CornerRadius = New-Object Windows.CornerRadius(10); $b.Padding = Th $Padding; $b.Margin = Th $Margin
+    $b.Child = $Child
+    $b
+}
+function New-CardTitle {
+    param([string]$Title, [string]$Accent, $Right)
+    $g = New-Object Windows.Controls.Grid; $g.Margin = Th 0, 0, 0, 12
+    $bar = New-Object Windows.Controls.Border; $bar.Width = 3; $bar.Height = 16; $bar.CornerRadius = New-Object Windows.CornerRadius(2)
+    $bar.Background = Brush $Accent; $bar.Margin = Th 0, 0, 10, 0
+    $g.Children.Add((New-HStack @($bar, (New-Text $Title 15 $Script:UI.TEXT 'SemiBold')))) | Out-Null
+    if ($Right) { $Right.HorizontalAlignment = 'Right'; $g.Children.Add($Right) | Out-Null }
+    $g
+}
+function New-Badge {
+    param([string]$Text, [string]$Fg, [string]$Bg, [int]$Glyph = 0)
+    $b = New-Object Windows.Controls.Border
+    $b.CornerRadius = New-Object Windows.CornerRadius(4); $b.Background = Brush $Bg; $b.Padding = Th 6, 1, 6, 2
+    $b.Margin = Th 0, 0, 0, 3; $b.HorizontalAlignment = 'Right'
+    $ic = if ($Glyph) { New-Icon $Glyph 10 $Fg @(0, 0, 4, 0) } else { $null }
+    $b.Child = New-HStack @($ic, (New-Text $Text 11 $Fg))
+    $b
+}
+function New-Bar {
+    param([double]$Pct, [string]$Color, [double]$Height = 6)
+    $g = New-Object Windows.Controls.Grid; $g.Height = $Height
+    $track = New-Object Windows.Controls.Border; $track.CornerRadius = New-Object Windows.CornerRadius($Height / 2)
+    $track.Background = Brush (Mix-Hex $Script:UI.CARD '#ffffff' 0.07)
+    $g.Children.Add($track) | Out-Null
+    $inner = New-Object Windows.Controls.Grid
+    $c1 = New-Object Windows.Controls.ColumnDefinition; $c2 = New-Object Windows.Controls.ColumnDefinition
+    $inner.ColumnDefinitions.Add($c1); $inner.ColumnDefinitions.Add($c2)
+    $fill = New-Object Windows.Controls.Border; $fill.CornerRadius = New-Object Windows.CornerRadius($Height / 2); $fill.Background = Brush $Color
+    $inner.Children.Add($fill) | Out-Null
+    $g.Children.Add($inner) | Out-Null
+    $g.Tag = @{ C1 = $c1; C2 = $c2; Fill = $fill }
+    Set-Bar $g $Pct
+    $g
+}
+function Set-Bar($Bar, [double]$Pct, [string]$Color) {
+    $p = [math]::Max(0, [math]::Min(100, $Pct))
+    $Bar.Tag.C1.Width = New-Object Windows.GridLength([math]::Max(0.0001, $p), [Windows.GridUnitType]::Star)
+    $Bar.Tag.C2.Width = New-Object Windows.GridLength([math]::Max(0.0001, 100 - $p), [Windows.GridUnitType]::Star)
+    if ($Color) { $Bar.Tag.Fill.Background = Brush $Color }
+}
+function New-Btn {
+    param([string]$Label, [string]$Bg = $Script:UI.CARD2, [string]$Fg = $Script:UI.TEXT, [int]$Glyph = 0, [switch]$Bold, [double[]]$Margin = @(8, 0, 0, 0))
+    $btn = New-Object Windows.Controls.Button
+    $btn.Style = $Script:BtnStyle; $btn.Background = Brush $Bg; $btn.Foreground = Brush $Fg
+    $btn.BorderBrush = Brush $(if ($Bg -eq $Script:UI.CARD2) { $Script:UI.BORDER2 } else { $Bg })
+    $btn.Margin = Th $Margin
+    $ic = if ($Glyph) { New-Icon $Glyph 13 $Fg @(0, 0, 7, 0) } else { $null }
+    $btn.Content = New-HStack @($ic, (New-Text $Label 13 $Fg $(if ($Bold) { 'SemiBold' } else { 'Normal' })))
+    $btn
+}
+function New-PageHeader {
+    param([string]$Title, [string]$Sub, [string]$Accent, [object[]]$Right)
+    $g = New-Object Windows.Controls.Grid; $g.Margin = Th 0, 0, 4, 18
+    foreach ($w in @('Auto', '*', 'Auto')) {
+        $cd = New-Object Windows.Controls.ColumnDefinition
+        $cd.Width = if ($w -eq '*') { New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star) } else { [Windows.GridLength]::Auto }
+        $g.ColumnDefinitions.Add($cd)
+    }
+    $bar = New-Object Windows.Controls.Border; $bar.Width = 3; $bar.CornerRadius = New-Object Windows.CornerRadius(2)
+    $bar.Background = Brush $Accent; $bar.Margin = Th 0, 2, 16, 2
+    $g.Children.Add($bar) | Out-Null
+    # (not "$sub": PowerShell names are case-insensitive, that would be the [string] parameter $Sub)
+    $subBlock = New-Text $Sub 12.5 $Script:UI.DIM 'Normal' -Wrap -Margin 0, 3, 0, 0
+    $txt = New-VStack @((New-Text $Title 26 $Script:UI.TEXT 'SemiBold'), $subBlock)
+    [Windows.Controls.Grid]::SetColumn($txt, 1); $g.Children.Add($txt) | Out-Null
+    if ($Right) {
+        $r = New-HStack $Right; $r.VerticalAlignment = 'Center'; $r.Margin = Th 16, 0, 0, 0
+        [Windows.Controls.Grid]::SetColumn($r, 2); $g.Children.Add($r) | Out-Null
+    }
+    $g
+}
+function New-SectionTitle {
+    param([string]$Text, [string]$Color, [string]$RightText = '', [double[]]$Margin = @(0, 6, 0, 8))
+    $g = New-Object Windows.Controls.Grid; $g.Margin = Th $Margin
+    foreach ($w in @('Auto', '*', 'Auto')) {
+        $cd = New-Object Windows.Controls.ColumnDefinition
+        $cd.Width = if ($w -eq '*') { New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star) } else { [Windows.GridLength]::Auto }
+        $g.ColumnDefinitions.Add($cd)
+    }
+    $g.Children.Add((New-Text $Text.ToUpper() 11.5 $Color 'SemiBold')) | Out-Null
+    $line = New-Object Windows.Controls.Border; $line.Height = 1; $line.Background = Brush $Script:UI.BORDER; $line.Margin = Th 12, 0, 12, 0
+    $line.VerticalAlignment = 'Center'; [Windows.Controls.Grid]::SetColumn($line, 1); $g.Children.Add($line) | Out-Null
+    $right = New-Text $RightText 11.5 $Script:UI.DIM
+    [Windows.Controls.Grid]::SetColumn($right, 2); $g.Children.Add($right) | Out-Null
+    $g.Tag = $right
+    $g
+}
+function New-Banner {
+    param([string]$Text, [string]$Color, [int]$Glyph = 0xE946)
+    $b = New-Object Windows.Controls.Border
+    $b.Background = Brush (Mix-Hex $Script:UI.APP $Color 0.10); $b.BorderBrush = Brush (Mix-Hex $Script:UI.APP $Color 0.35)
+    $b.BorderThickness = Th 1; $b.CornerRadius = New-Object Windows.CornerRadius(8); $b.Padding = Th 12, 8, 12, 8; $b.Margin = Th 0, 0, 0, 12
+    $g = New-Object Windows.Controls.DockPanel
+    $ic = New-Icon $Glyph 13 $Color @(0, 1, 10, 0); $ic.VerticalAlignment = 'Top'
+    [Windows.Controls.DockPanel]::SetDock($ic, 'Left'); $g.Children.Add($ic) | Out-Null
+    $g.Children.Add((New-Text $Text 12 $Color 'Normal' -Wrap)) | Out-Null
+    $b.Child = $g
+    $b
+}
+function New-Grid2 {
+    # Two equal columns; Add-Grid2 places elements row by row (heights follow the content)
+    $g = New-Object Windows.Controls.Grid
+    foreach ($i in 0, 1) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $g.ColumnDefinitions.Add($cd) }
+    $g.Tag = @{ N = 0 }
+    $g
+}
+function Add-Grid2($Grid, $Element) {
+    $n = $Grid.Tag.N
+    if ($n % 2 -eq 0) { $rd = New-Object Windows.Controls.RowDefinition; $rd.Height = [Windows.GridLength]::Auto; $Grid.RowDefinitions.Add($rd) }
+    [Windows.Controls.Grid]::SetRow($Element, [math]::Floor($n / 2)); [Windows.Controls.Grid]::SetColumn($Element, $n % 2)
+    $Element.Margin = if ($n % 2 -eq 0) { Th 0, 0, 6, 12 } else { Th 6, 0, 0, 12 }
+    $Grid.Children.Add($Element) | Out-Null
+    $Grid.Tag.N = $n + 1
 }
 
-# Set HW info
-# Split HW info across two lines so nothing gets cut off
-$gpuRam   = "GPU: $GPU   |   RAM: $RAM GB   |   $NVMeInfo"
-$cpuOs    = "CPU: $CPU   |   $OSShort"
-$HwInfoText.Text = "$gpuRam`n$cpuOs"
+# Sidebar system card (four short lines)
+$gpuShort = ($GPU -replace '^(NVIDIA|AMD|Intel\(R\))\s+', '' -replace '^GeForce\s+', '' -replace '\(TM\)|\(R\)', '').Trim()
+$cpuShort = ($CPU -replace '\(TM\)|\(R\)', '' -replace '\s+\d+-Core Processor', '' -replace '\s+CPU\s+@.*$', '' -replace '\s{2,}', ' ').Trim()
+$osLine   = if ($IsWin11 -or $IsWin10) { "$(if ($IsWin11) { 'Win 11' } else { 'Win 10' })$($Script:Mid)Build $OSBuild" } else { $OSShort }
+$HwInfoText.Text = "$gpuShort`n$cpuShort`n$RAM GB RAM$($Script:Mid)$NVMeInfo`n$osLine"
+$HwInfoText.ToolTip = "GPU: $GPU`nCPU: $CPU`nRAM: $RAM GB`n$NVMeInfo`n$OSShort"
+$SubtitleText.Text = "v$($Script:AppVersion)$($Script:Mid)by FloDePin"
 
-# -----------------------------------------
-# BUILD TWEAK ROWS DYNAMICALLY
-# -----------------------------------------
-$CheckBoxMap = @{}  # Name -> CheckBox
+# =============================================================================
+# TWEAK ROWS
+# =============================================================================
+$CheckBoxMap         = @{}   # Name -> CheckBox
+$Script:TweakState   = @{}   # Name -> active | inactive | unknown
+$Script:TweakBadges  = @{}   # Name -> "active" badge
+$Script:TweakRows    = @{}   # Name -> @{ Card; Desc; Tweak }
+$Script:GroupHeaders = @()   # @{ Root; Names; Cat }
+$Script:CatNotices   = @()   # banners hidden while searching
+$Script:OneTimeNames = @($CheckFunctions.Keys | Where-Object { $CheckFunctions[$_].ToString().Trim() -eq '$null' })
+$Script:RestartTweaks = @("Remove Windows Recall", "Disable HPET (High Precision Event Timer)", "Set 0.5ms Timer Resolution",
+    "Process Count Reduction (Svchost)", "Enable MSI Mode (Message Signaled Interrupts)", "Enable Hardware-Accelerated GPU Scheduling (HAGS)",
+    "Disable Write-Cache Buffer Flushing", "Optimize NVMe Queue Depth", "Disable Windows Platform Binary Table (WPBT)", "Disable Memory Compression")
+$Script:AppRemovals = @("Remove Cortana", "Remove Xbox Apps", "Remove Microsoft Teams (Personal)", "Remove Copilot", "Remove OneDrive", "Remove Other Bloatware")
 
-function New-GroupHeader {
-    param([string]$Title)
-    $tb = New-Object Windows.Controls.TextBlock
-    $tb.Text       = $Title
-    $tb.FontSize   = 12
-    $tb.FontWeight = "SemiBold"
-    $tb.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0,212,170))
-    $tb.Margin     = New-Object Windows.Thickness(0,14,0,4)
-    return $tb
+function Get-TweakDesc($Tweak) {
+    $d = if ($LangState.Current -eq "DE") { $Tweak.Desc } elseif ($TweakDescEN.ContainsKey($Tweak.Name)) { $TweakDescEN[$Tweak.Name] } else { $Tweak.Desc }
+    $d -replace '\s+--\s+', $Script:EmDash
 }
 
 function New-TweakRow {
     param($Tweak)
-
-    $panel = New-Object Windows.Controls.StackPanel
-    $panel.Orientation = "Horizontal"
-    $panel.Margin      = New-Object Windows.Thickness(0,3,0,3)
-
-    # Checkbox
-    $cb = New-Object Windows.Controls.CheckBox
-    $cb.Content           = $Tweak.Name
-    $cb.Tag               = $Tweak.Name
-    $cb.VerticalAlignment = "Center"
-    $cb.FontSize          = 13
-    $cb.Margin            = New-Object Windows.Thickness(0,0,8,0)
-
-    # Gray out Win11-only tweaks when running on Win10
+    $U = $Script:UI
+    $name = $Tweak.Name
     $isWin11Only = ($Tweak.Category -eq "Windows 11") -and (-not $IsWin11)
-    # Gray out NVIDIA tweaks on non-NVIDIA, AMD tweaks on non-AMD
-    $isWrongGPU  = ($Tweak.Group -eq "NVIDIA" -and -not $IsNVIDIA) -or
-                   ($Tweak.Group -eq "AMD"    -and -not $IsAMD)
+    $isWrongGPU  = ($Tweak.Group -eq "NVIDIA" -and -not $IsNVIDIA) -or ($Tweak.Group -eq "AMD" -and -not $IsAMD)
 
-    if ($isWin11Only) {
-        $cb.IsEnabled  = $false
-        $cb.Content    = "$($Tweak.Name)  [Win11 only]"
-        $cb.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(90,90,90))
-    } elseif ($isWrongGPU) {
-        $cb.IsEnabled  = $false
-        $gpuLabel = if ($Tweak.Group -eq "NVIDIA") { "NVIDIA only" } else { "AMD only" }
-        $cb.Content    = "$($Tweak.Name)  [$gpuLabel]"
-        $cb.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(90,90,90))
-    } else {
-        $cb.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(221,221,221))
-    }
-    $CheckBoxMap[$Tweak.Name] = $cb
+    $card = New-Object Windows.Controls.Border
+    $card.Background = Brush $U.CARD; $card.BorderBrush = Brush $U.BORDER; $card.BorderThickness = Th 1
+    $card.CornerRadius = New-Object Windows.CornerRadius(8); $card.Padding = Th 14, 9, 12, 9; $card.Margin = Th 0, 0, 0, 6
 
-    # Info button  --  Style aus XAML, Hover-Effekte via ControlTemplate.Triggers
-    $btn = New-Object Windows.Controls.Button
-    $btn.Content              = "?"
-    $btn.Width                = 22
-    $btn.Height               = 22
-    $btn.Cursor               = [System.Windows.Input.Cursors]::Hand
-    $btn.VerticalAlignment    = "Center"
-    $btn.Style                = $Window.FindResource("InfoBtn")
+    $grid = New-Object Windows.Controls.Grid
+    foreach ($w in 22, 32) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength($w); $grid.ColumnDefinitions.Add($cd) }
+    $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $grid.ColumnDefinitions.Add($cd)
+    $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = [Windows.GridLength]::Auto; $grid.ColumnDefinitions.Add($cd)
 
-    $capturedDesc     = $Tweak.Desc
-    $capturedName     = $Tweak.Name
-    $capturedDescEN   = if ($TweakDescEN.ContainsKey($Tweak.Name)) { $TweakDescEN[$Tweak.Name] } else { $Tweak.Desc }
-    $capturedLangRef  = $LangState   # reference to shared hashtable
-    $btn.Add_Click({
-        $n    = $capturedName
-        $d    = if ($capturedLangRef.Current -eq "EN") { $capturedDescEN } else { $capturedDesc }
-        $lang = $capturedLangRef.Current
-        [System.Windows.MessageBox]::Show($d, "Info [$lang]: $n", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information)
-    }.GetNewClosure())
+    $dot = New-Object Windows.Shapes.Ellipse; $dot.Width = 8; $dot.Height = 8; $dot.VerticalAlignment = 'Center'; $dot.HorizontalAlignment = 'Left'
+    $grid.Children.Add($dot) | Out-Null
 
-    # Status-Dot: zeigt ob Tweak bereits aktiv ist
-    $dot = New-Object Windows.Controls.Border
-    $dot.Width           = 10
-    $dot.Height          = 10
-    $dot.CornerRadius    = New-Object Windows.CornerRadius(5)
-    $dot.Margin          = New-Object Windows.Thickness(0,0,7,0)
-    $dot.VerticalAlignment = "Center"
+    $cb = New-Object Windows.Controls.CheckBox; $cb.Style = $Script:CheckStyle; $cb.Tag = $name; $cb.VerticalAlignment = 'Center'
+    [Windows.Controls.Grid]::SetColumn($cb, 1); $grid.Children.Add($cb) | Out-Null
 
-    Update-TweakDot $dot $Tweak.Name | Out-Null
+    $desc = New-Text (Get-TweakDesc $Tweak) 12 $U.DESC 'Normal' -Wrap -Margin 0, 2, 0, 0
+    $desc.MaxHeight = 34; $desc.TextTrimming = [Windows.TextTrimming]::CharacterEllipsis; $desc.ToolTip = (Get-TweakDesc $Tweak)
+    $text = New-VStack @((New-Text $name 13.5 $U.TEXT 'SemiBold'), $desc) @(2, 0, 14, 0)
+    $text.VerticalAlignment = 'Center'; $text.Cursor = [System.Windows.Input.Cursors]::Hand; $text.Background = [Windows.Media.Brushes]::Transparent
+    [Windows.Controls.Grid]::SetColumn($text, 2); $grid.Children.Add($text) | Out-Null
+    $cbRef = $cb
+    $text.Add_MouseLeftButtonUp({ if ($cbRef.IsEnabled) { $cbRef.IsChecked = -not ($cbRef.IsChecked -eq $true) } }.GetNewClosure())
 
-    # Register dot for later re-verification
-    $Script:TweakDots[$Tweak.Name] = $dot
+    $badges = New-VStack @(); $badges.VerticalAlignment = 'Center'; $badges.MinWidth = 96
+    if ($Script:AppRemovals -contains $name)   { $badges.Children.Add((New-Badge 'removes app' $U.AMBER (Mix-Hex $U.CARD $U.AMBER 0.14) 0xE74D)) | Out-Null }
+    if ($Script:RestartTweaks -contains $name) { $badges.Children.Add((New-Badge 'restart' $U.AMBER (Mix-Hex $U.CARD $U.AMBER 0.14) 0xE7BA)) | Out-Null }
+    if ($isWrongGPU)  { $badges.Children.Add((New-Badge $(if ($Tweak.Group -eq 'NVIDIA') { 'NVIDIA only' } else { 'AMD only' }) $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
+    if ($isWin11Only) { $badges.Children.Add((New-Badge 'Windows 11 only' $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
+    if ($name -eq 'Optimize NVMe Queue Depth' -and -not $HasNVMe) { $badges.Children.Add((New-Badge 'no NVMe found' $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
+    if ($Script:OneTimeNames -contains $name) { $badges.Children.Add((New-Badge 'one-time' $U.TEXT2 $U.CARD2 0xE72C)) | Out-Null }
+    $active = New-Badge 'active' $U.GREEN (Mix-Hex $U.CARD $U.GREEN 0.16) 0xE73E; $active.Visibility = 'Collapsed'
+    $badges.Children.Add($active) | Out-Null
+    [Windows.Controls.Grid]::SetColumn($badges, 3); $grid.Children.Add($badges) | Out-Null
 
-    $panel.Children.Add($dot) | Out-Null
-    $panel.Children.Add($cb)  | Out-Null
-    $panel.Children.Add($btn) | Out-Null
-    return $panel
+    if ($isWin11Only -or $isWrongGPU) { $cb.IsEnabled = $false; $card.Opacity = 0.55 }
+    $card.Child = $grid
+
+    $CheckBoxMap[$name]           = $cb
+    $Script:TweakDots[$name]      = $dot
+    $Script:TweakBadges[$name]    = $active
+    $Script:TweakRows[$name]      = @{ Card = $card; Desc = $desc; Tweak = $Tweak }
+    Update-TweakDot $dot $name | Out-Null
+    return $card
 }
 
-# Shared status-dot update function (used at build time and by Verify button)
+# Shared status update (build time, Verify, Apply, Revert): dot + "active" badge + state table
 function Update-TweakDot($dot, $tweakName) {
+    $state = "unknown"
     if ($CheckFunctions.ContainsKey($tweakName)) {
         try {
             $isActive = & $CheckFunctions[$tweakName]
-            if ($isActive -eq $true) {
-                $dot.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0,200,80))
-                $dot.ToolTip    = "Active  --  tweak is already applied"
-                return "active"
-            } elseif ($isActive -eq $false) {
-                $dot.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(70,70,70))
-                $dot.ToolTip    = "Not active"
-                return "inactive"
-            } else {
-                $dot.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(50,50,60))
-                $dot.ToolTip    = "Status unknown (one-time action)"
-                return "unknown"
-            }
-        } catch {
-            $dot.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(50,50,60))
-            $dot.ToolTip    = "Status could not be checked"
-            return "unknown"
-        }
-    } else {
-        $dot.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(50,50,60))
-        return "unknown"
+            if ($isActive -eq $true) { $state = "active" } elseif ($isActive -eq $false) { $state = "inactive" }
+        } catch { $state = "unknown" }
     }
+    $Script:TweakState[$tweakName] = $state
+    switch ($state) {
+        "active"   { $dot.Fill = Brush $Script:UI.GREEN; $dot.Stroke = $null; $dot.ToolTip = "Active -- this tweak is in effect" }
+        "inactive" { $dot.Fill = [Windows.Media.Brushes]::Transparent; $dot.Stroke = Brush $Script:UI.MUTED; $dot.StrokeThickness = 1.5; $dot.ToolTip = "Not active" }
+        default    { $dot.Fill = Brush $Script:UI.MUTED; $dot.Stroke = $null; $dot.ToolTip = "One-time action -- nothing lasting to check" }
+    }
+    if ($Script:TweakBadges.ContainsKey($tweakName)) { $Script:TweakBadges[$tweakName].Visibility = $(if ($state -eq "active") { 'Visible' } else { 'Collapsed' }) }
+    return $state
+}
+
+function Set-DescLanguage {
+    foreach ($r in $Script:TweakRows.Values) { $d = Get-TweakDesc $r.Tweak; $r.Desc.Text = $d; $r.Desc.ToolTip = $d }
 }
 
 # =============================================================================
-# BIOS GUIDE TAB
+# CATEGORY TABS, SEARCH, COUNTERS
 # =============================================================================
-
-# -- BIOS setting data (hardware-aware) ----------------------------------------
-$BiosProfiles = @(
-    @{
-        Name    = "AMD Ryzen 9000 / 7000 (Zen 5 / Zen 4) + AM5"
-        Match   = @("9800X3D","9900X","9700X","9600X","7800X3D","7900X3D","7900X","7700X","7600X","7950X")
-        Color   = "#e94560"
-        Settings = @(
-            @{ Cat="Memory";      Name="EXPO / XMP Profile";           Rec="Profile 1 (EXPO)";     Path="MIT --> Advanced Memory Settings --> EXPO/XMP";                        Desc="Without EXPO, DDR5 runs at 4800 MHz instead of rated speed. Definitely enable.";        Risk="Safe" }
-            @{ Cat="CPU";         Name="Precision Boost Overdrive (PBO)"; Rec="Enabled / Auto";     Path="MIT --> Advanced CPU Core Settings --> AMD Overclocking --> PBO";       Desc="Lets the CPU dynamically clock higher. Auto is optimal for most users.";                Risk="Moderate" }
-            @{ Cat="CPU";         Name="CPU Core Performance Boost";    Rec="Auto";                 Path="MIT --> Advanced CPU Core Settings --> CPU Core Performance Boost";      Desc="Must be active for PBO to work.";                                                       Risk="Safe" }
-            @{ Cat="CPU";         Name="FCLK Frequency (X3D CPUs)";     Rec="Auto (not manual)";    Path="MIT --> Advanced Memory Settings --> FCLK Frequency";                  Desc="On X3D CPUs, leave FCLK on Auto. Setting it manually can cause instability.";           Risk="Safe" }
-            @{ Cat="GPU";         Name="Resizable BAR";                 Rec="Enabled";              Path="Settings --> IO Ports --> Above 4G Decoding + Re-Size BAR Support";     Desc="Important for NVIDIA RTX 30/40 and AMD RX 6000/7000. Up to 15% more FPS.";              Risk="Safe" }
-            @{ Cat="GPU";         Name="Above 4G Decoding";             Rec="Enabled";              Path="Settings --> IO Ports --> Above 4G Decoding";                          Desc="Must be active for Resizable BAR to work.";                                             Risk="Safe" }
-            @{ Cat="Power";       Name="ErP Power Saving";              Rec="Disabled";             Path="Settings --> Miscellaneous --> ErP";                                   Desc="Disabling prevents unwanted USB wake-ups and network glitches.";                        Risk="Safe" }
-            @{ Cat="Fan/Cooling"; Name="Fan Curve";                     Rec="Silent / Custom";      Path="Settings --> Hardware Monitor --> Fan Speed Control";                  Desc="The default curve is often too aggressive. Silent up to 70C, then steeper.";           Risk="Safe" }
-            @{ Cat="Boot";        Name="Fast Boot";                     Rec="Disabled";             Path="Settings --> Boot --> Fast Boot";                                      Desc="Disabling allows full POST diagnostics. No real boot-time savings.";                    Risk="Safe" }
-            @{ Cat="Security";    Name="Secure Boot";                   Rec="Enabled";              Path="Settings --> Boot --> Secure Boot --> Secure Boot";                    Desc="Should be active (Windows 11 requirement). Only disable for dual-boot.";                Risk="Safe" }
-            @{ Cat="CPU (Advanced)";       Name="Local APIC Mode";              Rec="x2APIC";         Path="AMD CBS / Advanced CPU Settings --> Local APIC Mode";       Desc="Modern interrupt-controller mode with lower interrupt overhead. Enable on all modern systems.";                                       Risk="Safe" }
-            @{ Cat="CPU (Advanced)";       Name="Fast Short REP MOVSB (FSRM)";  Rec="Enabled";        Path="AMD CBS / Advanced CPU Settings";                          Desc="Speeds up small memory copies. Leave enabled (as with Enhanced REP MOVSB/STOSB).";                                                    Risk="Safe" }
-            @{ Cat="Prefetchers";          Name="CPU Prefetchers (L1/L2)";      Rec="Enabled / Auto"; Path="AMD CBS --> Prefetcher settings";                          Desc="Leave ALL prefetchers on (L1 Stream/Stride/Region, L2 Stream/Up-Down). Disabling them is NOT automatically lower latency.";           Risk="Safe" }
-            @{ Cat="PCIe";                 Name="Launch CSM";                   Rec="Disabled";       Path="Settings --> Boot --> CSM Support";                        Desc="Keep off -- required for Resizable BAR and modern UEFI GPU init.";                                                                    Risk="Safe" }
-            @{ Cat="Memory";               Name="Memory Interleaving";          Rec="Enabled (Auto)"; Path="MIT --> Advanced Memory Settings";                        Desc="Improves memory bandwidth. Leave enabled, size on Auto.";                                                                             Risk="Safe" }
-            @{ Cat="PCIe Power (Latency)"; Name="ASPM + LTR + Clock PM";        Rec="Disabled";       Path="Settings --> IO Ports / AMD CBS --> PCIe power";            Desc="Latency-focused: turning off PCIe ASPM, LTR and Clock Power Management removes PCIe power-state latency. Real win, but higher idle power/heat -- desktops only.";  Risk="Moderate" }
-            @{ Cat="C-States (Latency)";   Name="DF C-States";                  Rec="Disabled";       Path="AMD CBS --> DF Common Options --> DF C-States";            Desc="Disabling Data Fabric C-states trims latency spikes (small idle-power cost). On AM5 LEAVE global C-States on Auto -- only DF C-States off.";  Risk="Moderate" }
-            @{ Cat="Security"; Name="Disable Motherboard Auto-Install Utilities"; Rec="Disabled"; Path="ASUS: Tool > Auto Install ASUS Utilities  |  MSI: Settings > Advanced > MSI Driver Utility Installer  |  Gigabyte: Settings > Gigabyte Utilities Downloader  |  ASRock: Tool > Auto Driver Installer"; Desc="Stops the board from silently installing vendor utilities, drivers and background services into Windows on every boot (via WPBT). Complements the 'Disable WPBT' tweak. Grab any driver you need directly from the vendor's website instead.";  Risk="Safe" }
-        )
-    }
-    @{
-        Name    = "Intel Core 13th / 14th Gen (Raptor Lake)"
-        Match   = @("i9-14","i7-14","i5-14","i9-13","i7-13","i5-13","13900","13700","13600","14900","14700","14600")
-        Color   = "#0071c5"
-        Settings = @(
-            @{ Cat="Memory";  Name="XMP / Intel Extreme Memory Profile"; Rec="Profile 1 (XMP 3.0)"; Path="Advanced --> Memory Configuration --> XMP";                            Desc="DDR5 runs at only 4800 MHz without XMP. Enable XMP 3.0 on modern boards.";              Risk="Safe" }
-            @{ Cat="CPU";     Name="Intel Thermal Velocity Boost";      Rec="Enabled";              Path="Advanced --> CPU Configuration --> Intel TVB";                         Desc="Allows boost above TDP with good cooling.";                                             Risk="Safe" }
-            @{ Cat="CPU";     Name="CPU Base Clock (BCLK)";             Rec="Auto (100 MHz)";       Path="Advanced --> CPU Configuration --> BCLK Frequency";                    Desc="Do not adjust manually without experience -- it affects everything.";                   Risk="Moderate" }
-            @{ Cat="GPU";     Name="Resizable BAR";                     Rec="Enabled";              Path="Advanced --> PCI Subsystem Settings --> Resizable BAR Support";        Desc="Important for RTX 30/40. Requires Above 4G Decoding active.";                            Risk="Safe" }
-            @{ Cat="Power";   Name="Power Limit 1 / 2 (PL1/PL2)";       Rec="Auto or Board Max";    Path="Advanced --> CPU Configuration --> CPU Power Limits";                  Desc="With good cooling, leave on Auto. Only reduce manually if throttling.";                 Risk="Moderate" }
-            @{ Cat="Boot";    Name="Fast Boot";                         Rec="Disabled";             Path="Boot --> Fast Boot";                                                   Desc="Disabling prevents POST issues.";                                                       Risk="Safe" }
-            @{ Cat="Security"; Name="Secure Boot";                      Rec="Enabled";              Path="Boot --> Secure Boot";                                                 Desc="Mandatory for Windows 11. Only disable for Linux dual-boot.";                           Risk="Safe" }
-            @{ Cat="Security"; Name="Disable Motherboard Auto-Install Utilities"; Rec="Disabled"; Path="ASUS: Tool > Auto Install ASUS Utilities  |  MSI: Settings > Advanced > MSI Driver Utility Installer  |  Gigabyte: Settings > Gigabyte Utilities Downloader  |  ASRock: Tool > Auto Driver Installer"; Desc="Stops the board from silently installing vendor utilities, drivers and background services into Windows on every boot (via WPBT). Complements the 'Disable WPBT' tweak. Grab any driver you need directly from the vendor's website instead.";  Risk="Safe" }
-        )
-    }
-    @{
-        Name    = "AMD Ryzen 5000 (Zen 3) + AM4"
-        Match   = @("5950X","5900X","5800X3D","5800X","5700X","5600X","5600")
-        Color   = "#ed1c24"
-        Settings = @(
-            @{ Cat="Memory";  Name="DOCP / XMP Profile";                Rec="Profile 1 (DOCP)";     Path="MIT --> Advanced Memory Settings --> Extreme Memory Profile";          Desc="AM4/DDR4 calls XMP DOCP. DDR4-3600 with 1:1 FCLK is optimal.";                          Risk="Safe" }
-            @{ Cat="Memory";  Name="FCLK Frequency";                    Rec="1800 MHz (at DDR4-3600)"; Path="MIT --> Advanced Memory Settings --> FCLK Frequency";              Desc="1:1 FCLK=MCLK at 3600 MHz gives maximum Infinity Fabric bandwidth.";                    Risk="Moderate" }
-            @{ Cat="CPU";     Name="Precision Boost Overdrive (PBO)";   Rec="Enabled / Advanced";   Path="MIT --> Advanced CPU Core Settings --> AMD Overclocking --> PBO";       Desc="Very mature on Zen 3. PBO2 with Curve Optimizer for max FPS.";                          Risk="Moderate" }
-            @{ Cat="GPU";     Name="Resizable BAR";                     Rec="Enabled";              Path="Settings --> IO Ports --> Above 4G Decoding + Re-Size BAR Support";     Desc="Important for RTX 30+ and RX 6000+.";                                                   Risk="Safe" }
-            @{ Cat="Power";   Name="Global C-State Control";            Rec="Auto";                 Path="MIT --> Advanced CPU Core Settings --> Global C-state Control";         Desc="Leave on Auto -- disabling manually can reduce performance.";                           Risk="Moderate" }
-            @{ Cat="Security"; Name="Secure Boot";                      Rec="Enabled";              Path="Settings --> Boot --> Windows OS Configuration --> Secure Boot";        Desc="Mandatory for Windows 11. Only disable for dual-boot.";                                 Risk="Safe" }
-            @{ Cat="CPU (Advanced)";       Name="Local APIC Mode";              Rec="x2APIC";         Path="MIT --> Advanced CPU Core Settings --> Local APIC Mode";    Desc="Modern interrupt-controller mode with lower interrupt overhead. Enable on all modern systems.";                                       Risk="Safe" }
-            @{ Cat="Prefetchers";          Name="CPU Prefetchers (L1/L2)";      Rec="Enabled / Auto"; Path="AMD CBS --> Prefetcher settings";                          Desc="Leave ALL prefetchers on. Disabling them is NOT automatically lower latency.";                                                        Risk="Safe" }
-            @{ Cat="PCIe";                 Name="Launch CSM";                   Rec="Disabled";       Path="Settings --> Boot --> CSM Support";                        Desc="Keep off -- required for Resizable BAR and modern UEFI GPU init.";                                                                    Risk="Safe" }
-            @{ Cat="Memory";               Name="Memory Interleaving";          Rec="Enabled (Auto)"; Path="MIT --> Advanced Memory Settings";                        Desc="Improves memory bandwidth. Leave enabled, size on Auto.";                                                                             Risk="Safe" }
-            @{ Cat="PCIe Power (Latency)"; Name="ASPM + LTR + Clock PM";        Rec="Disabled";       Path="Settings --> IO Ports / AMD CBS --> PCIe power";            Desc="Latency-focused: turning off PCIe ASPM, LTR and Clock Power Management removes PCIe power-state latency. Higher idle power/heat -- desktops only.";  Risk="Moderate" }
-            @{ Cat="C-States (Latency)";   Name="DF C-States (+ optional Global)"; Rec="Disabled";    Path="AMD CBS --> DF Common Options --> DF C-States";            Desc="Disabling Data Fabric C-states trims latency spikes. On AM4, latency-focused users may also disable Global C-State Control (higher idle power) -- the safe default stays Auto.";  Risk="Moderate" }
-            @{ Cat="Security"; Name="Disable Motherboard Auto-Install Utilities"; Rec="Disabled"; Path="ASUS: Tool > Auto Install ASUS Utilities  |  MSI: Settings > Advanced > MSI Driver Utility Installer  |  Gigabyte: Settings > Gigabyte Utilities Downloader  |  ASRock: Tool > Auto Driver Installer"; Desc="Stops the board from silently installing vendor utilities, drivers and background services into Windows on every boot (via WPBT). Complements the 'Disable WPBT' tweak. Grab any driver you need directly from the vendor's website instead.";  Risk="Safe" }
-        )
-    }
+$Script:Cats = @(
+    @{ Key = 'Windows';       Label = 'Windows';       Color = $Script:UI.WIN;    Panel = $WindowsPanel }
+    @{ Key = 'Gaming';        Label = 'Gaming';        Color = $Script:UI.AMBER;  Panel = $GamingPanel }
+    @{ Key = 'Network';       Label = 'Network';       Color = $Script:UI.CYAN;   Panel = $NetworkPanel }
+    @{ Key = 'RAM & Storage'; Label = 'RAM & Storage'; Color = $Script:UI.GREEN;  Panel = $RamStoragePanel }
+    @{ Key = 'Windows 11';    Label = 'Windows 11';    Color = $Script:UI.WIN11;  Panel = $Win11Panel }
+    @{ Key = 'Audio';         Label = 'Audio';         Color = $Script:UI.VIOLET; Panel = $AudioPanel }
+    @{ Key = 'GPU Tweaks';    Label = 'GPU';           Color = $Script:UI.NV;     Panel = $GpuPanel }
+    @{ Key = 'Power Plan';    Label = 'Power';         Color = $Script:UI.ORANGE; Panel = $PowerPanel }
 )
+$Script:CurrentCat = 'Windows'
 
-# -- Detect which profile matches this system ---------------------------------
-function Get-BiosProfile {
-    $cpu = $Script:HWInfo_CPU
-    if (-not $cpu) { return $null }
-    foreach ($biosProfile in $BiosProfiles) {
-        foreach ($key in $biosProfile.Match) {
-            if ($cpu -like "*$key*") { return $biosProfile }
-        }
+function Select-Category([string]$Key) {
+    $Script:CurrentCat = $Key
+    foreach ($c in $Script:Cats) {
+        $on = ($c.Key -eq $Key)
+        $c.Tab.Background = if ($on) { Brush $c.Color } else { [Windows.Media.Brushes]::Transparent }
+        $c.TabLabel.Foreground = Brush $(if ($on) { '#ffffff' } else { $Script:UI.TEXT2 })
+        $c.TabLabel.FontWeight = $(if ($on) { 'SemiBold' } else { 'Normal' })
+        $c.TabCount.Foreground = Brush $(if ($on) { (Mix-Hex $c.Color '#ffffff' 0.75) } else { $Script:UI.MUTED })
     }
-    return $null
+    if ($SearchBox.Text) { $SearchBox.Text = '' } else { Apply-TweakFilter }
+    $TweakScroll.ScrollToTop()
 }
 
-# -- Build BIOS Guide Panel ----------------------------------------------------
-function Build-BiosPanel {
-    $BiosPanel.Children.Clear()
+function Test-Contains([string]$Haystack, [string]$Needle) { $Haystack -and $Haystack.IndexOf($Needle, [StringComparison]::OrdinalIgnoreCase) -ge 0 }
 
-    $biosProfile = Get-BiosProfile
-
-    # Header notice
-    $notice = New-Object Windows.Controls.TextBlock
-    $notice.TextWrapping = [Windows.TextWrapping]::Wrap
-    $notice.Margin = New-Object Windows.Thickness(0,4,0,14)
-    $notice.FontSize = 11
-
-    if ($biosProfile) {
-        $notice.Text = "Detected platform: $($biosProfile.Name)"
-        $notice.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0,200,80))
-    } else {
-        $notice.Text = "CPU not recognized: $Script:HWInfo_CPU`nShowing general BIOS recommendations."
-        $notice.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(200,120,0))
-        # Use first profile as fallback
-        $biosProfile = $BiosProfiles[0]
+function Apply-TweakFilter {
+    $q = $SearchBox.Text.Trim()
+    $SearchHint.Visibility = $(if ($SearchBox.Text) { 'Collapsed' } else { 'Visible' })
+    if (-not $q) {
+        foreach ($c in $Script:Cats) { $c.Panel.Visibility = $(if ($c.Key -eq $Script:CurrentCat) { 'Visible' } else { 'Collapsed' }); $c.Title.Visibility = 'Collapsed' }
+        foreach ($r in $Script:TweakRows.Values) { $r.Card.Visibility = 'Visible' }
+        foreach ($h in $Script:GroupHeaders) { $h.Root.Visibility = 'Visible' }
+        foreach ($n in $Script:CatNotices) { $n.Visibility = 'Visible' }
+        $SearchEmpty.Visibility = 'Collapsed'
+        return
     }
-    $BiosPanel.Children.Add($notice) | Out-Null
-
-    # Warning banner
-    $warnBorder = New-Object Windows.Controls.Border
-    $warnBorder.Background      = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(40,25,10))
-    $warnBorder.BorderBrush     = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(200,120,0))
-    $warnBorder.BorderThickness = New-Object Windows.Thickness(0,0,0,2)
-    $warnBorder.CornerRadius    = New-Object Windows.CornerRadius(6)
-    $warnBorder.Padding         = New-Object Windows.Thickness(12,8,12,8)
-    $warnBorder.Margin          = New-Object Windows.Thickness(0,0,0,16)
-    $warnTb = New-Object Windows.Controls.TextBlock
-    $warnTb.Text = "Incorrect BIOS changes can make the system unbootable. This guide is purely informational -- nothing is changed automatically. When in doubt, research first."
-    $warnTb.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(255,160,60))
-    $warnTb.FontSize = 11
-    $warnTb.TextWrapping = [Windows.TextWrapping]::Wrap
-    $warnBorder.Child = $warnTb
-    $BiosPanel.Children.Add($warnBorder) | Out-Null
-
-    # Settings by category
-    # Note: $biosProfile.Settings are hashtables. Select-Object -ExpandProperty
-    # does NOT reliably read hashtable keys, so extract categories manually.
-    $categories = @()
-    foreach ($s in $biosProfile.Settings) {
-        if ($categories -notcontains $s.Cat) { $categories += $s.Cat }
+    $hits = 0
+    foreach ($r in $Script:TweakRows.Values) {
+        $t = $r.Tweak
+        $m = (Test-Contains $t.Name $q) -or (Test-Contains (Get-TweakDesc $t) $q) -or (Test-Contains $t.Group $q)
+        $r.Card.Visibility = $(if ($m) { 'Visible' } else { 'Collapsed' }); if ($m) { $hits++ }
     }
-    foreach ($cat in $categories) {
-        # Category header
-        $catHdr = New-Object Windows.Controls.TextBlock
-        $catHdr.Text       = "-- $cat"
-        $catHdr.FontSize   = 12
-        $catHdr.FontWeight = "SemiBold"
-        $catHdr.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0,212,170))
-        $catHdr.Margin     = New-Object Windows.Thickness(0,10,0,4)
-        $BiosPanel.Children.Add($catHdr) | Out-Null
+    foreach ($h in $Script:GroupHeaders) {
+        $any = @($h.Names | Where-Object { $Script:TweakRows[$_].Card.Visibility -eq 'Visible' }).Count
+        $h.Root.Visibility = $(if ($any) { 'Visible' } else { 'Collapsed' })
+    }
+    foreach ($n in $Script:CatNotices) { $n.Visibility = 'Collapsed' }
+    foreach ($c in $Script:Cats) {
+        $any = @($AllTweaks | Where-Object { $_.Category -eq $c.Key -and $Script:TweakRows[$_.Name].Card.Visibility -eq 'Visible' }).Count
+        $c.Panel.Visibility = $(if ($any) { 'Visible' } else { 'Collapsed' }); $c.Title.Visibility = 'Visible'
+    }
+    $SearchEmpty.Visibility = $(if ($hits) { 'Collapsed' } else { 'Visible' })
+    $StatusText.Text = "$hits tweak(s) match '$q' (all categories)"
+}
 
-        foreach ($setting in ($biosProfile.Settings | Where-Object { $_.Cat -eq $cat })) {
-            $row = New-Object Windows.Controls.Border
-            $row.Background      = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(22,33,62))
-            $row.BorderBrush     = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(40,50,80))
-            $row.BorderThickness = New-Object Windows.Thickness(1)
-            $row.CornerRadius    = New-Object Windows.CornerRadius(6)
-            $row.Padding         = New-Object Windows.Thickness(14,10,14,10)
-            $row.Margin          = New-Object Windows.Thickness(0,2,0,2)
+function Update-Counts {
+    $a = @($Script:TweakState.Values | Where-Object { $_ -eq 'active' }).Count
+    $i = @($Script:TweakState.Values | Where-Object { $_ -eq 'inactive' }).Count
+    $u = @($Script:TweakState.Values | Where-Object { $_ -eq 'unknown' }).Count
+    $CountsText.Text = "$a active$($Script:Mid)$i inactive$($Script:Mid)$u one-time"
+    foreach ($h in $Script:GroupHeaders) {
+        $on = @($h.Names | Where-Object { $Script:TweakState[$_] -eq 'active' }).Count
+        $h.Root.Tag.Text = "$($h.Names.Count) tweaks$($Script:Mid)$on active"
+    }
+    if (Get-Command Update-ScoreCard -ErrorAction SilentlyContinue)   { Update-ScoreCard }
+    if (Get-Command Update-PresetCards -ErrorAction SilentlyContinue) { Update-PresetCards }
+}
 
-            $grid = New-Object Windows.Controls.Grid
-            $col1 = New-Object Windows.Controls.ColumnDefinition; $col1.Width = New-Object Windows.GridLength(200)
-            $col2 = New-Object Windows.Controls.ColumnDefinition; $col2.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star)
-            $col3 = New-Object Windows.Controls.ColumnDefinition; $col3.Width = New-Object Windows.GridLength(65)
-            $grid.ColumnDefinitions.Add($col1)
-            $grid.ColumnDefinitions.Add($col2)
-            $grid.ColumnDefinitions.Add($col3)
+function Invoke-Verify {
+    $StatusText.Text = "Verifying tweak status..."
+    $Window.Dispatcher.Invoke([Action] {}, [System.Windows.Threading.DispatcherPriority]::Render)
+    $active = 0; $inactive = 0; $unknown = 0
+    foreach ($tweak in $AllTweaks) {
+        if ($Script:TweakDots.ContainsKey($tweak.Name)) {
+            $result = Update-TweakDot $Script:TweakDots[$tweak.Name] $tweak.Name
+            switch ($result) {
+                "active" {
+                    $active++
+                    # Tick the checkbox for tweaks detected as already active (green dot).
+                    # Purely additive -- a manual selection on inactive tweaks is left alone.
+                    if ($CheckBoxMap.ContainsKey($tweak.Name) -and $CheckBoxMap[$tweak.Name].IsEnabled) { $CheckBoxMap[$tweak.Name].IsChecked = $true }
+                }
+                "inactive" { $inactive++ }
+                default    { $unknown++ }
+            }
+        }
+    }
+    Update-Counts
+    $checkable = $active + $inactive
+    $StatusText.Text = "Verify complete: $active of $checkable checkable tweaks active (ticked)$($Script:Mid)$unknown one-time actions$($Script:Mid)verified $(Get-Date -Format 'HH:mm')"
+}
 
-            # Setting name
-            $tbName = New-Object Windows.Controls.TextBlock
-            $tbName.Text      = $setting.Name
-            $tbName.FontSize  = 13
-            $tbName.FontWeight = "SemiBold"
-            $tbName.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(220,220,220))
-            $tbName.VerticalAlignment = "Top"
-            $tbName.TextWrapping = [Windows.TextWrapping]::Wrap
-            [Windows.Controls.Grid]::SetColumn($tbName, 0)
+# =============================================================================
+# NAVIGATION
+# =============================================================================
+$Script:Pages = [ordered]@{
+    dashboard = @{ Page = $Window.FindName("PageDashboard"); Btn = $Window.FindName("NavDashboard"); Bar = $Window.FindName("NavBarDashboard"); Ico = $Window.FindName("NavIcoDashboard"); Txt = $Window.FindName("NavTxtDashboard"); Color = $Script:UI.RED }
+    tweaks    = @{ Page = $Window.FindName("PageTweaks");    Btn = $Window.FindName("NavTweaks");    Bar = $Window.FindName("NavBarTweaks");    Ico = $Window.FindName("NavIcoTweaks");    Txt = $Window.FindName("NavTxtTweaks");    Color = $Script:UI.RED }
+    presets   = @{ Page = $Window.FindName("PagePresets");   Btn = $Window.FindName("NavPresets");   Bar = $Window.FindName("NavBarPresets");   Ico = $Window.FindName("NavIcoPresets");   Txt = $Window.FindName("NavTxtPresets");   Color = $Script:UI.AMBER }
+    bios      = @{ Page = $Window.FindName("PageBios");      Btn = $Window.FindName("NavBios");      Bar = $Window.FindName("NavBarBios");      Ico = $Window.FindName("NavIcoBios");      Txt = $Window.FindName("NavTxtBios");      Color = $Script:UI.AMBER }
+    backups   = @{ Page = $Window.FindName("PageBackups");   Btn = $Window.FindName("NavBackups");   Bar = $Window.FindName("NavBarBackups");   Ico = $Window.FindName("NavIcoBackups");   Txt = $Window.FindName("NavTxtBackups");   Color = $Script:UI.VIOLET }
+}
+$Script:CurrentPage = ''
+function Show-Page([string]$Key) {
+    foreach ($k in $Script:Pages.Keys) {
+        $p = $Script:Pages[$k]; $on = ($k -eq $Key)
+        $p.Page.Visibility = $(if ($on) { 'Visible' } else { 'Collapsed' })
+        $p.Btn.Background  = if ($on) { Brush (Mix-Hex $Script:UI.SIDE $p.Color 0.16) } else { [Windows.Media.Brushes]::Transparent }
+        $p.Bar.Background  = Brush $p.Color
+        $p.Bar.Visibility  = $(if ($on) { 'Visible' } else { 'Hidden' })
+        $p.Ico.Foreground  = Brush $(if ($on) { $p.Color } else { $Script:UI.DIM })
+        $p.Txt.Foreground  = Brush $(if ($on) { '#ffffff' } else { $Script:UI.TEXT2 })
+        $p.Txt.FontWeight  = $(if ($on) { 'SemiBold' } else { 'Normal' })
+    }
+    $Script:CurrentPage = $Key
+    if ($Key -eq 'bios' -and -not $Script:BiosDetectDone -and (Get-Command Invoke-BiosDetect -ErrorAction SilentlyContinue)) { Invoke-BiosDetect }
+    if ($Key -eq 'backups' -and (Get-Command Build-BackupsPage -ErrorAction SilentlyContinue)) { Build-BackupsPage }
+}
+foreach ($k in @($Script:Pages.Keys)) {
+    $key = $k
+    $Script:Pages[$k].Btn.Add_Click({ Show-Page $key }.GetNewClosure())
+}
 
-            # Path + Desc
-            $tbDesc = New-Object Windows.Controls.StackPanel
-            $tbPath = New-Object Windows.Controls.TextBlock
-            $tbPath.Text      = "Path: $($setting.Path)"
-            $tbPath.FontSize  = 10
-            $tbPath.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0,212,170))
-            $tbPath.TextWrapping = [Windows.TextWrapping]::Wrap
-            $tbPath.Margin    = New-Object Windows.Thickness(0,0,0,2)
-            $tbExpl = New-Object Windows.Controls.TextBlock
-            $tbExpl.Text      = $setting.Desc
-            $tbExpl.FontSize  = 11
-            $tbExpl.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(170,170,170))
-            $tbExpl.TextWrapping = [Windows.TextWrapping]::Wrap
-            $tbDescRec = New-Object Windows.Controls.TextBlock
-            $tbDescRec.Text   = "Recommended: $($setting.Rec)"
-            $tbDescRec.FontSize = 11
-            $tbDescRec.FontWeight = "SemiBold"
-            $tbDescRec.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(255,200,80))
-            $tbDescRec.Margin = New-Object Windows.Thickness(0,4,0,0)
-            $tbDesc.Children.Add($tbPath)    | Out-Null
-            $tbDesc.Children.Add($tbExpl)    | Out-Null
-            $tbDesc.Children.Add($tbDescRec) | Out-Null
-            [Windows.Controls.Grid]::SetColumn($tbDesc, 1)
+# =============================================================================
+# BUILD TWEAK PAGE  (category tabs + panels + rows)
+# =============================================================================
+foreach ($c in $Script:Cats) {
+    $cat = $c
+    $count = @($AllTweaks | Where-Object { $_.Category -eq $cat.Key }).Count
+    $lbl = New-Text $cat.Label 12.5 $Script:UI.TEXT2
+    $cnt = New-Text " $count" 11.5 $Script:UI.MUTED 'Normal' -Margin 3, 1, 0, 0
+    $tab = New-Object Windows.Controls.Button
+    $tab.Style = $Script:TabStyle; $tab.Content = New-HStack @($lbl, $cnt)
+    $tab.Add_Click({ Select-Category $cat.Key }.GetNewClosure())
+    $CatTabs.Children.Add($tab) | Out-Null
+    $c.Tab = $tab; $c.TabLabel = $lbl; $c.TabCount = $cnt
 
-            # Risk badge
-            $riskColor = if ($setting.Risk -eq "Safe") { [Windows.Media.Color]::FromRgb(0,160,60) } else { [Windows.Media.Color]::FromRgb(200,120,0) }
-            $riskBorder = New-Object Windows.Controls.Border
-            $riskBorder.Background      = New-Object Windows.Media.SolidColorBrush ($riskColor)
-            $riskBorder.CornerRadius    = New-Object Windows.CornerRadius(4)
-            $riskBorder.Padding         = New-Object Windows.Thickness(6,2,6,2)
-            $riskBorder.HorizontalAlignment = "Center"
-            $riskBorder.VerticalAlignment   = "Top"
-            $riskBorder.Margin = New-Object Windows.Thickness(8,0,0,0)
-            $riskTb = New-Object Windows.Controls.TextBlock
-            $riskTb.Text      = $setting.Risk
-            $riskTb.FontSize  = 10
-            $riskTb.FontWeight = "Bold"
-            $riskTb.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(255,255,255))
-            $riskBorder.Child = $riskTb
-            [Windows.Controls.Grid]::SetColumn($riskBorder, 2)
+    $panel = $c.Panel
+    $title = New-Text $c.Label.ToUpper() 13 $c.Color 'SemiBold' -Margin 0, 10, 0, 6
+    $title.Visibility = 'Collapsed'
+    $panel.Children.Add($title) | Out-Null
+    $c.Title = $title
 
-            $grid.Children.Add($tbName)    | Out-Null
-            $grid.Children.Add($tbDesc)    | Out-Null
-            $grid.Children.Add($riskBorder)| Out-Null
-            $row.Child = $grid
-            $BiosPanel.Children.Add($row) | Out-Null
+    if ($c.Key -eq 'Windows 11') {
+        $n = if ($IsWin11) { New-Banner "Windows 11 (build $OSBuild) detected -- all tweaks in this tab are available." $Script:UI.GREEN 0xE73E }
+             else { New-Banner "Windows 10 detected (build $OSBuild) -- these tweaks need Windows 11 and are disabled." $Script:UI.AMBER 0xE7BA }
+        $panel.Children.Add($n) | Out-Null; $Script:CatNotices += $n
+    }
+    if ($c.Key -eq 'GPU Tweaks') {
+        $n = if ($IsNVIDIA) { New-Banner "$GPU detected -- NVIDIA tweaks are available, AMD tweaks are greyed out." $Script:UI.NV 0xE7F4 }
+             elseif ($IsAMD) { New-Banner "$GPU detected -- AMD tweaks are available, NVIDIA tweaks are greyed out." $Script:UI.RED 0xE7F4 }
+             else { New-Banner "$GPU detected -- no brand-specific GPU tweaks for this card." $Script:UI.AMBER 0xE7F4 }
+        $panel.Children.Add($n) | Out-Null; $Script:CatNotices += $n
+    }
+    if ($c.Key -eq 'Network') {
+        try {
+            $activeAdapter = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
+            $ipConfig   = if ($activeAdapter) { Get-NetIPConfiguration -InterfaceIndex $activeAdapter.InterfaceIndex -ErrorAction SilentlyContinue }
+            $gw         = if ($ipConfig) { ($ipConfig.IPv4DefaultGateway | Select-Object -First 1).NextHop }
+            $dnsServers = if ($ipConfig) { ($ipConfig.DNSServer | Where-Object { $_.AddressFamily -eq 2 } | Select-Object -ExpandProperty ServerAddresses) -join ", " }
+            $txt = if ($activeAdapter) { "$($activeAdapter.Name): $($activeAdapter.InterfaceDescription) ($($activeAdapter.LinkSpeed))$($Script:Mid)gateway $(if ($gw) { $gw } else { 'unknown' })$($Script:Mid)DNS $(if ($dnsServers) { $dnsServers } else { 'unknown' })" } else { "No active network adapter detected." }
+        } catch { $txt = "Network info unavailable." }
+        $n = New-Banner "$txt  (Ping test: Dashboard)" $Script:UI.CYAN 0xE839
+        $panel.Children.Add($n) | Out-Null; $Script:CatNotices += $n
+    }
+
+    $groups = $AllTweaks | Where-Object { $_.Category -eq $cat.Key } | Select-Object -ExpandProperty Group -Unique
+    $first = $true
+    foreach ($group in $groups) {
+        $names = @($AllTweaks | Where-Object { $_.Category -eq $cat.Key -and $_.Group -eq $group } | ForEach-Object { $_.Name })
+        $hdr = New-SectionTitle $group $Script:UI.WIN11 '' $(if ($first) { @(0, 2, 0, 8) } else { @(0, 10, 0, 8) })
+        $first = $false
+        $panel.Children.Add($hdr) | Out-Null
+        $Script:GroupHeaders += @{ Root = $hdr; Names = $names; Cat = $cat.Key }
+        foreach ($tweak in ($AllTweaks | Where-Object { $_.Category -eq $cat.Key -and $_.Group -eq $group })) {
+            $panel.Children.Add((New-TweakRow $tweak)) | Out-Null
         }
     }
 }
-
-# -----------------------------------------
-# PERFORMANCE DASHBOARD
-# Live system snapshot + Vorher/Nachher tweak-status comparison, built on top
-# of the existing $CheckFunctions (same functions the Verify button uses).
-# -----------------------------------------
-$Script:DashboardSnapshot = $null
+$SearchBox.Add_TextChanged({ Apply-TweakFilter })
 
 # -----------------------------------------
 # BASELINE / DRIFT DETECTION
@@ -3668,146 +3975,839 @@ function Get-DriftedTweaks {
     return $drifted
 }
 
-function Get-DashboardLiveInfo {
-    $powerPlan = try { ((powercfg /getactivescheme 2>$null) -replace '.*\(([^)]+)\).*', '$1') } catch { "unknown" }
-    $timerRes  = if ((Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" "GlobalTimerResolutionRequests") -eq 1) { "0.5ms (enabled)" } else { "default" }
-    $active = 0; $inactive = 0; $unknown = 0
-    foreach ($tweak in $AllTweaks) {
-        if ($CheckFunctions.ContainsKey($tweak.Name)) {
-            try { $v = & $CheckFunctions[$tweak.Name] } catch { $v = $null }
-            if ($v -eq $true) { $active++ } elseif ($v -eq $false) { $inactive++ } else { $unknown++ }
-        } else { $unknown++ }
-    }
-    # Optimization Score = share of checkable (non one-time) tweaks that are active.
-    $checkable = $active + $inactive
-    $score     = if ($checkable -gt 0) { [math]::Round($active / $checkable * 100) } else { 0 }
-    # Monitor refresh rate (locale-safe numeric via CIM). Current vs. adapter max.
-    $vc    = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Where-Object { $_.CurrentRefreshRate } | Select-Object -First 1
-    $curHz = if ($vc) { [int]$vc.CurrentRefreshRate } else { 0 }
-    $maxHz = if ($vc) { [int]$vc.MaxRefreshRate } else { 0 }
-    [PSCustomObject]@{
-        PowerPlan = $powerPlan
-        TimerRes  = $timerRes
-        Active    = $active
-        Inactive  = $inactive
-        Unknown   = $unknown
-        Checkable = $checkable
-        Score     = $score
-        CurHz     = $curHz
-        MaxHz     = $maxHz
-    }
+# =============================================================================
+# BIOS GUIDE  --  every desktop platform since Intel 8th gen / AMD Ryzen 1000,
+# with the menu path per board maker (ported from GameOptimizerPro v2.1
+# core/bios_guide.py). Detection only PRE-SELECTS platform + board maker;
+# every profile can be opened. Read-only: nothing here changes the PC.
+# =============================================================================
+$Script:BiosVendors = [ordered]@{ asus = 'ASUS'; msi = 'MSI'; gigabyte = 'Gigabyte'; asrock = 'ASRock'; other = 'Other / unknown' }
+
+function New-BiosSetting {
+    param([string]$Key, [string]$Cat, [string]$Name, [string]$Rec, [string]$Def, [string]$Path, [string]$Expl, [string]$ExplDE,
+          [string]$Risk = 'safe', [string]$Impact = 'medium', [string]$Detect = '', [hashtable]$Paths = @{})
+    [pscustomobject]@{ Key = $Key; Cat = $Cat; Name = $Name; Rec = $Rec; Def = $Def; Path = $Path; Expl = $Expl; ExplDE = $ExplDE
+                       Risk = $Risk; Impact = $Impact; Detect = $Detect; Paths = $Paths }
 }
 
-function New-DashboardStatRow($label, $value) {
-    $row = New-Object Windows.Controls.StackPanel
-    $row.Orientation = "Horizontal"
-    $row.Margin      = New-Object Windows.Thickness(0,2,0,2)
-    $tbLabel = New-Object Windows.Controls.TextBlock
-    $tbLabel.Text     = "${label}: "
-    $tbLabel.FontSize = 12
-    $tbLabel.FontWeight = "SemiBold"
-    $tbLabel.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0,212,170))
-    $tbLabel.Width    = 150
-    $tbValue = New-Object Windows.Controls.TextBlock
-    $tbValue.Text       = "$value"
-    $tbValue.FontSize   = 12
-    $tbValue.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(221,221,221))
-    $tbValue.TextWrapping = [Windows.TextWrapping]::Wrap
-    $row.Children.Add($tbLabel) | Out-Null
-    $row.Children.Add($tbValue) | Out-Null
-    return $row
+function BS-MemoryProfile([string]$Brand, [string]$Ddr, [string]$Target, [string]$Note = '', [string]$NoteDE = '') {
+    $amd = $Brand -eq 'amd'
+    $name = if ($amd) { if ($Ddr -eq 'DDR5') { 'EXPO profile' } else { 'D.O.C.P. / A-XMP profile' } } else { 'XMP profile' }
+    $paths = if ($amd) { @{
+        asus = "Ai Tweaker -> Ai Overclock Tuner -> $(if ($Ddr -eq 'DDR5') { 'EXPO I' } else { 'D.O.C.P.' })"
+        msi = 'OC -> A-XMP / EXPO -> Profile 1 (or the EXPO / A-XMP switch in EZ Mode)'
+        gigabyte = 'Tweaker -> Extreme Memory Profile (X.M.P.) / EXPO -> Profile1 (also in Easy Mode)'
+        asrock = 'OC Tweaker -> DRAM Profile Configuration -> DRAM Profile Setting -> EXPO/XMP profile 1' }
+    } else { @{
+        asus = 'Ai Tweaker -> Ai Overclock Tuner -> XMP I'
+        msi = 'OC -> Extreme Memory Profile (XMP) -> Profile 1 (or the XMP switch in EZ Mode)'
+        gigabyte = 'Tweaker -> Extreme Memory Profile (X.M.P.) -> Profile1 (also in Easy Mode)'
+        asrock = 'OC Tweaker -> DRAM Profile Configuration -> XMP profile 1' } }
+    New-BiosSetting -Key 'memory_profile' -Cat 'Memory' -Name $name -Rec "Profile 1 ($Target)" -Def 'Off -- JEDEC base clock' `
+        -Path 'OC / Tweaker menu -> memory profile (EXPO or XMP / DOCP) -> Profile 1' `
+        -Expl ("Without a profile the RAM only runs at the slow $Ddr base clock -- the biggest free gain in the BIOS, especially for the 1% lows in CPU-heavy games. " + $(if ($Note) { "$Note " }) + "If the PC won't boot or crashes afterwards: try profile 2 or one speed step lower; many boards reset themselves after 3 failed boots.") `
+        -ExplDE ("Ohne Profil laeuft der RAM nur mit dem langsamen $Ddr-Standardtakt -- der groesste kostenlose Gewinn im BIOS, vor allem fuer die 1-%-Lows in CPU-lastigen Spielen. " + $(if ($NoteDE) { "$NoteDE " }) + "Startet der PC danach nicht oder gibt es Abstuerze: Profil 2 oder ein Takt-Schritt niedriger; viele Boards setzen nach 3 Fehlstarts selbst zurueck.") `
+        -Risk 'safe' -Impact 'high' -Detect 'expo_xmp' -Paths $paths
+}
+function BS-Rebar([string]$Brand, [string]$Note = '', [string]$NoteDE = '') {
+    New-BiosSetting -Key 'rebar' -Cat 'GPU' -Name 'Resizable BAR (+ Above 4G Decoding)' -Rec 'Above 4G Decoding = Enabled, Re-Size BAR Support = Enabled' -Def 'Disabled' `
+        -Path 'PCI / IO settings -> Above 4G Decoding = Enabled -> Re-Size BAR Support = Enabled' `
+        -Expl ("Lets the CPU address the whole video memory at once instead of 256 MB chunks. NVIDIA uses it for the games it is enabled for in the driver; on AMD cards it is called Smart Access Memory and works almost everywhere. Requires CSM off (UEFI boot). $Note").Trim() `
+        -ExplDE ("Die CPU darf den ganzen Grafikspeicher auf einmal ansprechen statt in 256-MB-Haeppchen. NVIDIA nutzt es fuer die Spiele, fuer die es im Treiber freigegeben ist; bei AMD-Karten heisst es 'Smart Access Memory' und wirkt fast ueberall. Voraussetzung: CSM aus (UEFI-Start). $NoteDE").Trim() `
+        -Risk 'safe' -Impact 'high' -Detect 'rebar' -Paths @{
+            asus = 'Advanced -> PCI Subsystem Settings -> Above 4G Decoding = Enabled -> Re-Size BAR Support = Enabled'
+            msi = 'Settings -> Advanced -> PCIe/PCI Sub-system Settings -> Above 4G memory/Crypto Currency mining = Enabled -> Re-Size BAR Support = Enabled'
+            gigabyte = 'Settings -> IO Ports -> Above 4G Decoding = Enabled -> Re-Size BAR Support = Auto/Enabled'
+            asrock = "Advanced -> PCI Configuration -> Above 4G Decoding = Enabled -> Re-Size BAR Support$(if ($Brand -eq 'amd') { ' (on AMD boards also called C.A.M.)' }) = Enabled" }
+}
+function BS-Csm {
+    New-BiosSetting -Key 'csm' -Cat 'Boot' -Name 'CSM (legacy boot) off' -Rec 'Disabled (pure UEFI boot)' -Def 'Auto / Enabled depending on the board' `
+        -Path 'Boot -> CSM (Compatibility Support Module) -> Disabled' `
+        -Expl 'The old legacy BIOS mode. Off is required for Resizable BAR and Secure Boot. IMPORTANT: only turn it off if Windows is installed in UEFI mode -- check with msinfo32 -> BIOS Mode: UEFI. If it says Legacy, Windows will not boot without CSM.' `
+        -ExplDE "Der alte Legacy-BIOS-Modus. Aus = Voraussetzung fuer Resizable BAR und Secure Boot. WICHTIG: nur ausschalten, wenn Windows im UEFI-Modus installiert ist -- pruefen mit msinfo32 -> 'BIOS-Modus: UEFI'. Steht dort 'Legacy', startet Windows ohne CSM nicht." `
+        -Risk 'moderate' -Impact 'medium' -Detect 'csm' -Paths @{
+            asus = 'Boot -> CSM (Compatibility Support Module) -> Launch CSM = Disabled'
+            msi = 'Settings -> Advanced -> Windows OS Configuration -> BIOS UEFI/CSM Mode = UEFI'
+            gigabyte = 'Boot -> CSM Support = Disabled'
+            asrock = 'Boot -> CSM (Compatibility Support Module) -> CSM = Disabled' }
+}
+function BS-SecureBoot {
+    New-BiosSetting -Key 'secure_boot' -Cat 'Boot' -Name 'Secure Boot' -Rec 'Enabled' -Def 'often Disabled (or Other OS)' `
+        -Path 'Boot / Security -> Secure Boot = Enabled' `
+        -Expl 'No FPS gain, but more and more games require it: Valorant/Vanguard on Windows 11, Battlefield 6, Call of Duty and other anti-cheats will not start without Secure Boot. Needs CSM off. If the BIOS reports missing keys: Restore Factory Keys / Install default Secure Boot keys.' `
+        -ExplDE "Bringt keine FPS, ist aber fuer immer mehr Spiele Pflicht: Valorant/Vanguard unter Windows 11, Battlefield 6, Call of Duty und weitere Anti-Cheats starten ohne Secure Boot nicht. Braucht CSM aus. Meldet das BIOS fehlende Schluessel: 'Restore Factory Keys' bzw. 'Install default Secure Boot keys'." `
+        -Risk 'safe' -Impact 'medium' -Detect 'secure_boot' -Paths @{
+            asus = 'Boot -> Secure Boot -> OS Type = Windows UEFI mode'
+            msi = 'Settings -> Security -> Secure Boot -> Secure Boot = Enabled'
+            gigabyte = 'Boot -> Secure Boot -> Secure Boot = Enabled'
+            asrock = 'Security -> Secure Boot -> Secure Boot = Enabled' }
+}
+function BS-BiosUpdate([string]$What, [string]$WhatDE, [string]$Risk = 'safe', [string]$Impact = 'medium') {
+    New-BiosSetting -Key 'bios_update' -Cat 'Boot' -Name 'Keep the BIOS up to date' -Rec 'latest version from the board maker' -Def 'factory version' `
+        -Path "BIOS flash tool -- file from the board's support page on a FAT32 USB stick" `
+        -Expl "$What Before flashing, note your EXPO/XMP setting (everything is reset to defaults afterwards) and never switch the PC off while it flashes." `
+        -ExplDE "$WhatDE Vor dem Flashen das EXPO/XMP-Profil notieren (danach ist alles auf Standard) und den PC waehrenddessen nicht ausschalten." `
+        -Risk $Risk -Impact $Impact -Paths @{
+            asus = 'Tool -> ASUS EZ Flash 3 Utility (file on a USB stick)'
+            msi = 'M-FLASH (start screen, bottom left) -- file on a USB stick'
+            gigabyte = 'Q-Flash (F8) -- file on a USB stick'
+            asrock = 'Tool -> Instant Flash -- file on a USB stick' }
+}
+function BS-AutoInstall {
+    New-BiosSetting -Key 'autoinstall' -Cat 'Boot' -Name 'Board maker auto-install off' -Rec 'Disabled' -Def 'Enabled' `
+        -Path 'Maker menu -> automatic installation of board software = Disabled' `
+        -Expl 'Otherwise the board silently installs vendor software, background services and driver downloaders on the first Windows start (Armoury Crate, MSI Center, GIGABYTE Control Center ...). Get the drivers you need directly from the maker''s website.' `
+        -ExplDE 'Sonst installiert das Board beim ersten Windows-Start ungefragt Hersteller-Software, Hintergrunddienste und Treiber-Downloader (Armoury Crate, MSI Center, GIGABYTE Control Center ...). Treiber bei Bedarf direkt von der Hersteller-Seite laden.' `
+        -Risk 'safe' -Impact 'low' -Paths @{
+            asus = 'Tool -> ASUS Armoury Crate -> Download & Install ARMOURY CRATE app = Disabled'
+            msi = 'Settings -> Advanced -> MSI Driver Utility Installer = Disabled'
+            gigabyte = 'Settings -> GIGABYTE Utilities Downloader Configuration -> Disabled'
+            asrock = 'Tool -> Auto Driver Installer = Disabled' }
+}
+function BS-PcieGpu {
+    New-BiosSetting -Key 'pcie_gpu' -Cat 'GPU' -Name 'PCIe speed of the graphics card slot' -Rec 'Auto' -Def 'Auto' `
+        -Path 'PCIe settings of the GPU slot (e.g. PCIEX16_1 Link Speed / PCI_E1 Gen Switch) = Auto' `
+        -Expl 'On Auto the card uses the fastest mode that slot and card support. Only on black screens, flickering or no signal after installing a card (especially RTX 50 / PCIe 5.0 with a riser cable) set it one step lower (Gen 4) -- costs practically nothing in games.' `
+        -ExplDE "Auf Auto nimmt die Karte die schnellste Stufe, die Slot und Karte koennen. Nur bei Schwarzbild, Bildaussetzern oder 'kein Signal' nach dem Einbau (vor allem RTX 50 / PCIe 5.0 mit Riser-Kabel) eine Stufe fest einstellen (Gen 4) -- kostet in Spielen praktisch nichts." `
+        -Risk 'safe' -Impact 'low'
+}
+$Script:AmdPboPaths = @{
+    asus = 'Ai Tweaker -> Precision Boost Overdrive (AM4: Advanced -> AMD Overclocking -> Precision Boost Overdrive)'
+    msi = 'OC -> Advanced CPU Configuration -> AMD Overclocking -> Precision Boost Overdrive'
+    gigabyte = 'Tweaker -> Advanced CPU Settings -> Precision Boost Overdrive (or Settings -> AMD Overclocking)'
+    asrock = 'Advanced -> AMD Overclocking -> Precision Boost Overdrive' }
+$Script:AmdCoPaths = @{
+    asus = 'Ai Tweaker -> Precision Boost Overdrive -> Curve Optimizer -> All Cores -> Negative'
+    msi = 'OC -> Advanced CPU Configuration -> AMD Overclocking -> Precision Boost Overdrive -> Advanced -> Curve Optimizer'
+    gigabyte = 'Tweaker -> Advanced CPU Settings -> Precision Boost Overdrive -> Curve Optimizer'
+    asrock = 'Advanced -> AMD Overclocking -> Precision Boost Overdrive -> Curve Optimizer' }
+function BS-Pbo([string]$Kind) {
+    $t = @{
+        zen5     = @('Enabled (PBO limits: Motherboard)', 'moderate', 'medium',
+                     'Lets the CPU draw more power and boost higher for longer. Usually 1-3 % in games, more in multi-core loads -- but warmer. Worth it with a good cooler; together with the Curve Optimizer it gains the most.',
+                     'Laesst die CPU mehr Strom ziehen und laenger hoch boosten. In Spielen meist 1-3 %, in Mehrkern-Last mehr -- dafuer waermer. Mit einem guten Kuehler sinnvoll; zusammen mit dem Curve Optimizer bringt es am meisten.')
+        zen5_x3d = @('Enabled (+ up to +200 MHz Boost Override)', 'moderate', 'medium',
+                     'Unlike the 7000X3D, the 9000X3D are unlocked: PBO with Curve Optimizer and up to +200 MHz Boost Override is allowed. Keep an eye on temperatures (the cache now sits under the cores, so cooling is better than on Zen 4).',
+                     'Die 9000X3D sind -- anders als die 7000X3D -- offen: PBO mit Curve Optimizer und bis zu +200 MHz Boost Override ist erlaubt. Temperaturen im Blick behalten (der Cache sitzt jetzt unter den Kernen, die Kuehlung ist dadurch besser als bei Zen 4).')
+        zen4_x3d = @('Advanced -> Curve Optimizer only (limits: Auto)', 'moderate', 'medium',
+                     'On the 7000X3D clocks and power limits are locked -- PBO only works through the Curve Optimizer (negative = less voltage -> more boost at the same temperature).',
+                     'Bei den 7000X3D sind Takt und Leistungsgrenzen gesperrt -- PBO wirkt nur ueber den Curve Optimizer (negativ = weniger Spannung -> mehr Boost bei gleicher Temperatur).')
+        zen4     = @('Enabled', 'moderate', 'medium',
+                     'More boost under load; little in games, clearly more in multi-core loads. Ryzen 7000 quickly reaches 95 C -- that is by design, but with the Curve Optimizer the CPU stays cooler.',
+                     'Mehr Boost unter Last; in Spielen wenig, in Mehrkern-Last deutlich. Ryzen 7000 wird schnell 95 Grad heiss -- das ist bei ihnen gewollt, aber mit Curve Optimizer bleibt die CPU kuehler.')
+        zen3     = @('Enabled', 'moderate', 'medium',
+                     'More boost under load. Together with a negative Curve Optimizer the best lever on Ryzen 5000.',
+                     'Mehr Boost unter Last. Zusammen mit einem negativen Curve Optimizer der beste Hebel bei Ryzen 5000.')
+        zen2     = @('Auto / Enabled', 'moderate', 'low',
+                     'On Ryzen 3000 PBO gains little (mostly < 2 %) -- it can stay on if the cooler copes.',
+                     'Bei Ryzen 3000 bringt PBO nur wenig (meist < 2 %) -- kann an bleiben, wenn der Kuehler reicht.')
+    }[$Kind]
+    New-BiosSetting -Key 'pbo' -Cat 'CPU' -Name 'Precision Boost Overdrive (PBO)' -Rec $t[0] -Def 'Auto (= off)' `
+        -Path 'Advanced -> AMD Overclocking -> Precision Boost Overdrive' -Expl $t[3] -ExplDE $t[4] -Risk $t[1] -Impact $t[2] -Paths $Script:AmdPboPaths
+}
+function BS-CurveOptimizer([string]$Rec, [string]$Expl, [string]$ExplDE) {
+    New-BiosSetting -Key 'curve_optimizer' -Cat 'CPU' -Name 'Curve Optimizer (undervolting)' -Rec $Rec -Def '0 (off)' `
+        -Path 'AMD Overclocking -> Precision Boost Overdrive -> Curve Optimizer' `
+        -Expl "$Expl Test stability afterwards (e.g. OCCT or CoreCycler, also at idle -- instability often shows while browsing, not under load)." `
+        -ExplDE "$ExplDE Danach stabil testen (z. B. OCCT oder CoreCycler, auch im Leerlauf -- Instabilitaet zeigt sich oft beim Surfen, nicht unter Last)." `
+        -Risk 'moderate' -Impact 'medium' -Paths $Script:AmdCoPaths
+}
+function BS-Fclk([string]$Value, [string]$Expl, [string]$ExplDE) {
+    New-BiosSetting -Key 'fclk' -Cat 'Memory' -Name 'Infinity Fabric (FCLK)' -Rec $Value -Def 'Auto' `
+        -Path 'AMD Overclocking -> DDR and Infinity Fabric Frequency/Timings -> Infinity Fabric Frequency and Dividers -> FCLK' `
+        -Expl "$Expl If crashes or USB dropouts appear afterwards: back to Auto." -ExplDE "$ExplDE Gibt es danach Abstuerze oder USB-Aussetzer: zurueck auf Auto." `
+        -Risk 'moderate' -Impact 'medium' -Paths @{ asus = 'Ai Tweaker -> FCLK Frequency'; msi = 'OC -> FCLK Frequency' }
+}
+function BS-Mcr {
+    New-BiosSetting -Key 'mcr' -Cat 'Memory' -Name 'Memory Context Restore' -Rec 'Enabled' -Def 'Auto (usually off)' `
+        -Path 'Advanced -> AMD CBS -> UMC Common Options -> DDR Options -> DDR Memory Features -> Memory Context Restore' `
+        -Expl 'Skips the long memory training on every start (DDR5 on AM5 otherwise shows 20-60 s of black screen). Newer BIOS versions make this stable; if boot problems or crashes after waking appear: back to Auto.' `
+        -ExplDE 'Spart das lange Speichertraining bei jedem Start (DDR5 auf AM5 sonst 20-60 s schwarzer Bildschirm). Neuere BIOS-Versionen machen das stabil; gibt es danach Startprobleme oder Abstuerze nach dem Aufwachen: wieder Auto.' `
+        -Risk 'moderate' -Impact 'low' -Paths @{
+            asus = 'Ai Tweaker -> DRAM Timing Control -> Memory Context Restore'
+            msi = 'OC -> Advanced DRAM Configuration -> Memory Context Restore'
+            gigabyte = 'Tweaker -> Advanced Memory Settings -> Memory Context Restore' }
+}
+function BS-CStatesAmd {
+    New-BiosSetting -Key 'cstates' -Cat 'Power' -Name 'Global C-State Control' -Rec 'leave Auto / Enabled' -Def 'Auto' `
+        -Path 'Advanced -> AMD CBS -> CPU Common Options -> Global C-state Control' `
+        -Expl 'Often recommended off for lower latency -- on Ryzen that gains practically nothing in games, but costs idle power and can lower the single-core boost (the highest boost needs sleeping neighbour cores). So leave it on.' `
+        -ExplDE "Oft wird 'aus fuer weniger Latenz' empfohlen -- bei Ryzen bringt das in Spielen praktisch nichts, kostet aber Strom im Leerlauf und kann den Einkern-Boost senken (der hoechste Boost braucht schlafende Nachbarkerne). Also an lassen." `
+        -Risk 'safe' -Impact 'low' -Paths @{
+            msi = 'OC -> Advanced CPU Configuration -> Global C-state Control'
+            gigabyte = 'Tweaker -> Advanced CPU Settings -> Global C-state Control' }
+}
+function BS-IgpuOff([bool]$Apu = $false) {
+    if ($Apu) {
+        return New-BiosSetting -Key 'igpu' -Cat 'GPU' -Name 'iGPU video memory (UMA Frame Buffer)' -Rec 'without a graphics card: 2-4 GB; with a graphics card: iGPU off' -Def 'Auto (often 512 MB)' `
+            -Path 'Advanced -> AMD CBS -> NBIO Common Options -> GFX Configuration -> UMA Frame buffer Size' `
+            -Expl 'If you game on the integrated graphics, a larger fixed video memory gives many games more headroom (enough RAM provided -- 32 GB recommended). With a dedicated graphics card, turn the iGPU off.' `
+            -ExplDE 'Spielst du ueber die integrierte Grafik, gibt ein groesserer fester Grafikspeicher vielen Spielen mehr Luft (genug RAM vorausgesetzt -- 32 GB empfohlen). Mit dedizierter Grafikkarte die iGPU ausschalten.' `
+            -Risk 'safe' -Impact 'medium'
+    }
+    New-BiosSetting -Key 'igpu' -Cat 'GPU' -Name 'Integrated graphics (iGPU) off' -Rec 'Disabled (only with a graphics card)' -Def 'Auto / Enabled' `
+        -Path 'Advanced -> AMD CBS -> NBIO Common Options -> GFX Configuration -> iGPU Configuration = iGPU Disabled' `
+        -Expl 'Ryzen 7000/9000 have a small iGPU. With a dedicated graphics card you do not need it; off saves a little power and memory and stops programs from picking the wrong GPU. Make sure the monitor is connected to the graphics card.' `
+        -ExplDE 'Ryzen 7000/9000 haben eine kleine iGPU. Mit dedizierter Grafikkarte braucht man sie nicht; aus spart etwas Strom und Arbeitsspeicher und verhindert, dass Programme die falsche GPU waehlen. Monitor dann unbedingt an der Grafikkarte anschliessen.' `
+        -Risk 'moderate' -Impact 'low' -Paths @{
+            asus = 'Advanced -> NB Configuration -> Integrated Graphics = Disabled'
+            msi = 'Settings -> Advanced -> Integrated Graphics Configuration -> Integrated Graphics = Disabled'
+            gigabyte = 'Settings -> IO Ports -> Integrated Graphics = Disabled' }
+}
+function BS-CppcX3d {
+    New-BiosSetting -Key 'x3d_cppc' -Cat 'CPU' -Name 'Core scheduling on X3D with two CCDs' -Rec 'CPPC Dynamic Preferred Cores = Auto (Driver)' -Def 'Auto' `
+        -Path 'Advanced -> AMD CBS -> SMU Common Options -> CPPC Dynamic Preferred Cores' `
+        -Expl "Only 7900X3D/7950X3D/9900X3D/9950X3D: games should run on the CCD with the 3D cache. AMD's chipset driver handles that together with Windows Game Mode and the Xbox Game Bar -- leave the BIOS on Auto and install the current chipset driver. On 7800X3D/9800X3D (one CCD) there is nothing to do." `
+        -ExplDE 'Nur 7900X3D/7950X3D/9900X3D/9950X3D: Spiele sollen auf dem CCD mit dem 3D-Cache laufen. Das uebernimmt AMDs Chipsatz-Treiber zusammen mit dem Windows-Spielmodus und der Xbox Game Bar -- im BIOS auf Auto lassen, aktuellen Chipsatz-Treiber installieren. Bei 7800X3D/9800X3D (ein CCD) gibt es nichts zu tun.' `
+        -Risk 'safe' -Impact 'medium'
+}
+function BS-IntelDefault([string]$Gen) {
+    $t = @{
+        rpl = @('Intel Default Settings = Performance (i9-K: PL1 = PL2 = 253 W, ICCMax 307 A)',
+                "Many boards ran 13th/14th gen without power limits -- together with the Vmin Shift bug that caused crashes and permanently damaged CPUs. Intel's Performance profile (Extreme only for i9-K with a very good cooler) is the safe state; in games it costs practically nothing.",
+                "Viele Boards liessen 13./14. Gen ohne Leistungsgrenze laufen -- zusammen mit dem Vmin-Shift-Fehler fuehrte das zu Abstuerzen und dauerhaft geschaedigten CPUs. Intels Vorgabe 'Performance' (bzw. 'Extreme' nur fuer i9-K mit sehr gutem Kuehler) ist der sichere Stand; in Spielen kostet sie praktisch nichts.")
+        adl = @('PL1 / PL2 per Intel (e.g. i9-12900K: 125 W / 241 W)',
+                "The board default is often unlimited -- that gains little in games but makes the CPU very hot. Intel's values are listed on ark.intel.com.",
+                "Board-Standard ist oft 'unbegrenzt' -- das bringt in Spielen kaum etwas, macht die CPU aber sehr heiss. Intels Werte stehen auf ark.intel.com.")
+        arl = @('Intel Default Settings = Performance',
+                "Intel's recommended state for Core Ultra 200S; some boards start with unlimited power.",
+                "Der von Intel empfohlene Stand fuer Core Ultra 200S; manche Boards starten mit 'unbegrenzt'.")
+    }[$Gen]
+    New-BiosSetting -Key 'intel_power' -Cat 'Power' -Name 'Power limits (Intel Default Settings)' -Rec $t[0] -Def 'unlimited on many boards' `
+        -Path 'CPU / OC menu -> Intel Default Settings or Long/Short Duration Power Limit (PL1/PL2)' -Expl $t[1] -ExplDE $t[2] `
+        -Risk $(if ($Gen -eq 'rpl') { 'safe' } else { 'moderate' }) -Impact 'medium' -Paths @{
+            asus = 'Ai Tweaker -> Intel Default Settings (older BIOS: Internal CPU Power Management -> PL1/PL2)'
+            msi = 'OC -> Intel Default Settings (older BIOS: Advanced CPU Configuration -> Long/Short Duration Power Limit)'
+            gigabyte = 'Tweaker -> Intel Default Settings (older BIOS: Advanced CPU Settings -> Turbo Power Limits)'
+            asrock = 'OC Tweaker -> CPU Configuration -> Intel Default Settings or Long/Short Duration Power Limit' }
+}
+function BS-Mce {
+    New-BiosSetting -Key 'mce' -Cat 'CPU' -Name 'Multi-Core Enhancement' -Rec 'Auto (performance) -- if too hot: Disabled' -Def 'Auto / Enabled' `
+        -Path 'OC menu -> Multi-Core Enhancement' `
+        -Expl "Runs all cores at the single-core turbo (outside Intel's spec). A few percent more performance, but clearly more heat -- with a weak cooler choose Disabled." `
+        -ExplDE 'Laesst alle Kerne mit dem Einkern-Turbo laufen (ausserhalb von Intels Vorgabe). Ein paar Prozent mehr Leistung, dafuer deutlich mehr Waerme -- mit schwachem Kuehler Disabled waehlen.' `
+        -Risk 'moderate' -Impact 'low' -Paths @{
+            asus = 'Ai Tweaker -> ASUS MultiCore Enhancement'
+            msi = 'OC -> Enhanced Turbo'
+            gigabyte = 'Tweaker -> Advanced CPU Settings -> Enhanced Multi-Core Performance'
+            asrock = 'OC Tweaker -> CPU Configuration -> Multi Core Enhancement' }
+}
+function BS-200SBoost {
+    New-BiosSetting -Key '200s_boost' -Cat 'Memory' -Name 'Intel 200S Boost' -Rec 'Enabled (with matching RAM)' -Def 'Disabled' `
+        -Path 'OC menu -> Intel 200S Boost (BIOS with microcode 0x114 or newer)' `
+        -Expl "Intel's official, warranty-covered overclock for Core Ultra 200S: faster die-to-die / NGU links and RAM up to DDR5-8000. Gains a few percent in games -- Arrow Lake's biggest weakness is memory latency." `
+        -ExplDE 'Intels offizielle, von der Garantie gedeckte Uebertaktung fuer Core Ultra 200S: schnellere Verbindung zwischen den Kacheln (D2D/NGU) und RAM bis DDR5-8000. Bringt in Spielen einige Prozent -- die groesste Schwaeche von Arrow Lake ist die Speicher-Latenz.' `
+        -Risk 'safe' -Impact 'medium' -Paths @{
+            asus = 'Ai Tweaker -> Intel(R) 200S Boost'; msi = 'OC -> Intel 200S Boost'; gigabyte = 'Tweaker -> Intel 200S Boost'; asrock = 'OC Tweaker -> Intel 200S Boost' }
+}
+function BS-ECores {
+    New-BiosSetting -Key 'ecores' -Cat 'CPU' -Name 'E-Cores' -Rec 'leave Enabled' -Def 'Enabled' -Path 'CPU configuration -> Active Efficient Cores = All' `
+        -Expl 'Disabling E-cores used to help some games. With Windows 11 and Thread Director games land on the P-cores today; disabling costs performance in everything else. Only test it for a single game with problems (old anti-cheats).' `
+        -ExplDE 'Frueher half das Abschalten der E-Cores manchen Spielen. Mit Windows 11 und dem Thread Director landen Spiele heute auf den P-Cores; abschalten kostet Leistung bei allem anderen. Nur bei einem einzelnen Spiel mit Problemen (alte Anti-Cheats) testen.' `
+        -Risk 'safe' -Impact 'low'
+}
+function BS-Am5Base([string]$Zen) {
+    @(
+        (BS-MemoryProfile 'amd' 'DDR5' 'DDR5-6000 CL30 is the sweet spot' 'AM5 runs best with DDR5-6000 to -6400 in 1:1 mode (UCLK = MCLK).' 'AM5 laeuft am besten mit DDR5-6000 bis -6400 im 1:1-Modus (UCLK = MCLK).'),
+        (BS-Fclk $(if ($Zen -eq 'zen5') { '2000 MHz (Zen 5 often 2100)' } else { '2000 MHz' }) 'The link between cores and memory controller. With DDR5-6000, 2000 MHz is usual and stable; Auto often leaves 1733-1800 MHz.' 'Die Verbindung zwischen Kernen und Speicher-Controller. Bei DDR5-6000 sind 2000 MHz ueblich und stabil; Auto laesst oft 1733-1800 MHz liegen.'),
+        (BS-Mcr), (BS-CStatesAmd), (BS-Rebar 'amd'), (BS-PcieGpu), (BS-IgpuOff $false), (BS-Csm), (BS-SecureBoot),
+        (BS-BiosUpdate 'New AGESA versions bring noticeably shorter boot times, better RAM support and performance fixes on AM5 (Zen 5: the 2-core latency update).' "Neue AGESA-Versionen bringen bei AM5 spuerbar kuerzere Startzeiten, besseren RAM-Support und Leistungs-Fixes (Zen 5: '2-Kern-Latenz'-Update)."),
+        (BS-AutoInstall)
+    )
+}
+function New-BiosProfile([string]$Id, [string]$Name, [string]$Short, [string]$Cpus, [string]$Platform, [string]$Brand, [object[]]$Settings, [string]$Notes = '', [string]$NotesDE = '') {
+    [pscustomobject]@{ Id = $Id; Name = $Name; Short = $Short; Cpus = $Cpus; Platform = $Platform; Brand = $Brand; Settings = @($Settings); Notes = $Notes; NotesDE = $NotesDE }
+}
+$amCO1 = 'Lowers temperature and raises boost.'; $amCO1DE = 'Senkt Temperatur und hebt den Boost.'
+$am4Rebar = 'AM4 needs a BIOS from 2021 or newer for this.'; $am4RebarDE = 'AM4 braucht dafuer ein BIOS von 2021 oder neuer.'
+$Script:BiosProfiles = @(
+    (New-BiosProfile 'am5_zen5_x3d' 'AMD Ryzen 9000X3D (Zen 5 + 3D V-Cache) -- AM5' 'Ryzen 9000X3D' 'Ryzen 7 9800X3D, Ryzen 9 9900X3D, 9950X3D' 'AM5 -- X870E / X870 / B850 / B840 / X670E / X670 / B650 / A620' 'amd' `
+        (@((BS-Pbo 'zen5_x3d'), (BS-CurveOptimizer 'All Cores, Negative 15-25' 'Most 9800X3D handle -15 to -25; less voltage = more boost at the same temperature.' 'Die meisten 9800X3D vertragen -15 bis -25; weniger Spannung = mehr Boost bei gleicher Temperatur.'), (BS-CppcX3d)) + (BS-Am5Base 'zen5')) `
+        'The best gaming CPU family -- the 3D cache does most of the work. Enabling EXPO is a must, PBO / Curve Optimizer are fine-tuning.' 'Die beste Gaming-CPU-Familie -- der 3D-Cache macht den groessten Teil der Arbeit. EXPO aktivieren ist Pflicht, PBO/Curve Optimizer sind Feinschliff.'),
+    (New-BiosProfile 'am5_zen5' 'AMD Ryzen 9000 (Zen 5) -- AM5' 'Ryzen 9000' 'Ryzen 5 9600(X), Ryzen 7 9700X, Ryzen 9 9900X, 9950X' 'AM5 -- X870E / X870 / B850 / B840 / X670E / X670 / B650 / A620' 'amd' `
+        (@((BS-Pbo 'zen5'), (BS-CurveOptimizer 'All Cores, Negative 10-20' 'Zen 5 usually handles -10 to -20.' 'Zen 5 vertraegt meist -10 bis -20.')) + (BS-Am5Base 'zen5')) `
+        'The 9600X/9700X ship with a 65 W limit; PBO (or the 105 W mode of some BIOS versions) raises it -- in games that gains little.' '9600X/9700X kommen ab Werk mit 65-W-Grenze; PBO (oder der 105-W-Modus mancher BIOS) hebt sie an -- in Spielen bringt das nur wenig.'),
+    (New-BiosProfile 'am5_zen4_x3d' 'AMD Ryzen 7000X3D (Zen 4 + 3D V-Cache) -- AM5' 'Ryzen 7000X3D' 'Ryzen 7 7800X3D, Ryzen 9 7900X3D, 7950X3D' 'AM5 -- X870E / X870 / B850 / X670E / X670 / B650 / A620' 'amd' `
+        (@((BS-Pbo 'zen4_x3d'), (BS-CurveOptimizer 'All Cores, Negative 15-30' 'The only lever on the 7000X3D: less voltage lets them boost higher.' 'Der einzige Hebel bei den 7000X3D: weniger Spannung laesst sie hoeher boosten.'), (BS-CppcX3d)) + (BS-Am5Base 'zen4')) `
+        'Important: keep the BIOS current -- early versions allowed too-high SoC voltages (burnt 7800X3D in 2023). Current BIOS versions cap the SoC voltage at 1.3 V or less.' 'Wichtig: BIOS aktuell halten -- fruehe Versionen liessen zu hohe SoC-Spannungen zu (2023 durchgebrannte 7800X3D). Aktuelle BIOS begrenzen die SoC-Spannung auf hoechstens 1,3 V.'),
+    (New-BiosProfile 'am5_zen4' 'AMD Ryzen 7000 (Zen 4) -- AM5' 'Ryzen 7000' 'Ryzen 5 7600(X), Ryzen 7 7700(X), Ryzen 9 7900(X), 7950X' 'AM5 -- X870E / X870 / B850 / X670E / X670 / B650 / A620' 'amd' `
+        (@((BS-Pbo 'zen4'), (BS-CurveOptimizer 'All Cores, Negative 10-20' 'Lowers temperature and raises boost -- the best lever on Ryzen 7000.' 'Senkt Temperatur und hebt den Boost -- bei Ryzen 7000 der beste Hebel.')) + (BS-Am5Base 'zen4'))),
+    (New-BiosProfile 'am5_apu' 'AMD Ryzen 8000G / 8000F (Zen 4 APU) -- AM5' 'Ryzen 8000G / 8000F' 'Ryzen 5 8500G / 8600G, Ryzen 7 8700G, Ryzen 5 8400F, Ryzen 7 8700F' 'AM5 -- B650 / A620 / X670 / B850' 'amd' `
+        @((BS-MemoryProfile 'amd' 'DDR5' 'DDR5-6000 or faster' 'If you game on the integrated graphics, fast RAM matters even more -- the iGPU has no memory of its own.' 'Spielst du ueber die integrierte Grafik, ist schneller RAM besonders wichtig -- die iGPU hat keinen eigenen Speicher.'),
+          (BS-IgpuOff $true), (BS-Pbo 'zen4'), (BS-CurveOptimizer 'All Cores, Negative 10-20' $amCO1 $amCO1DE), (BS-Mcr), (BS-CStatesAmd), (BS-Rebar 'amd'), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
+          (BS-BiosUpdate 'New AGESA versions improve RAM support and boot times.' 'Neue AGESA-Versionen verbessern RAM-Support und Startzeiten.'), (BS-AutoInstall)) `
+        'The 8000G/8000F have PCIe 4.0 and -- on 8500G/8400F -- fewer lanes; for a fast graphics card a Ryzen 7000/9000 is the better choice.' 'Die 8000G/8000F haben PCIe 4.0 und -- bei 8500G/8400F -- weniger Lanes; fuer eine schnelle Grafikkarte ist ein Ryzen 7000/9000 die bessere Wahl.'),
+    (New-BiosProfile 'am4_zen3_x3d' 'AMD Ryzen 5000X3D (Zen 3 + 3D V-Cache) -- AM4' 'Ryzen 5000X3D' 'Ryzen 5 5600X3D, Ryzen 7 5700X3D, 5800X3D' 'AM4 -- X570 / B550 / X470 / B450 / A520' 'amd' `
+        @((BS-MemoryProfile 'amd' 'DDR4' 'DDR4-3600 CL16 is the sweet spot'),
+          (BS-Fclk '1800 MHz (with DDR4-3600)' '1:1 with the RAM: DDR4-3600 -> FCLK 1800, DDR4-3800 -> 1900.' '1:1 mit dem RAM: DDR4-3600 -> FCLK 1800, DDR4-3800 -> 1900.'),
+          (BS-CurveOptimizer 'only if offered: All Cores, Negative 15-30' 'The 5000X3D are locked; newer BIOS versions (AGESA 1.2.0.8+) partly offer the Curve Optimizer, MSI calls it Kombo Strike (OC menu, level 1-3).' "Die 5000X3D sind gesperrt; neuere BIOS (AGESA 1.2.0.8+) bieten den Curve Optimizer teils an, MSI nennt es 'Kombo Strike' (OC-Menue, Stufe 1-3)."),
+          (BS-Rebar 'amd' $am4Rebar $am4RebarDE), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
+          (BS-BiosUpdate 'For 5000X3D on older boards a BIOS update is mandatory (AGESA 1.2.0.x).' 'Fuer 5000X3D auf aelteren Boards ist ein BIOS-Update Pflicht (AGESA 1.2.0.x).'), (BS-AutoInstall)) `
+        'PBO and clock overclocking are locked on the 5000X3D -- EXPO/XMP and FCLK 1:1 are the most important points.' 'PBO und Takt-Uebertaktung sind bei den 5000X3D gesperrt -- EXPO/XMP und FCLK 1:1 sind die wichtigsten Punkte.'),
+    (New-BiosProfile 'am4_zen3' 'AMD Ryzen 5000 (Zen 3) -- AM4' 'Ryzen 5000' 'Ryzen 5 5500 / 5600(X), Ryzen 7 5700X / 5800X, Ryzen 9 5900X / 5950X' 'AM4 -- X570 / B550 / X470 / B450 / A520' 'amd' `
+        @((BS-MemoryProfile 'amd' 'DDR4' 'DDR4-3600 CL16 is the sweet spot'),
+          (BS-Fclk '1800 MHz (with DDR4-3600)' '1:1 with the RAM: DDR4-3600 -> FCLK 1800, DDR4-3800 -> 1900 (not every CPU manages 1900).' '1:1 mit dem RAM: DDR4-3600 -> FCLK 1800, DDR4-3800 -> 1900 (nicht jede CPU schafft 1900).'),
+          (BS-Pbo 'zen3'),
+          (BS-CurveOptimizer 'All Cores, Negative 10-20 (better: per core)' 'Zen 3 responds strongly to the Curve Optimizer; the two best cores usually take less.' 'Zen 3 reagiert stark auf den Curve Optimizer; die besten zwei Kerne vertragen meist weniger.'),
+          (BS-Rebar 'amd' $am4Rebar $am4RebarDE), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
+          (BS-BiosUpdate 'On 400-series boards a BIOS update is mandatory for Ryzen 5000; newer AGESA versions fix USB dropouts.' 'Auf 400er-Boards ist ein BIOS-Update fuer Ryzen 5000 Pflicht; neuere AGESA-Versionen beheben USB-Aussetzer.'), (BS-AutoInstall))),
+    (New-BiosProfile 'am4_apu' 'AMD Ryzen 5000G / 4000G / 3000G / 2000G (APU) -- AM4' 'Ryzen 5000G - 2000G (APU)' 'Ryzen 3 5300G, Ryzen 5 5600G / 4600G / 3400G / 2400G, Ryzen 7 5700G' 'AM4 -- B550 / A520 / X570 / B450 / A320' 'amd' `
+        @((BS-MemoryProfile 'amd' 'DDR4' 'DDR4-3600 or faster' 'The iGPU uses system RAM as video memory -- fast RAM helps it the most.' 'Die iGPU nutzt den Arbeitsspeicher als Grafikspeicher -- schneller RAM bringt ihr am meisten.'),
+          (BS-IgpuOff $true),
+          (BS-Fclk '1800-2000 MHz' 'The APUs often manage FCLK 2000 (DDR4-4000 1:1).' 'Die APUs schaffen oft FCLK 2000 (DDR4-4000 1:1).'),
+          (BS-Rebar 'amd' 'On the APUs only with 5000G and a current BIOS.' 'Bei den APUs nur mit 5000G und aktuellem BIOS.'), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
+          (BS-BiosUpdate 'New AGESA versions improve APU support.' 'Neue AGESA-Versionen verbessern den APU-Support.'), (BS-AutoInstall)) `
+        '5600G/5700G only have PCIe 3.0 -- not ideal for a fast graphics card.' '5600G/5700G haben nur PCIe 3.0 -- fuer eine schnelle Grafikkarte nicht ideal.'),
+    (New-BiosProfile 'am4_zen2' 'AMD Ryzen 3000 (Zen 2) -- AM4' 'Ryzen 3000' 'Ryzen 5 3600(X), Ryzen 7 3700X / 3800X, Ryzen 9 3900X / 3950X' 'AM4 -- X570 / B550 / X470 / B450' 'amd' `
+        @((BS-MemoryProfile 'amd' 'DDR4' 'DDR4-3600 CL16'),
+          (BS-Fclk '1800 MHz (with DDR4-3600)' 'Zen 2 almost always manages 1800 MHz 1:1, 1866-1900 only rarely.' 'Zen 2 schafft fast immer 1800 MHz 1:1, 1866-1900 nur selten.'),
+          (BS-Pbo 'zen2'),
+          (BS-Rebar 'amd' 'Ryzen 3000 supports it since 2021 on 400/500-series boards -- BIOS update required.' 'Ryzen 3000 unterstuetzt es seit 2021 auf 400er/500er-Boards -- BIOS-Update noetig.'),
+          (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
+          (BS-BiosUpdate 'Resizable BAR and the Windows 11 TPM need a BIOS from 2021 or newer.' 'Fuer Resizable BAR und Windows-11-TPM ist ein BIOS ab 2021 noetig.'), (BS-AutoInstall))),
+    (New-BiosProfile 'am4_zen1' 'AMD Ryzen 1000 / 2000 (Zen / Zen+) -- AM4' 'Ryzen 1000 / 2000' 'Ryzen 5 1600 / 2600, Ryzen 7 1700 / 2700X' 'AM4 -- X470 / B450 / X370 / B350' 'amd' `
+        @((BS-MemoryProfile 'amd' 'DDR4' 'DDR4-3200 (Zen+: often 3466)' 'Zen/Zen+ are picky with RAM -- if the profile does not work, lower the speed one step.' 'Zen/Zen+ sind beim RAM waehlerisch -- klappt das Profil nicht, den Takt eine Stufe senken.'),
+          (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
+          (BS-BiosUpdate 'Newer BIOS versions clearly improve RAM compatibility.' 'Neuere BIOS-Versionen verbessern die RAM-Kompatibilitaet deutlich.'), (BS-AutoInstall)) `
+        'Resizable BAR does not exist for Ryzen 1000/2000. A Ryzen 5000(X3D) usually fits the same board after a BIOS update -- the biggest jump for little money.' 'Resizable BAR gibt es fuer Ryzen 1000/2000 nicht. Ein Ryzen 5000(X3D) passt meist mit BIOS-Update in dasselbe Board -- der groesste Sprung fuer wenig Geld.'),
+    (New-BiosProfile 'lga1851_arl' 'Intel Core Ultra 200S (Arrow Lake) -- LGA1851' 'Core Ultra 200S' 'Core Ultra 5 245K / 225, Core Ultra 7 265K, Core Ultra 9 285K' 'LGA1851 -- Z890 / B860 / H810' 'intel' `
+        @((BS-MemoryProfile 'intel' 'DDR5' 'DDR5-6400 to -8000 (CUDIMM)' 'Arrow Lake benefits a lot from fast RAM; from DDR5-8000 CUDIMM modules are worth it.' 'Arrow Lake profitiert stark von schnellem RAM; ab DDR5-8000 lohnen CUDIMM-Module.'),
+          (BS-200SBoost), (BS-IntelDefault 'arl'), (BS-Rebar 'intel'), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
+          (BS-BiosUpdate 'Mandatory on Arrow Lake: the BIOS with microcode 0x114 (or newer) fixes the weak gaming performance at launch and brings 200S Boost.' "Pflicht bei Arrow Lake: das BIOS mit Microcode 0x114 (oder neuer) behebt die schwache Spieleleistung zum Start und bringt '200S Boost'." 'safe' 'high'),
+          (BS-AutoInstall)) `
+        'Core Ultra 200S have no Hyper-Threading. Keep Windows up to date -- the performance fixes came together with Windows updates.' 'Core Ultra 200S haben kein Hyper-Threading. Windows aktuell halten -- die Leistungs-Fixes kamen zusammen mit Windows-Updates.'),
+    (New-BiosProfile 'lga1700_rpl' 'Intel Core 13th / 14th gen (Raptor Lake) -- LGA1700' 'Core 13th / 14th gen' 'Core i5-13400 - 14600K, Core i7-13700K / 14700K, Core i9-13900K / 14900K' 'LGA1700 -- Z790 / B760 / H770 / Z690 / B660' 'intel' `
+        @((BS-BiosUpdate 'VERY IMPORTANT: BIOS with microcode 0x12F (or newer) -- fixes the Vmin Shift that can make 13th/14th gen CPUs (especially i7/i9) permanently unstable. Do not keep using older BIOS versions.' "SEHR WICHTIG: BIOS mit Microcode 0x12F (oder neuer) -- behebt den 'Vmin Shift', der 13./14.-Gen-CPUs (vor allem i7/i9) dauerhaft instabil machen kann. Aeltere BIOS-Versionen nicht weiter verwenden." 'safe' 'high'),
+          (BS-IntelDefault 'rpl'),
+          (BS-MemoryProfile 'intel' 'DDR5' 'DDR5-6000 to -7200 (DDR4 boards: DDR4-3600)'),
+          (BS-ECores), (BS-Rebar 'intel'), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot), (BS-AutoInstall)) `
+        'Crashes in games (out of video memory, shader errors) are a typical sign of the Vmin Shift on 13th/14th gen -- first BIOS update + Intel Default Settings, then optimize further. Intel extended the warranty of these CPUs.' "Abstuerze in Spielen ('Out of video memory', Shader-Fehler) sind bei 13./14. Gen ein typisches Zeichen fuer den Vmin-Shift -- erst BIOS-Update + Intel Default Settings, dann weiter optimieren. Intel hat die Garantie dieser CPUs verlaengert."),
+    (New-BiosProfile 'lga1700_adl' 'Intel Core 12th gen (Alder Lake) -- LGA1700' 'Core 12th gen' 'Core i3-12100, Core i5-12400 / 12600K, Core i7-12700K, Core i9-12900K' 'LGA1700 -- Z690 / B660 / H670 / H610 (also Z790 / B760)' 'intel' `
+        @((BS-MemoryProfile 'intel' 'DDR5' 'DDR5-6000 (DDR4 boards: DDR4-3600 in Gear 1)'),
+          (BS-IntelDefault 'adl'), (BS-ECores), (BS-Rebar 'intel'), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
+          (BS-BiosUpdate 'Newer BIOS versions clearly improve DDR5 support.' 'Neuere BIOS-Versionen verbessern den DDR5-Support deutlich.'), (BS-AutoInstall)) `
+        'On Windows 10 the Thread Director distributes the cores worse -- Windows 11 gets noticeably more out of 12th gen.' 'Unter Windows 10 verteilt der Thread Director die Kerne schlechter -- Windows 11 holt bei 12. Gen spuerbar mehr heraus.'),
+    (New-BiosProfile 'lga1200' 'Intel Core 10th / 11th gen (Comet / Rocket Lake) -- LGA1200' 'Core 10th / 11th gen' 'Core i5-10400 - 11600K, Core i7-10700K / 11700K, Core i9-10900K / 11900K' 'LGA1200 -- Z590 / B560 / H570 / Z490 / B460 / H410' 'intel' `
+        @((BS-MemoryProfile 'intel' 'DDR4' 'DDR4-3200 to -3600 (11th gen: Gear 1)' 'On 11th gen keep the memory controller in Gear 1 -- Gear 2 costs latency.' "Bei 11. Gen den Speicher-Controller im 'Gear 1' lassen -- Gear 2 kostet Latenz."),
+          (BS-Mce),
+          (BS-Rebar 'intel' 'Officially from 11th gen on 500-series boards; many Z490 boards added it for 10th gen via BIOS update.' 'Offiziell ab 11. Gen auf 500er-Boards; viele Z490-Boards haben es per BIOS-Update fuer 10. Gen nachgereicht.'),
+          (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
+          (BS-BiosUpdate 'Resizable BAR and the Windows 11 TPM need a BIOS from 2021 or newer.' 'Fuer Resizable BAR und Windows-11-TPM ist ein BIOS ab 2021 noetig.'), (BS-AutoInstall))),
+    (New-BiosProfile 'lga1151' 'Intel Core 8th / 9th gen (Coffee Lake) -- LGA1151' 'Core 8th / 9th gen' 'Core i5-8400 - 9600K, Core i7-8700K / 9700K, Core i9-9900K' 'LGA1151 v2 -- Z390 / Z370 / B365 / B360 / H370' 'intel' `
+        @((BS-MemoryProfile 'intel' 'DDR4' 'DDR4-3200'), (BS-Mce), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
+          (BS-BiosUpdate 'Newer BIOS versions contain security microcode and partly Resizable BAR (only some Z390 boards, unofficial).' 'Neuere BIOS-Versionen enthalten Sicherheits-Microcode und teils Resizable BAR (nur manche Z390-Boards, inoffiziell).'), (BS-AutoInstall)) `
+        'Resizable BAR is only official from Intel 10th/11th gen.' 'Resizable BAR gibt es offiziell erst ab Intel 10./11. Gen.'),
+    (New-BiosProfile 'generic' 'Other / unknown platform -- basics' 'Other / unknown' 'any desktop CPU' 'any board' 'any' `
+        @((New-BiosSetting -Key 'memory_profile' -Cat 'Memory' -Name 'XMP / EXPO / DOCP profile' -Rec 'Profile 1' -Def 'Off -- JEDEC base clock' `
+              -Path 'OC / Tweaker menu -> memory profile -> Profile 1' -Expl 'Without a profile the RAM only runs at the base clock -- the biggest free gain in the BIOS.' `
+              -ExplDE 'Ohne Profil laeuft der RAM nur mit dem Standardtakt -- der groesste kostenlose Gewinn im BIOS.' -Risk 'safe' -Impact 'high' -Detect 'expo_xmp'),
+          (BS-Rebar 'any'), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
+          (BS-BiosUpdate 'Newer BIOS versions improve RAM compatibility and security.' 'Neuere BIOS-Versionen verbessern RAM-Kompatibilitaet und Sicherheit.'), (BS-AutoInstall)) `
+        "Laptops: most laptop BIOSes do not offer these options -- there the maker's performance mode (e.g. Turbo / Performance) in the maker's tool matters most." "Laptops: Die meisten Laptop-BIOS bieten diese Optionen nicht -- dort lohnt vor allem der Hersteller-Leistungsmodus (z. B. 'Turbo'/'Performance') im Hersteller-Tool.")
+)
+
+# -- Matching (CPU name -> profile id, board manufacturer -> vendor key) --------
+function Get-BiosProfileId([string]$CpuName) {
+    $c = ((($CpuName -replace '\(TM\)', ' ' -replace '\(R\)', ' ').ToUpper()) -split '\s+' | Where-Object { $_ }) -join ' '
+    if ($c -notmatch 'THREADRIPPER' -and $c -match 'RYZEN\s+(?:\d\s+)?(?:PRO\s+)?(\d{4})(X3D|XT|X|GE|G|F|E)?\b') {
+        # mobile Ryzen ("7840HS", "5600H") never matches: no word boundary after the digits
+        $num = [int]$matches[1]; $suf = "$($matches[2])"; $series = [math]::Floor($num / 1000)
+        $apu = $suf -in @('G', 'GE')
+        switch ($series) {
+            9 { return $(if ($suf -eq 'X3D') { 'am5_zen5_x3d' } else { 'am5_zen5' }) }
+            8 { return 'am5_apu' }
+            7 { return $(if ($suf -eq 'X3D') { 'am5_zen4_x3d' } else { 'am5_zen4' }) }
+            5 { if ($suf -eq 'X3D') { return 'am4_zen3_x3d' }; return $(if ($apu) { 'am4_apu' } else { 'am4_zen3' }) }
+            4 { return $(if ($apu) { 'am4_apu' } else { 'generic' }) }
+            3 { return $(if ($apu) { 'am4_apu' } else { 'am4_zen2' }) }
+            { $_ -in 1, 2 } { return $(if ($apu) { 'am4_apu' } else { 'am4_zen1' }) }
+        }
+        return 'generic'
+    }
+    if ($c -match 'ULTRA\s+[3579]\s+(\d{3})([A-Z]{0,2})\b') {
+        $num = [int]$matches[1]; $suf = "$($matches[2])"
+        if ($num -ge 200 -and $num -lt 300 -and $suf -in @('', 'K', 'KF', 'F', 'T')) { return 'lga1851_arl' }
+        return 'generic'                     # Core Ultra mobile (1xxH/U, 2xxV/H)
+    }
+    if ($c -match '\bI[3579]-(\d{4,5})([A-Z]{0,2})\b') {
+        $digits = $matches[1]; $suf = "$($matches[2])"
+        if ($suf -in @('H', 'HS', 'HX', 'U', 'P', 'Y', 'HK', 'G7', 'V') -or $suf.StartsWith('H')) { return 'generic' }
+        $gen = if ($digits.Length -eq 5) { [int]$digits.Substring(0, 2) } else { [int]$digits.Substring(0, 1) }
+        if ($gen -in 13, 14) { return 'lga1700_rpl' }
+        if ($gen -eq 12) { return 'lga1700_adl' }
+        if ($gen -in 10, 11) { return 'lga1200' }
+        if ($gen -in 8, 9) { return 'lga1151' }
+    }
+    'generic'
+}
+function Get-BiosVendor([string]$Manufacturer) {
+    $m = "$Manufacturer".ToUpper()
+    if ($m -match 'ASUS') { return 'asus' }
+    if ($m -match 'MICRO-STAR' -or $m.StartsWith('MSI')) { return 'msi' }
+    if ($m -match 'GIGABYTE') { return 'gigabyte' }
+    if ($m -match 'ASROCK') { return 'asrock' }
+    'other'
 }
 
-function Build-DashboardPanel {
+# -- Detection: what Windows can REALLY tell about BIOS settings (read-only) ---
+# expo_xmp: RAM clock vs. the JEDEC ceiling of its DDR type; rebar: NVIDIA BAR1
+# aperture via nvidia-smi (256 MB = off, whole VRAM = on); secure_boot: the state
+# Windows records; csm: legacy boot = on, UEFI + Secure Boot = off. Everything
+# else stays "not detectable" (grey) instead of a guess.
+function Get-BiosDetection {
+    $r = @{}
+    try {
+        $m = Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop | Sort-Object ConfiguredClockSpeed -Descending | Select-Object -First 1
+        $speed = [int]$m.ConfiguredClockSpeed; $mtype = [int]$m.SMBIOSMemoryType
+        $jedec = @{ 24 = @(1600, 'DDR3'); 26 = @(3200, 'DDR4'); 34 = @(5600, 'DDR5') }
+        $j = if ($jedec.ContainsKey($mtype)) { $jedec[$mtype] } elseif ($speed -gt 4000) { @(5600, 'DDR5') } else { @(3200, 'DDR4') }
+        if ($speed -gt $j[0]) { $r['expo_xmp'] = @{ Active = $true; Note = "RAM runs at $($j[1])-$speed -- above the JEDEC base clock, the profile is active" } }
+        elseif ($speed -gt 0 -and $speed -lt $j[0]) { $r['expo_xmp'] = @{ Active = $false; Note = "RAM only runs at $($j[1])-$speed (base clock) -- enable the profile in the BIOS" } }
+    } catch { }
+    $fw = "$env:firmware_type".ToLower()
+    $sb = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\State' -Name UEFISecureBootEnabled -ErrorAction SilentlyContinue).UEFISecureBootEnabled
+    if ($null -ne $sb) { $r['secure_boot'] = @{ Active = ("$sb" -eq '1'); Note = $(if ("$sb" -eq '1') { 'Secure Boot is on' } else { 'Secure Boot is off' }) } }
+    elseif ($fw -eq 'legacy') { $r['secure_boot'] = @{ Active = $false; Note = 'Windows boots in legacy mode -- Secure Boot needs UEFI' } }
+    if ($fw -eq 'legacy') { $r['csm'] = @{ Active = $false; Note = 'Windows is installed in legacy mode -- only turn CSM off after converting Windows to UEFI (MBR2GPT)' } }
+    elseif ($fw -eq 'uefi' -and "$sb" -eq '1') { $r['csm'] = @{ Active = $true; Note = 'UEFI boot with Secure Boot -- CSM is definitely off' } }
+    if ($IsNVIDIA) {
+        try {
+            $smi = Get-Command nvidia-smi.exe -ErrorAction Stop
+            $q = @(& $smi.Source -q -d MEMORY 2>$null)
+            $bar1 = $null; $fb = $null; $sect = ''
+            foreach ($line in $q) {
+                if ($line -match '^\s*BAR1 Memory Usage') { $sect = 'bar1'; continue }
+                if ($line -match '^\s*FB Memory Usage') { $sect = 'fb'; continue }
+                if ($line -match '^\s*Total\s*:\s*(\d+)\s*MiB') { if ($sect -eq 'bar1' -and $null -eq $bar1) { $bar1 = [int]$matches[1] } elseif ($sect -eq 'fb' -and $null -eq $fb) { $fb = [int]$matches[1] } }
+            }
+            if ($bar1) {
+                if ($bar1 -gt 512) { $r['rebar'] = @{ Active = $true; Note = "Resizable BAR is on -- the CPU sees $([math]::Round($bar1 / 1024)) GB of video memory at once" } }
+                else { $r['rebar'] = @{ Active = $false; Note = "Resizable BAR is off -- only a $bar1 MB window$(if ($fb) { " (video memory $([math]::Round($fb / 1024)) GB)" })" } }
+            }
+        } catch { }
+    }
+    $r
+}
+
+# -- BIOS page UI -----------------------------------------------------------------
+$Script:BiosCats = @(
+    @{ Key = 'Memory'; Label = 'Memory'; Color = $Script:UI.VIOLET }, @{ Key = 'CPU'; Label = 'CPU'; Color = $Script:UI.ACC },
+    @{ Key = 'GPU'; Label = 'GPU'; Color = $Script:UI.GREEN }, @{ Key = 'Power'; Label = 'Power'; Color = $Script:UI.AMBER },
+    @{ Key = 'Boot'; Label = 'Boot & security'; Color = $Script:UI.SLATE })
+$boardInfo = try { Get-CimInstance Win32_BaseBoard -ErrorAction Stop | Select-Object -First 1 } catch { $null }
+$Script:Bios = @{
+    Detected       = Get-BiosProfileId $CPU
+    DetectedVendor = Get-BiosVendor "$($boardInfo.Manufacturer)"
+    Board          = "$(("$($boardInfo.Manufacturer)" -replace ' Technology Co\., Ltd\.| Co\., Ltd\.| Corporation| Computer INC\.', '')) $($boardInfo.Product)".Trim()
+    Results        = @{}
+    Filters        = @{ Memory = $true; CPU = $true; GPU = $true; Power = $true; Boot = $true }
+    OnlyTodo       = $false
+    Items          = @{}
+    VendorBtns     = @{}
+}
+$Script:Bios.Profile = $Script:Bios.Detected
+$Script:Bios.Vendor  = $Script:Bios.DetectedVendor
+$Script:BiosDetectDone = $false
+
+function Get-BiosProfile([string]$Id) { $Script:BiosProfiles | Where-Object { $_.Id -eq $Id } | Select-Object -First 1 }
+
+function Build-BiosPlatformList {
+    $BiosPlatformList.Children.Clear()
+    $groups = [ordered]@{ 'AMD AM5' = 'am5_'; 'AMD AM4' = 'am4_'; 'Intel' = 'lga'; 'Other' = 'generic' }
+    $first = $true
+    foreach ($g in $groups.Keys) {
+        $hdr = New-Text $g.ToUpper() 10.5 $Script:UI.MUTED 'SemiBold' -Margin 10, $(if ($first) { 2 } else { 12 }), 0, 4
+        $first = $false
+        $BiosPlatformList.Children.Add($hdr) | Out-Null
+        foreach ($p in ($Script:BiosProfiles | Where-Object { $_.Id.StartsWith($groups[$g]) })) {
+            $pid2 = $p.Id
+            $txt = New-Text $p.Short 12.5 $Script:UI.TEXT2
+            $content = New-HStack @($txt)
+            if ($pid2 -eq $Script:Bios.Detected) { $content.Children.Add((New-Badge 'yours' $Script:UI.GREEN (Mix-Hex $Script:UI.CARD $Script:UI.GREEN 0.16))) | Out-Null; $content.Children[1].Margin = Th 8, 0, 0, 0; $content.Children[1].VerticalAlignment = 'Center' }
+            $btn = New-Object Windows.Controls.Button
+            $btn.Style = $Window.FindResource("NavBtn"); $btn.Height = 32; $btn.Content = $content; $btn.ToolTip = "$($p.Name)`n$($p.Cpus)"
+            $btn.Add_Click({ Select-BiosProfile $pid2 }.GetNewClosure())
+            $BiosPlatformList.Children.Add($btn) | Out-Null
+            $Script:Bios.Items[$pid2] = @{ Btn = $btn; Txt = $txt }
+        }
+    }
+}
+function Select-BiosProfile([string]$Id) { $Script:Bios.Profile = $Id; Update-BiosPlatformList; Render-BiosPage }
+function Select-BiosVendor([string]$Key) { $Script:Bios.Vendor = $Key; Render-BiosPage }
+function Update-BiosPlatformList {
+    foreach ($id in $Script:Bios.Items.Keys) {
+        $it = $Script:Bios.Items[$id]; $on = ($id -eq $Script:Bios.Profile)
+        $it.Btn.Background = if ($on) { Brush (Mix-Hex $Script:UI.CARD $Script:UI.AMBER 0.18) } else { [Windows.Media.Brushes]::Transparent }
+        $it.Txt.Foreground = Brush $(if ($on) { '#ffffff' } else { $Script:UI.TEXT2 })
+        $it.Txt.FontWeight = $(if ($on) { 'SemiBold' } else { 'Normal' })
+    }
+}
+function Test-BiosDone($Setting) {
+    if ($Script:Bios.Profile -ne $Script:Bios.Detected -or -not $Setting.Detect) { return $false }
+    $r = $Script:Bios.Results[$Setting.Detect]
+    [bool]($r -and $r.Active)
+}
+function New-ToggleChip([string]$Label, [string]$Color, [bool]$On, [scriptblock]$OnClick) {
+    $b = New-Object Windows.Controls.Button
+    $b.Style = $Script:TabStyle; $b.Margin = Th 0, 0, 6, 0
+    $dot = New-Object Windows.Shapes.Ellipse; $dot.Width = 7; $dot.Height = 7; $dot.Margin = Th 0, 0, 6, 0; $dot.VerticalAlignment = 'Center'
+    if ($On) { $dot.Fill = Brush $Color } else { $dot.Stroke = Brush $Script:UI.MUTED; $dot.StrokeThickness = 1.3 }
+    $b.Content = New-HStack @($dot, (New-Text $Label 12 $(if ($On) { $Script:UI.TEXT } else { $Script:UI.DIM })))
+    $b.Background = if ($On) { Brush (Mix-Hex $Script:UI.CARD $Color 0.16) } else { Brush $Script:UI.CARD2 }
+    $b.Add_Click($OnClick)
+    $b
+}
+function Get-BiosText($Setting) { if ($LangState.Current -eq 'DE' -and $Setting.ExplDE) { $Setting.ExplDE } else { $Setting.Expl } }
+
+function Render-BiosPage {
+    $U = $Script:UI; $B = $Script:Bios
+    $p = Get-BiosProfile $B.Profile
+    $isMine = ($p.Id -eq $B.Detected)
+    $BiosPanel.Children.Clear()
+
+    # ---- selection card ----
+    $top = New-VStack @()
+    $top.Children.Add((New-Text "CPU: $CPU$($Script:Mid)Board: $($B.Board)$($Script:Mid)GPU: $GPU" 11.5 $U.ACC 'Normal' -Wrap -Margin 0, 0, 0, 12)) | Out-Null
+    $top.Children.Add((New-Text 'Board maker (for the menu paths)' 12.5 $U.TEXT2 'SemiBold' -Margin 0, 0, 0, 6)) | Out-Null
+    $vend = New-Object Windows.Controls.Border; $vend.CornerRadius = New-Object Windows.CornerRadius(9); $vend.Background = Brush $U.CARD2; $vend.Padding = Th 3; $vend.HorizontalAlignment = 'Left'
+    $vs = New-HStack @()
+    foreach ($k in $Script:BiosVendors.Keys) {
+        $key = $k; $on = ($k -eq $B.Vendor)
+        $label = $Script:BiosVendors[$k] + $(if ($k -eq $B.DetectedVendor -and $k -ne 'other') { '  (yours)' } else { '' })
+        $vb = New-Object Windows.Controls.Button; $vb.Style = $Script:TabStyle
+        $vb.Content = New-Text $label 12.5 $(if ($on) { '#ffffff' } else { $U.TEXT2 }) $(if ($on) { 'SemiBold' } else { 'Normal' })
+        $vb.Background = if ($on) { Brush $U.AMBER } else { [Windows.Media.Brushes]::Transparent }
+        if ($on) { $vb.Content.Foreground = Brush '#1a1205' }
+        $vb.Add_Click({ Select-BiosVendor $key }.GetNewClosure())
+        $vs.Children.Add($vb) | Out-Null
+    }
+    $vend.Child = $vs; $top.Children.Add($vend) | Out-Null
+    $top.Children.Add((New-Text "$($p.Name)$($Script:Mid)$($p.Cpus)$($Script:Mid)$($p.Platform)" 12.5 $U.TEXT2 'Normal' -Wrap -Margin 0, 12, 0, 0)) | Out-Null
+    if (-not $isMine) { $top.Children.Add((New-Text 'Not your detected platform -- shown for reference; the live status only applies to your own platform.' 12 $U.AMBER 'Normal' -Wrap -Margin 0, 4, 0, 0)) | Out-Null }
+
+    $filt = New-HStack @() @(0, 12, 0, 0)
+    $filt.Children.Add((New-Text 'Show:' 12 $U.DIM 'Normal' -Margin 0, 0, 8, 0)) | Out-Null
+    foreach ($c in $Script:BiosCats) {
+        $ck = $c.Key
+        $filt.Children.Add((New-ToggleChip $c.Label $c.Color $B.Filters[$ck] { $Script:Bios.Filters[$ck] = -not $Script:Bios.Filters[$ck]; Render-BiosPage }.GetNewClosure())) | Out-Null
+    }
+    $sep = New-Object Windows.Controls.Border; $sep.Width = 1; $sep.Height = 18; $sep.Background = Brush $U.BORDER; $sep.Margin = Th 4, 0, 10, 0
+    $filt.Children.Add($sep) | Out-Null
+    $filt.Children.Add((New-ToggleChip "Only what's left to do" $U.ERR $B.OnlyTodo { $Script:Bios.OnlyTodo = -not $Script:Bios.OnlyTodo; Render-BiosPage })) | Out-Null
+    $top.Children.Add($filt) | Out-Null
+
+    $leg = New-HStack @() @(0, 12, 0, 0)
+    foreach ($l in @(@($U.GREEN, 'already set'), @($U.ERR, 'still to set'), @('#6b7280', 'not detectable from Windows'))) {
+        $e = New-Object Windows.Shapes.Ellipse; $e.Width = 7; $e.Height = 7; $e.Fill = Brush $l[0]; $e.Margin = Th 0, 0, 5, 0; $e.VerticalAlignment = 'Center'
+        $leg.Children.Add($e) | Out-Null; $leg.Children.Add((New-Text $l[1] 11.5 $l[0] 'Normal' -Margin 0, 0, 14, 0)) | Out-Null
+    }
+    $top.Children.Add($leg) | Out-Null
+    $top.Children.Add((New-Text 'Menu names differ between BIOS versions -- the BIOS search (ASUS: F9, MSI: Ctrl+F, Gigabyte: Ctrl+F in Advanced Mode) finds a setting by its name.' 11.5 $U.DIM 'Normal' -Wrap -Margin 0, 8, 0, 0)) | Out-Null
+    $BiosPanel.Children.Add((New-Card $top)) | Out-Null
+
+    $notes = if ($LangState.Current -eq 'DE' -and $p.NotesDE) { $p.NotesDE } else { $p.Notes }
+    if ($notes) { $BiosPanel.Children.Add((New-Banner $notes $U.AMBER 0xE946)) | Out-Null }
+
+    # ---- detection summary in the header ----
+    if ($isMine -and $Script:BiosDetectDone) {
+        $keys = @($p.Settings | Where-Object { $_.Detect } | ForEach-Object { $_.Detect } | Select-Object -Unique)
+        $found = @($keys | Where-Object { $B.Results.ContainsKey($_) })
+        $ok = @($found | Where-Object { $B.Results[$_].Active }).Count
+        $BiosDetectStatus.Text = if ($found.Count) { "$ok/$($found.Count) detectable settings already set" } else { '' }
+        $BiosDetectStatus.Foreground = Brush $(if ($found.Count -and $ok -eq $found.Count) { $U.GREEN } else { $U.AMBER })
+    } elseif (-not $isMine) { $BiosDetectStatus.Text = '' }
+
+    # ---- setting cards per category ----
+    $shown = 0
+    foreach ($c in $Script:BiosCats) {
+        if (-not $B.Filters[$c.Key]) { continue }
+        $list = @($p.Settings | Where-Object { $_.Cat -eq $c.Key })
+        if ($B.OnlyTodo) { $list = @($list | Where-Object { -not (Test-BiosDone $_) }) }
+        if (-not $list.Count) { continue }
+        $BiosPanel.Children.Add((New-SectionTitle $c.Label $c.Color '' $(if ($shown) { @(0, 8, 0, 10) } else { @(0, 2, 0, 10) }))) | Out-Null
+        $grid = New-Grid2
+        foreach ($s in $list) { Add-Grid2 $grid (New-BiosCard $s $c.Color $isMine); $shown++ }
+        $BiosPanel.Children.Add($grid) | Out-Null
+    }
+    if (-not $shown) {
+        $msg = if ($B.OnlyTodo) { 'All detectable settings are already set!' } else { 'No settings in the chosen areas.' }
+        $BiosPanel.Children.Add((New-Text $msg 13 $(if ($B.OnlyTodo) { $U.GREEN } else { $U.DIM }) 'SemiBold' -Margin 4, 20, 0, 0)) | Out-Null
+    }
+}
+function New-BiosCard($S, [string]$Color, [bool]$IsMine) {
+    $U = $Script:UI
+    $det = if ($S.Detect -and $IsMine) { $Script:Bios.Results[$S.Detect] } else { $null }
+    if ($null -eq $det) {
+        $stCol = '#6b7280'
+        $stTip = if ($IsMine -or -not $S.Detect) { 'Not detectable from Windows -- check in the BIOS' } else { 'Status only for your detected platform' }
+    } elseif ($det.Active) { $stCol = $U.GREEN; $stTip = $det.Note } else { $stCol = $U.ERR; $stTip = $det.Note }
+
+    $v = New-VStack @()
+    $head = New-Object Windows.Controls.Grid
+    $c0 = New-Object Windows.Controls.ColumnDefinition; $c0.Width = [Windows.GridLength]::Auto; $head.ColumnDefinitions.Add($c0)
+    $c1 = New-Object Windows.Controls.ColumnDefinition; $c1.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $head.ColumnDefinitions.Add($c1)
+    $c2 = New-Object Windows.Controls.ColumnDefinition; $c2.Width = [Windows.GridLength]::Auto; $head.ColumnDefinitions.Add($c2)
+    $dot = New-Object Windows.Shapes.Ellipse; $dot.Width = 9; $dot.Height = 9; $dot.Fill = Brush $stCol; $dot.Margin = Th 0, 5, 10, 0; $dot.VerticalAlignment = 'Top'
+    $head.Children.Add($dot) | Out-Null
+    $nm = New-VStack @((New-Text $S.Name 13.5 $U.TEXT 'SemiBold' -Wrap), (New-Text $stTip 11 $stCol 'Normal' -Wrap -Margin 0, 2, 0, 0))
+    [Windows.Controls.Grid]::SetColumn($nm, 1); $head.Children.Add($nm) | Out-Null
+    $impCol = @{ high = '#ef4444'; medium = '#f59e0b'; low = '#22c55e' }[$S.Impact]
+    $riskCol = @{ safe = '#22c55e'; moderate = '#f59e0b'; advanced = '#ef4444' }[$S.Risk]
+    $bd = New-VStack @((New-Badge "$($S.Impact) impact" $impCol (Mix-Hex $U.CARD $impCol 0.15)), (New-Badge $S.Risk $riskCol (Mix-Hex $U.CARD $riskCol 0.15))) @(10, 0, 0, 0)
+    [Windows.Controls.Grid]::SetColumn($bd, 2); $head.Children.Add($bd) | Out-Null
+    $v.Children.Add($head) | Out-Null
+
+    $val = New-Object Windows.Controls.Border; $val.Background = Brush $U.CARD2; $val.CornerRadius = New-Object Windows.CornerRadius(6); $val.Padding = Th 10, 6, 10, 7; $val.Margin = Th 0, 10, 0, 8
+    $val.Child = New-VStack @((New-Text "Default: $($S.Def)" 11.5 $U.DIM 'Normal' -Wrap), (New-Text "Recommended: $($S.Rec)" 12.5 $Color 'SemiBold' -Wrap -Margin 0, 2, 0, 0))
+    $v.Children.Add($val) | Out-Null
+
+    $vk = $Script:Bios.Vendor
+    $path = if ($S.Paths.ContainsKey($vk)) { $S.Paths[$vk] } else { $S.Path }
+    $who = if ($S.Paths.ContainsKey($vk)) { $Script:BiosVendors[$vk] } elseif ($LangState.Current -eq 'DE') { 'Alle Boards' } else { 'All boards' }
+    $pl = New-Object Windows.Controls.DockPanel; $pl.Margin = Th 0, 0, 0, 6
+    $pin = New-Icon 0xE707 12 $U.VIOLET @(0, 1, 6, 0); $pin.VerticalAlignment = 'Top'
+    [Windows.Controls.DockPanel]::SetDock($pin, 'Left'); $pl.Children.Add($pin) | Out-Null
+    $pl.Children.Add((New-Text "${who}: $path" 11.5 $U.VIOLET 'Normal' -Wrap)) | Out-Null
+    $v.Children.Add($pl) | Out-Null
+    $v.Children.Add((New-Text (Get-BiosText $S) 12 $U.TEXT2 'Normal' -Wrap)) | Out-Null
+
+    $card = New-Card $v @(0, 0, 0, 0) @(14, 12, 14, 12)
+    $card.VerticalAlignment = 'Stretch'
+    $card
+}
+function Invoke-BiosDetect {
+    $BtnBiosDetect.IsEnabled = $false
+    $BiosDetectStatus.Text = 'Reading system state ...'; $BiosDetectStatus.Foreground = Brush $Script:UI.DIM
+    $Window.Dispatcher.Invoke([Action] {}, [System.Windows.Threading.DispatcherPriority]::Render)
+    try { $Script:Bios.Results = Get-BiosDetection } catch { $Script:Bios.Results = @{} }
+    $Script:BiosDetectDone = $true
+    $BtnBiosDetect.IsEnabled = $true
+    Render-BiosPage
+}
+$BtnBiosDetect.Add_Click({ Invoke-BiosDetect })
+
+# =============================================================================
+# DASHBOARD PAGE  --  hardware, optimization score, live monitor, ping test,
+# snapshot / compare, safety net. Score + counters come from the status table
+# the tweak rows already filled (no second round of checks at startup).
+# =============================================================================
+$Script:Dash = @{}
+$Script:PingState = @{ Ps = $null; Rs = $null }    # shared by the ping closures and the close handler
+
+function Open-BackupFolder {
+    if (Test-Path $Script:RegistryBackupRoot) { Start-Process explorer.exe $Script:RegistryBackupRoot }
+    else { [System.Windows.MessageBox]::Show("No registry backups yet. Apply or revert some tweaks first.", "Backups", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null }
+}
+function Open-LogFile {
+    if (Test-Path $LogFile) { Start-Process notepad.exe $LogFile }
+    else { [System.Windows.MessageBox]::Show("No log file yet. Apply some tweaks first.", "Log", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null }
+}
+function Get-BackupSummary {
+    $dirs = @(Get-ChildItem $Script:RegistryBackupRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
+    if (-not $dirs) { return @{ Count = 0; Last = 'none yet' } }
+    $last = $dirs[0].Name -replace '^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})\d{2}_(.+)$', '$3.$2.$1 $4:$5 ($6)'
+    @{ Count = $dirs.Count; Last = $last }
+}
+function Get-BaselineSummary {
+    if (Test-Path $Script:BaselineFile) {
+        $n = @(Get-Content $Script:BaselineFile -ErrorAction SilentlyContinue | Where-Object { $_ -and $_.Trim() }).Count
+        "saved $((Get-Item $Script:BaselineFile).LastWriteTime.ToString('dd.MM.yyyy HH:mm')) ($n tweaks)"
+    } else { 'created after the first Apply' }
+}
+
+function New-HwCard([int]$Glyph, [string]$Color, [string]$Label, [string]$Value, [string]$Sub) {
+    $v = New-VStack @((New-HStack @((New-Icon $Glyph 14 $Color @(0, 0, 8, 0)), (New-Text $Label 11.5 $Script:UI.DIM)) @(0, 0, 0, 8)),
+                      (New-Text $Value 14 $Script:UI.TEXT 'SemiBold' -Wrap), (New-Text $Sub 11.5 $Script:UI.DIM 'Normal' -Wrap -Margin 0, 4, 0, 0))
+    New-Card $v @(0, 0, 12, 14) @(16, 14, 16, 14)
+}
+function New-LiveRow([string]$Label, [string]$Color) {
+    $g = New-Object Windows.Controls.Grid; $g.Margin = Th 0, 6, 0, 0
+    foreach ($w in 70, -1, 120) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = if ($w -lt 0) { New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star) } else { New-Object Windows.GridLength($w) }; $g.ColumnDefinitions.Add($cd) }
+    $g.Children.Add((New-Text $Label 12.5 $Script:UI.TEXT2)) | Out-Null
+    $bar = New-Bar 0 $Color 7; $bar.VerticalAlignment = 'Center'; [Windows.Controls.Grid]::SetColumn($bar, 1); $g.Children.Add($bar) | Out-Null
+    $val = New-Text '--' 12.5 $Color 'Normal' -Mono; $val.HorizontalAlignment = 'Right'; [Windows.Controls.Grid]::SetColumn($val, 2); $g.Children.Add($val) | Out-Null
+    @{ Root = $g; Bar = $bar; Val = $val }
+}
+
+function Build-DashboardPage {
+    $U = $Script:UI; $D = $Script:Dash
     $DashboardPanel.Children.Clear()
+    $DashboardPanel.Children.Add((New-PageHeader 'Dashboard' 'System overview, optimization score and live values' $U.RED)) | Out-Null
 
-    $intro = New-Object Windows.Controls.TextBlock
-    $intro.Text        = "Live system status and a Vorher/Nachher (before/after) comparison of tweak states. Take a snapshot, apply or revert tweaks in the other tabs, then compare."
-    $intro.FontSize    = 11
-    $intro.Foreground  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(170,170,170))
-    $intro.TextWrapping = [Windows.TextWrapping]::Wrap
-    $intro.Margin      = New-Object Windows.Thickness(0,4,0,14)
-    $DashboardPanel.Children.Add($intro) | Out-Null
+    # ---- hardware cards ----
+    $cpuO = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+    $gpuO = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch 'Microsoft' } | Select-Object -First 1
+    $memO = @(Get-CimInstance Win32_PhysicalMemory -ErrorAction SilentlyContinue)
+    $vram = 0
+    try { $vram = [math]::Round(((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0*' -ErrorAction SilentlyContinue | Where-Object { $_.'HardwareInformation.qwMemorySize' } | Select-Object -First 1).'HardwareInformation.qwMemorySize') / 1GB) } catch { }
+    $ddr = switch ([int]($memO | Select-Object -First 1).SMBIOSMemoryType) { 34 { 'DDR5' } 26 { 'DDR4' } 24 { 'DDR3' } default { '' } }
+    $hw = New-Object Windows.Controls.Grid; $hw.Margin = Th 0, 0, -12, 0
+    foreach ($i in 0..3) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $hw.ColumnDefinitions.Add($cd) }
+    $cards = @(
+        (New-HwCard 0xEEA1 $U.RED 'CPU' $CPU "$($cpuO.NumberOfCores) cores / $($cpuO.NumberOfLogicalProcessors) threads$($Script:Mid)$($cpuO.MaxClockSpeed) MHz"),
+        (New-HwCard 0xE7F4 $(if ($IsAMD) { $U.RED } elseif ($IsNVIDIA) { $U.NV } else { $U.WIN }) 'GPU' $GPU "$(if ($vram) { "$vram GB VRAM$($Script:Mid)" })driver $($gpuO.DriverVersion)"),
+        (New-HwCard 0xE950 $U.VIOLET 'RAM' "$RAM GB $ddr".Trim() "$($memO.Count) module(s)$($Script:Mid)$(($memO | Select-Object -First 1).ConfiguredClockSpeed) MHz"),
+        (New-HwCard 0xEDA2 $U.AMBER 'Board / OS' $Script:Bios.Board "$OSShort$($Script:Mid)$NVMeInfo")
+    )
+    for ($i = 0; $i -lt 4; $i++) { [Windows.Controls.Grid]::SetColumn($cards[$i], $i); $hw.Children.Add($cards[$i]) | Out-Null }
+    $DashboardPanel.Children.Add($hw) | Out-Null
 
-    # --- Live info box ---
-    $infoBorder = New-Object Windows.Controls.Border
-    $infoBorder.Background      = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(22,33,62))
-    $infoBorder.CornerRadius    = New-Object Windows.CornerRadius(6)
-    $infoBorder.Padding         = New-Object Windows.Thickness(14,10,14,10)
-    $infoBorder.Margin          = New-Object Windows.Thickness(0,0,0,16)
-    $infoStack = New-Object Windows.Controls.StackPanel
-
-    $liveInfo = Get-DashboardLiveInfo
-
-    # Optimization Score (headline): share of checkable tweaks that are active.
-    $scoreVal = "$($liveInfo.Score)%   [$(Format-Bar $liveInfo.Score 16)]   ($($liveInfo.Active)/$($liveInfo.Checkable) active)"
-    $infoStack.Children.Add((New-DashboardStatRow "Optimization Score" $scoreVal)) | Out-Null
-
-    $infoStack.Children.Add((New-DashboardStatRow "GPU / CPU / RAM" "$GPU | $CPU | ${RAM} GB")) | Out-Null
-    $infoStack.Children.Add((New-DashboardStatRow "OS"              $OSShort)) | Out-Null
-    $infoStack.Children.Add((New-DashboardStatRow "Active Power Plan" $liveInfo.PowerPlan)) | Out-Null
-    $infoStack.Children.Add((New-DashboardStatRow "Timer Resolution"  $liveInfo.TimerRes)) | Out-Null
-
-    # Monitor advisor: warn if the display isn't running at the adapter's max refresh rate.
-    $monVal = if ($liveInfo.CurHz -le 0) { "unknown" }
-              elseif ($liveInfo.MaxHz -gt $liveInfo.CurHz) { "$($liveInfo.CurHz) Hz  --  running below max! Adapter supports up to $($liveInfo.MaxHz) Hz. Set it in Windows: Display Settings > Advanced display > Refresh rate." }
-              else { "$($liveInfo.CurHz) Hz (running at max)" }
-    $infoStack.Children.Add((New-DashboardStatRow "Monitor Refresh" $monVal)) | Out-Null
-
-    $summaryRow = New-DashboardStatRow "Tweaks Active" "$($liveInfo.Active) active / $($liveInfo.Inactive) inactive / $($liveInfo.Unknown) unknown (of $($AllTweaks.Count) total)"
-    $infoStack.Children.Add($summaryRow) | Out-Null
-
-    $infoBorder.Child = $infoStack
-    $DashboardPanel.Children.Add($infoBorder) | Out-Null
-
-    # --- Live resource monitor (updates every 1.5s; locale-safe CIM perf classes) ---
-    $monBorder = New-Object Windows.Controls.Border
-    $monBorder.Background   = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(22,33,62))
-    $monBorder.CornerRadius = New-Object Windows.CornerRadius(6)
-    $monBorder.Padding      = New-Object Windows.Thickness(14,10,14,10)
-    $monBorder.Margin       = New-Object Windows.Thickness(0,0,0,16)
-    $monStack = New-Object Windows.Controls.StackPanel
-
-    $monTitle = New-Object Windows.Controls.TextBlock
-    $monTitle.Text       = "-- Live Monitor (refreshes every 1.5s)"
-    $monTitle.FontSize   = 12
-    $monTitle.FontWeight = "SemiBold"
-    $monTitle.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0,212,170))
-    $monTitle.Margin     = New-Object Windows.Thickness(0,0,0,6)
-    $monStack.Children.Add($monTitle) | Out-Null
-
-    $mkMon = {
-        param($initial)
-        $tb = New-Object Windows.Controls.TextBlock
-        $tb.FontSize   = 13
-        $tb.FontFamily = New-Object Windows.Media.FontFamily("Consolas")
-        $tb.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(221,221,221))
-        $tb.Margin     = New-Object Windows.Thickness(0,1,0,1)
-        $tb.Text       = $initial
-        return $tb
+    # ---- optimization score ----
+    $verifyBtn = New-Btn 'Verify again' $U.CARD2 $U.TEXT 0xE72C -Margin 0, 0, 0, 0
+    $verifyBtn.Add_Click({ Invoke-Verify })
+    $D.ScorePct  = New-Text '-- %' 30 $U.GREEN 'Bold' -Mono
+    $D.ScoreLine = New-Text '' 13 $U.TEXT 'SemiBold'
+    $D.ScoreSub  = New-Text '' 11.5 $U.DIM
+    $D.ScoreBar  = New-Bar 0 $U.GREEN 8
+    $mon = New-VStack @() @(0, 12, 0, 0)
+    $mi = 1
+    foreach ($m in @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Where-Object { $_.CurrentRefreshRate })) {
+        $atMax = [int]$m.CurrentRefreshRate -ge [int]$m.MaxRefreshRate
+        $adv = if ($atMax) { "  $($Script:EmDash.Trim()) maximum, nothing to do" } else { "  $($Script:EmDash.Trim()) can do $($m.MaxRefreshRate) Hz! Set it in Windows: Display settings > Advanced display > Refresh rate" }
+        $mon.Children.Add((New-HStack @((New-Icon 0xE7F4 13 $U.CYAN @(0, 0, 10, 0)), (New-Text "Monitor $mi$(if ($mi -eq 1) { ' (primary)' })" 12.5 $U.TEXT 'SemiBold'),
+            (New-Text "   $($m.CurrentHorizontalResolution) x $($m.CurrentVerticalResolution) @ $($m.CurrentRefreshRate) Hz" 12.5 $U.TEXT2),
+            (New-Text $adv 12.5 $(if ($atMax) { $U.DIM } else { $U.AMBER }))) @(0, 3, 0, 0))) | Out-Null
+        $mi++
     }
-    $monCpu  = & $mkMon "CPU   [------------]   --%"
-    $monRam  = & $mkMon "RAM   [------------]   --%"
-    $monDisk = & $mkMon "Disk  [------------]   --%"
-    $monNet  = & $mkMon "Net   -- Mbps"
-    $monStack.Children.Add($monCpu)  | Out-Null
-    $monStack.Children.Add($monRam)  | Out-Null
-    $monStack.Children.Add($monDisk) | Out-Null
-    $monStack.Children.Add($monNet)  | Out-Null
-    $monBorder.Child = $monStack
-    $DashboardPanel.Children.Add($monBorder) | Out-Null
+    $scoreBody = New-VStack @(
+        (New-CardTitle 'Optimization score' $U.RED $verifyBtn),
+        (New-HStack @($D.ScorePct, (New-VStack @($D.ScoreLine, $D.ScoreSub) @(14, 2, 0, 0))) @(0, 0, 0, 10)),
+        $D.ScoreBar, $mon)
+    $DashboardPanel.Children.Add((New-Card $scoreBody)) | Out-Null
 
-    # Sample the (relatively expensive) CIM perf classes on a BACKGROUND
-    # runspace so the WPF UI thread never stalls. The DispatcherTimer below
-    # only reads the shared, already-computed values -> no micro-stutter.
+    # ---- live monitor + network latency ----
+    $row = New-Object Windows.Controls.Grid
+    foreach ($i in 0, 1) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $row.ColumnDefinitions.Add($cd) }
+    $lr = @{ Cpu = (New-LiveRow 'CPU' $U.RED); Ram = (New-LiveRow 'RAM' $U.VIOLET); Disk = (New-LiveRow 'Disk' $U.AMBER); Net = (New-LiveRow 'Network' $U.CYAN) }
+    $liveBody = New-VStack @((New-CardTitle 'Live monitor' $U.CYAN (New-Text 'updates every 1.5 s, background thread' 11 $U.DIM)), $lr.Cpu.Root, $lr.Ram.Root, $lr.Disk.Root, $lr.Net.Root)
+    $liveCard = New-Card $liveBody @(0, 0, 7, 14); $row.Children.Add($liveCard) | Out-Null
+
+    $gwAddr = try { (Get-NetIPConfiguration -ErrorAction Stop | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1).IPv4DefaultGateway.NextHop } catch { $null }
+    $pingRows = New-VStack @()
+    $pingInfo = New-Text "10 pings per target: average latency, packet loss and jitter. Gateway $(if ($gwAddr) { $gwAddr } else { 'unknown' })." 12 $U.DIM 'Normal' -Wrap -Margin 0, 0, 0, 4
+    $pingRows.Children.Add($pingInfo) | Out-Null
+    $pingBtn = New-Btn 'Run test' $U.ACC '#071018' 0xE768 -Bold -Margin 0, 0, 0, 0
+    $pingBody = New-VStack @((New-CardTitle 'Network latency' $U.BLUE $pingBtn), $pingRows)
+    $pingCard = New-Card $pingBody @(7, 0, 0, 14); [Windows.Controls.Grid]::SetColumn($pingCard, 1); $row.Children.Add($pingCard) | Out-Null
+    $DashboardPanel.Children.Add($row) | Out-Null
+
+    $capturedGateway = $gwAddr; $pstate = $Script:PingState; $U2 = $U
+    $pingBtn.Add_Click({
+        $pingBtn.IsEnabled = $false
+        $pingRows.Children.Clear()
+        $wait = New-Object Windows.Controls.TextBlock; $wait.Text = "Testing (10 pings per target -- the window stays responsive) ..."; $wait.FontSize = 12.5
+        $wait.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($U2.DIM))
+        $pingRows.Children.Add($wait) | Out-Null
+        $tgts = New-Object System.Collections.ArrayList
+        if ($capturedGateway) { [void]$tgts.Add(@{ Name = "Gateway ($capturedGateway)"; Host = $capturedGateway }) }
+        [void]$tgts.Add(@{ Name = "Cloudflare (1.1.1.1)"; Host = "1.1.1.1" })
+        [void]$tgts.Add(@{ Name = "Google (8.8.8.8)"; Host = "8.8.8.8" })
+        # Pings run on a background runspace so the WPF thread never freezes. State lives in a
+        # shared hashtable (not $Script:) so the close handler can always clean it up.
+        $sync = [hashtable]::Synchronized(@{ Done = $false; Rows = @() })
+        $pstate.Rs = [runspacefactory]::CreateRunspace(); $pstate.Rs.ApartmentState = "MTA"; $pstate.Rs.Open()
+        $pstate.Rs.SessionStateProxy.SetVariable("sync", $sync); $pstate.Rs.SessionStateProxy.SetVariable("tgts", $tgts)
+        $pstate.Ps = [powershell]::Create(); $pstate.Ps.Runspace = $pstate.Rs
+        [void]$pstate.Ps.AddScript({
+            $inv = [System.Globalization.CultureInfo]::InvariantCulture; $count = 10; $rows = @()
+            foreach ($t in $tgts) {
+                $replies = @(Test-Connection -ComputerName $t.Host -Count $count -ErrorAction SilentlyContinue)
+                $recv = $replies.Count
+                if ($recv -eq 0) { $rows += , @($t.Name, 'unreachable (100% loss)', -1); continue }
+                $loss = [math]::Round((($count - $recv) / $count) * 100, 0)
+                $rtts = @($replies | ForEach-Object { [double]$_.ResponseTime })
+                $avgV = [math]::Round(($rtts | Measure-Object -Average).Average, 1)
+                $jit = 0.0
+                if ($rtts.Count -ge 2) { $diffs = for ($j = 1; $j -lt $rtts.Count; $j++) { [math]::Abs($rtts[$j] - $rtts[$j - 1]) }; $jit = [math]::Round(($diffs | Measure-Object -Average).Average, 1) }
+                $rows += , @($t.Name, ("{0} ms  |  loss {1}%  |  jitter {2} ms" -f $avgV.ToString("0.#", $inv), $loss, $jit.ToString("0.#", $inv)), $avgV)
+            }
+            $sync.Rows = $rows; $sync.Done = $true
+        })
+        $handle = $pstate.Ps.BeginInvoke()
+        $timer = New-Object System.Windows.Threading.DispatcherTimer; $timer.Interval = [TimeSpan]::FromMilliseconds(300)
+        $timer.Add_Tick({
+            if (-not $sync.Done) { return }
+            $timer.Stop()
+            try { $pstate.Ps.EndInvoke($handle) } catch { }
+            try { $pstate.Ps.Dispose() } catch { }
+            try { $pstate.Rs.Close(); $pstate.Rs.Dispose() } catch { }
+            $pstate.Ps = $null; $pstate.Rs = $null
+            $pingRows.Children.Clear()
+            foreach ($r in $sync.Rows) {
+                $col = if ($r[2] -lt 0) { $U2.ERR } elseif ($r[2] -lt 15) { $U2.GREEN } elseif ($r[2] -lt 40) { $U2.AMBER } else { $U2.ERR }
+                $g = New-Object Windows.Controls.Grid; $g.Margin = New-Object Windows.Thickness(0, 6, 0, 0)
+                $c0 = New-Object Windows.Controls.ColumnDefinition; $c1 = New-Object Windows.Controls.ColumnDefinition; $c1.Width = [Windows.GridLength]::Auto
+                $g.ColumnDefinitions.Add($c0); $g.ColumnDefinitions.Add($c1)
+                $a = New-Object Windows.Controls.TextBlock; $a.Text = $r[0]; $a.FontSize = 12.5; $a.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($U2.TEXT2))
+                $b = New-Object Windows.Controls.TextBlock; $b.Text = $r[1]; $b.FontSize = 12.5; $b.FontFamily = New-Object Windows.Media.FontFamily("Consolas")
+                $b.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($col))
+                [Windows.Controls.Grid]::SetColumn($b, 1); $g.Children.Add($a) | Out-Null; $g.Children.Add($b) | Out-Null
+                $pingRows.Children.Add($g) | Out-Null
+            }
+            $pingBtn.IsEnabled = $true
+        }.GetNewClosure())
+        $timer.Start()
+    }.GetNewClosure())
+
+    # ---- snapshot / compare + safety net ----
+    $row2 = New-Object Windows.Controls.Grid
+    foreach ($i in 0, 1) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $row2.ColumnDefinitions.Add($cd) }
+    $btnSnapshot = New-Btn 'Take snapshot' $U.VIOLET '#120a24' 0xE895 -Bold -Margin 0, 0, 0, 0
+    $btnCompare  = New-Btn 'Compare' $U.CARD2 $U.TEXT
+    $resultPanel = New-VStack @() @(0, 10, 0, 0)
+    $snapBody = New-VStack @((New-CardTitle 'Snapshot & compare' $U.VIOLET),
+        (New-Text 'Take a snapshot, apply or revert tweaks, then compare: every tweak whose status changed is listed.' 12.5 $U.DIM 'Normal' -Wrap -Margin 0, 0, 0, 12),
+        (New-HStack @($btnSnapshot, $btnCompare)), $resultPanel)
+    $snapCard = New-Card $snapBody @(0, 0, 7, 14); $row2.Children.Add($snapCard) | Out-Null
+
+    $D.SafeBackup = New-Text '' 12.5 $U.TEXT 'SemiBold'; $D.SafeBase = New-Text '' 12.5 $U.TEXT 'SemiBold'
+    $safeRow = {
+        param([int]$G, [string]$C, [string]$L, $ValueBlock)
+        $gr = New-Object Windows.Controls.Grid; $gr.Margin = Th 0, 5, 0, 0
+        $gr.Children.Add((New-HStack @((New-Icon $G 13 $C @(0, 0, 10, 0)), (New-Text $L 12.5 $Script:UI.TEXT2)))) | Out-Null
+        $ValueBlock.HorizontalAlignment = 'Right'; $gr.Children.Add($ValueBlock) | Out-Null
+        $gr
+    }
+    $safeBody = New-VStack @((New-CardTitle 'Safety net' $U.GREEN),
+        (& $safeRow 0xEA18 $U.GREEN 'Restore point before every Apply' (New-Text 'on' 12.5 $U.TEXT 'SemiBold')),
+        (& $safeRow 0xE81C $U.VIOLET 'Last registry backup' $D.SafeBackup),
+        (& $safeRow 0xE895 $U.CYAN 'Drift baseline' $D.SafeBase))
+    $safeCard = New-Card $safeBody @(7, 0, 0, 14); [Windows.Controls.Grid]::SetColumn($safeCard, 1); $row2.Children.Add($safeCard) | Out-Null
+    $DashboardPanel.Children.Add($row2) | Out-Null
+
+    $snapState = @{ Snap = $null }
+    $btnSnapshot.Add_Click({
+        $states = @{}
+        foreach ($tweak in $AllTweaks) { if ($CheckFunctions.ContainsKey($tweak.Name)) { try { $states[$tweak.Name] = & $CheckFunctions[$tweak.Name] } catch { $states[$tweak.Name] = $null } } }
+        $snapState.Snap = @{ Time = Get-Date; States = $states }
+        $resultPanel.Children.Clear()
+        $resultPanel.Children.Add((New-Text "Snapshot taken at $((Get-Date).ToString('HH:mm:ss')) -- $($states.Count) tweaks recorded." 12 $Script:UI.GREEN)) | Out-Null
+    }.GetNewClosure())
+    $btnCompare.Add_Click({
+        $resultPanel.Children.Clear()
+        if (-not $snapState.Snap) { $resultPanel.Children.Add((New-Text "No snapshot yet -- click 'Take snapshot' first." 12 $Script:UI.AMBER)) | Out-Null; return }
+        $resultPanel.Children.Add((New-Text "Changes since $($snapState.Snap.Time.ToString('HH:mm:ss')):" 12 $Script:UI.TEXT 'SemiBold' -Margin 0, 0, 0, 4)) | Out-Null
+        $changeCount = 0
+        foreach ($tweak in $AllTweaks) {
+            if (-not $CheckFunctions.ContainsKey($tweak.Name) -or -not $snapState.Snap.States.ContainsKey($tweak.Name)) { continue }
+            $before = $snapState.Snap.States[$tweak.Name]
+            try { $after = & $CheckFunctions[$tweak.Name] } catch { $after = $null }
+            if ($before -ne $after) {
+                $changeCount++
+                # No hashtable lookup with a $null key here (illegal in a PowerShell hash literal)
+                $lblBefore = if ($null -eq $before) { "unknown" } elseif ($before -eq $true) { "active" } else { "inactive" }
+                $lblAfter  = if ($null -eq $after)  { "unknown" } elseif ($after  -eq $true) { "active" } else { "inactive" }
+                $resultPanel.Children.Add((New-Text "$($tweak.Name): $lblBefore -> $lblAfter" 12 $Script:UI.TEXT2 -Margin 0, 1, 0, 1)) | Out-Null
+            }
+        }
+        if ($changeCount -eq 0) { $resultPanel.Children.Add((New-Text "No changes detected since the snapshot." 12 $Script:UI.DIM)) | Out-Null }
+    }.GetNewClosure())
+
+    # ---- live monitor sampler: CIM perf classes on a BACKGROUND runspace; the UI timer only reads ----
     $monData = [hashtable]::Synchronized(@{ Run = $true; Ready = $false; Cpu = 0.0; RamPct = 0.0; RamUsedGB = 0.0; RamTotGB = 0.0; Disk = 0.0; NetMbps = 0.0 })
-    $monRs = [runspacefactory]::CreateRunspace()
-    $monRs.ApartmentState = "MTA"
-    $monRs.ThreadOptions  = "ReuseThread"
-    $monRs.Open()
+    $monRs = [runspacefactory]::CreateRunspace(); $monRs.ApartmentState = "MTA"; $monRs.ThreadOptions = "ReuseThread"; $monRs.Open()
     $monRs.SessionStateProxy.SetVariable("monData", $monData)
-    $monPs = [powershell]::Create()
-    $monPs.Runspace = $monRs
+    $monPs = [powershell]::Create(); $monPs.Runspace = $monRs
     [void]$monPs.AddScript({
         while ($monData.Run) {
             try {
@@ -3823,310 +4823,205 @@ function Build-DashboardPanel {
                 $monData.NetMbps = [math]::Round(($netBps * 8 / 1MB), 1)
                 $monData.Ready   = $true
             } catch { }
-            # Sleep in short chunks so setting Run=$false stops the loop within ~100ms
+            # Sleep in short chunks so setting Run=$false stops the loop within ~100 ms
             for ($i = 0; $i -lt 15 -and $monData.Run; $i++) { Start-Sleep -Milliseconds 100 }
         }
     })
     $monHandle = $monPs.BeginInvoke()
-    # On main-window close: stop the sampler loop, then dispose the runspace
-    # cleanly (same pattern as the ping test) so no thread/handle is leaked.
+    $pstate2 = $Script:PingState
     $Window.Add_Closed({
         $monData.Run = $false
         try { $monPs.EndInvoke($monHandle) } catch { }
         try { $monPs.Dispose() } catch { }
-        try { $monRs.Close() }  catch { }
-        try { $monRs.Dispose() } catch { }
-        # Also tear down the ping-test runspace if a test is still running when the
-        # window is closed -- its DispatcherTimer stops firing after close, so it would
-        # otherwise leak the runspace/thread.
-        try { if ($Script:pingPs) { $Script:pingPs.Stop(); $Script:pingPs.Dispose(); $Script:pingPs = $null } } catch { }
-        try { if ($Script:pingRs) { $Script:pingRs.Close(); $Script:pingRs.Dispose(); $Script:pingRs = $null } } catch { }
+        try { $monRs.Close(); $monRs.Dispose() } catch { }
+        # A ping test still running when the window closes: stop + dispose its runspace too
+        try { if ($pstate2.Ps) { $pstate2.Ps.Stop(); $pstate2.Ps.Dispose(); $pstate2.Ps = $null } } catch { }
+        try { if ($pstate2.Rs) { $pstate2.Rs.Close(); $pstate2.Rs.Dispose(); $pstate2.Rs = $null } } catch { }
     }.GetNewClosure())
-
     $monTimer = New-Object System.Windows.Threading.DispatcherTimer
     $monTimer.Interval = [TimeSpan]::FromMilliseconds(750)
     $monTimer.Add_Tick({
         if (-not $monData.Ready) { return }
         $inv = [System.Globalization.CultureInfo]::InvariantCulture
-        $monCpu.Text  = "CPU   [$(Format-Bar $monData.Cpu)]  {0,3}%" -f [int]$monData.Cpu
-        $monRam.Text  = "RAM   [$(Format-Bar $monData.RamPct)]  {0,3}%  ({1}/{2} GB)" -f [int]$monData.RamPct, ([double]$monData.RamUsedGB).ToString("0.#", $inv), ([double]$monData.RamTotGB).ToString("0.#", $inv)
-        $monDisk.Text = "Disk  [$(Format-Bar $monData.Disk)]  {0,3}%" -f [int]$monData.Disk
-        $monNet.Text  = "Net   {0} Mbps" -f ([double]$monData.NetMbps).ToString("0.#", $inv)
+        Set-Bar $lr.Cpu.Bar $monData.Cpu;    $lr.Cpu.Val.Text  = "{0} %" -f [int]$monData.Cpu
+        Set-Bar $lr.Ram.Bar $monData.RamPct; $lr.Ram.Val.Text  = "{0} %  {1} GB" -f [int]$monData.RamPct, ([double]$monData.RamUsedGB).ToString("0.#", $inv)
+        Set-Bar $lr.Disk.Bar $monData.Disk;  $lr.Disk.Val.Text = "{0} %" -f [int]$monData.Disk
+        Set-Bar $lr.Net.Bar ([math]::Min(100, $monData.NetMbps)); $lr.Net.Val.Text = "{0} Mbps" -f ([double]$monData.NetMbps).ToString("0.#", $inv)
     }.GetNewClosure())
     $monTimer.Start()
-
-    # --- Snapshot / Compare buttons ---
-    $btnRow = New-Object Windows.Controls.StackPanel
-    $btnRow.Orientation = "Horizontal"
-    $btnRow.Margin      = New-Object Windows.Thickness(0,0,0,14)
-
-    $btnSnapshot = New-Object Windows.Controls.Button
-    $btnSnapshot.Content = "[SNAP] Take Snapshot"
-    $btnSnapshot.Style   = $Window.FindResource("PrimaryBtn")
-    $btnSnapshot.Margin  = New-Object Windows.Thickness(0,0,8,0)
-    $btnSnapshot.Padding = New-Object Windows.Thickness(8,4,8,4)
-
-    $btnCompare = New-Object Windows.Controls.Button
-    $btnCompare.Content = "[CMP] Compare to Snapshot"
-    $btnCompare.Style   = $Window.FindResource("PrimaryBtn")
-    $btnCompare.Padding = New-Object Windows.Thickness(8,4,8,4)
-
-    $btnRow.Children.Add($btnSnapshot) | Out-Null
-    $btnRow.Children.Add($btnCompare)  | Out-Null
-    $DashboardPanel.Children.Add($btnRow) | Out-Null
-
-    # --- Result area (snapshot status + diff list) ---
-    $resultPanel = New-Object Windows.Controls.StackPanel
-    $DashboardPanel.Children.Add($resultPanel) | Out-Null
-
-    $btnSnapshot.Add_Click({
-        $states = @{}
-        foreach ($tweak in $AllTweaks) {
-            if ($CheckFunctions.ContainsKey($tweak.Name)) {
-                try { $states[$tweak.Name] = & $CheckFunctions[$tweak.Name] } catch { $states[$tweak.Name] = $null }
-            }
-        }
-        $Script:DashboardSnapshot = @{ Time = Get-Date; States = $states }
-
-        $resultPanel.Children.Clear()
-        $tb = New-Object Windows.Controls.TextBlock
-        $tb.Text       = "Snapshot taken at $((Get-Date).ToString('HH:mm:ss')) -- $($states.Count) tweaks recorded."
-        $tb.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0,200,80))
-        $tb.FontSize   = 12
-        $tb.Margin     = New-Object Windows.Thickness(0,4,0,0)
-        $resultPanel.Children.Add($tb) | Out-Null
-    }.GetNewClosure())
-
-    $btnCompare.Add_Click({
-        $resultPanel.Children.Clear()
-        if (-not $Script:DashboardSnapshot) {
-            $tb = New-Object Windows.Controls.TextBlock
-            $tb.Text       = "No snapshot yet -- click 'Take Snapshot' first."
-            $tb.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(200,120,0))
-            $tb.FontSize   = 12
-            $resultPanel.Children.Add($tb) | Out-Null
-            return
-        }
-
-        $hdr = New-Object Windows.Controls.TextBlock
-        $hdr.Text       = "Changes since snapshot ($($Script:DashboardSnapshot.Time.ToString('HH:mm:ss'))):"
-        $hdr.FontSize   = 12
-        $hdr.FontWeight = "SemiBold"
-        $hdr.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0,212,170))
-        $hdr.Margin     = New-Object Windows.Thickness(0,4,0,6)
-        $resultPanel.Children.Add($hdr) | Out-Null
-
-        $changeCount = 0
-        foreach ($tweak in $AllTweaks) {
-            if (-not $CheckFunctions.ContainsKey($tweak.Name)) { continue }
-            if (-not $Script:DashboardSnapshot.States.ContainsKey($tweak.Name)) { continue }
-            $before = $Script:DashboardSnapshot.States[$tweak.Name]
-            try { $after = & $CheckFunctions[$tweak.Name] } catch { $after = $null }
-            if ($before -ne $after) {
-                $changeCount++
-                $line = New-Object Windows.Controls.TextBlock
-                # No hashtable here: a $null key is illegal in a PowerShell hash literal
-                # and used to throw on the FIRST changed tweak, aborting the whole Compare.
-                $lblBefore = if ($null -eq $before) { "unknown" } elseif ($before -eq $true) { "active" } else { "inactive" }
-                $lblAfter  = if ($null -eq $after)  { "unknown" } elseif ($after  -eq $true) { "active" } else { "inactive" }
-                $line.Text       = "$($tweak.Name): $lblBefore -> $lblAfter"
-                $line.FontSize   = 12
-                $line.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(221,221,221))
-                $line.Margin     = New-Object Windows.Thickness(0,1,0,1)
-                $resultPanel.Children.Add($line) | Out-Null
-            }
-        }
-        if ($changeCount -eq 0) {
-            $tb = New-Object Windows.Controls.TextBlock
-            $tb.Text       = "No changes detected since the snapshot."
-            $tb.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(170,170,170))
-            $tb.FontSize   = 12
-            $resultPanel.Children.Add($tb) | Out-Null
-        }
-    }.GetNewClosure())
 }
 
-# -- Store HW info for BIOS panel lookup --------------------------------------
-$Script:HWInfo_CPU  = $CPU
-$Script:HWInfo_GPU  = $GPU
-
-
-# Fill panels
-$categories = @{
-    "Windows"      = $WindowsPanel
-    "Gaming"       = $GamingPanel
-    "Network"      = $NetworkPanel
-    "RAM & Storage"  = $RamStoragePanel
-    "Windows 11"   = $Win11Panel
-    "Audio"        = $AudioPanel
-    "GPU Tweaks"   = $GpuPanel
-    "Power Plan"   = $PowerPanel
+function Update-ScoreCard {
+    $D = $Script:Dash; if (-not $D.ScorePct) { return }
+    $a = @($Script:TweakState.Values | Where-Object { $_ -eq 'active' }).Count
+    $i = @($Script:TweakState.Values | Where-Object { $_ -eq 'inactive' }).Count
+    $u = @($Script:TweakState.Values | Where-Object { $_ -eq 'unknown' }).Count
+    $c = $a + $i
+    $score = if ($c) { [math]::Round($a / $c * 100) } else { 0 }
+    $col = if ($score -ge 80) { $Script:UI.GREEN } elseif ($score -ge 50) { $Script:UI.AMBER } else { $Script:UI.ERR }
+    $D.ScorePct.Text = "$score %"; $D.ScorePct.Foreground = Brush $col
+    $D.ScoreLine.Text = "$a of $c checkable tweaks are active on this PC"
+    $D.ScoreSub.Text = "$u one-time actions are not counted$($Script:Mid)drift check at every start"
+    Set-Bar $D.ScoreBar $score $col
+    $bk = Get-BackupSummary
+    $D.SafeBackup.Text = $bk.Last
+    $D.SafeBase.Text = Get-BaselineSummary
 }
 
-# Build BIOS Guide + Dashboard tabs (separate from tweak panels)
-Build-BiosPanel
-Build-DashboardPanel
-foreach ($cat in @("Windows","Gaming","Network","RAM & Storage","Windows 11","Audio","GPU Tweaks","Power Plan")) {  # Note: BIOS Guide + Dashboard are built separately
-    $panel  = $categories[$cat]
+# =============================================================================
+# PRESETS PAGE
+# =============================================================================
+$Script:PresetView = @{ Cards = @{}; Cats = @{}; Preview = 'Balanced' }
 
-    # Windows 11 tab: show OS notice at top
-    if ($cat -eq "Windows 11") {
-        $noticeBlock = New-Object Windows.Controls.TextBlock
-        if ($IsWin11) {
-            $noticeBlock.Text       = "[OK] Windows 11 Build $OSBuild detected  --  all tweaks available."
-            $noticeBlock.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0,212,170))
-        } else {
-            $noticeBlock.Text       = "[WIN10 DETECTED] These tweaks require Windows 11 and are disabled. Build: $OSBuild"
-            $noticeBlock.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(200,120,0))
-        }
-        $noticeBlock.FontSize     = 12
-        $noticeBlock.FontWeight   = "SemiBold"
-        $noticeBlock.Margin       = New-Object Windows.Thickness(0,4,0,10)
-        $noticeBlock.TextWrapping = [Windows.TextWrapping]::Wrap
-        $panel.Children.Add($noticeBlock) | Out-Null
+function Get-PresetList([string]$Name) {
+    switch ($Name) { 'Minimal' { $Script:PresetMinimal } 'Balanced' { $Script:PresetBalanced } default { $Script:PresetAggressive } }
+}
+function Show-PresetPreview([string]$Name) { $Script:PresetView.Preview = $Name; Update-PresetCards }
+
+function Build-PresetsPage {
+    $U = $Script:UI; $V = $Script:PresetView
+    $PresetsPanel.Children.Clear()
+    $vb = New-Btn 'Verify status' $U.CARD2 $U.TEXT 0xE72C -Margin 0, 0, 0, 0
+    $vb.Add_Click({ Invoke-Verify })
+    $PresetsPanel.Children.Add((New-PageHeader 'Presets' 'One click ticks a set of tweaks -- nothing changes until you press Apply selected (a restore point and a registry backup come first).' $U.AMBER @($vb))) | Out-Null
+
+    $defs = @(
+        @{ Name = 'Minimal';    Color = $U.GREEN; Fg = '#ffffff'; Desc = 'Safe basics only: privacy, gaming priority, network latency. No app removal, nothing you would miss. Ideal first run.' }
+        @{ Name = 'Balanced';   Color = $U.AMBER; Fg = '#1a1205'; Desc = 'Minimal + Ultimate Performance, HPET / timer, GPU and audio tweaks, light debloat (Copilot, Recall, Xbox) and the Windows AI switches. The recommended all-round setup.' }
+        @{ Name = 'Aggressive'; Color = $U.RED;   Fg = '#ffffff'; Desc = 'Everything: + Cortana / OneDrive / Teams removal, no hibernation, no memory compression. For experienced users -- removed apps need System Restore.' }
+    )
+    $grid = New-Object Windows.Controls.Grid; $grid.Margin = Th 0, 0, -14, 0
+    foreach ($i in 0..2) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $grid.ColumnDefinitions.Add($cd) }
+    $col = 0
+    foreach ($d in $defs) {
+        $name = $d.Name
+        $dot = New-Object Windows.Shapes.Ellipse; $dot.Width = 20; $dot.Height = 20; $dot.Fill = Brush $d.Color; $dot.Margin = Th 0, 0, 12, 0
+        $sub = New-Text '' 12 $d.Color
+        $bar = New-Bar 0 $d.Color 4
+        $sel = New-Btn 'Select' $d.Color $d.Fg 0 -Bold -Margin 0, 0, 0, 0
+        $prev = New-Btn 'Preview' $U.CARD2 $U.TEXT
+        $prev.Add_Click({ Show-PresetPreview $name }.GetNewClosure())
+        $desc = New-Text $d.Desc 12.5 $U.DESC 'Normal' -Wrap -Margin 0, 12, 0, 14
+        $desc.MinHeight = 52
+        $body = New-VStack @((New-HStack @($dot, (New-VStack @((New-Text $name 15 $U.TEXT 'SemiBold'), $sub))) @(0, 0, 0, 10)), $bar, $desc, (New-HStack @($sel, $prev)))
+        $card = New-Card $body @(0, 0, 14, 14); [Windows.Controls.Grid]::SetColumn($card, $col); $grid.Children.Add($card) | Out-Null
+        $V.Cards[$name] = @{ Sub = $sub; Bar = $bar; Card = $card; Color = $d.Color }
+        Set-Variable -Name "BtnPreset$($name.Substring(0, 3))" -Value $sel -Scope Script
+        $col++
     }
+    $PresetsPanel.Children.Add($grid) | Out-Null
 
-    # Network tab: live adapter/DNS/gateway info + ping test
-    if ($cat -eq "Network") {
-        $netInfoBorder = New-Object Windows.Controls.Border
-        $netInfoBorder.Background      = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(22,33,62))
-        $netInfoBorder.CornerRadius    = New-Object Windows.CornerRadius(6)
-        $netInfoBorder.Padding         = New-Object Windows.Thickness(10,8,10,8)
-        $netInfoBorder.Margin          = New-Object Windows.Thickness(0,0,0,12)
-
-        $netInfoStack = New-Object Windows.Controls.StackPanel
-
-        $netInfoText = New-Object Windows.Controls.TextBlock
-        $netInfoText.FontSize      = 12
-        $netInfoText.FontFamily    = New-Object Windows.Media.FontFamily("Consolas")
-        $netInfoText.Foreground    = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(170,170,170))
-        $netInfoText.TextWrapping  = [Windows.TextWrapping]::Wrap
-        try {
-            $activeAdapter = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
-            $ipConfig      = if ($activeAdapter) { Get-NetIPConfiguration -InterfaceIndex $activeAdapter.InterfaceIndex -ErrorAction SilentlyContinue }
-            $gateway       = if ($ipConfig) { ($ipConfig.IPv4DefaultGateway | Select-Object -First 1).NextHop }
-            $dnsServers    = if ($ipConfig) { ($ipConfig.DNSServer | Where-Object { $_.AddressFamily -eq 2 } | Select-Object -ExpandProperty ServerAddresses) -join ", " }
-            $adapterLine   = if ($activeAdapter) { "$($activeAdapter.Name): $($activeAdapter.InterfaceDescription)  ($($activeAdapter.LinkSpeed))" } else { "No active adapter detected" }
-            $netInfoText.Text = "Adapter: $adapterLine`nGateway: $(if ($gateway) { $gateway } else { 'unknown' })   |   DNS: $(if ($dnsServers) { $dnsServers } else { 'unknown' })"
-        } catch { $netInfoText.Text = "Network info unavailable" }
-        $netInfoStack.Children.Add($netInfoText) | Out-Null
-
-        $pingRow = New-Object Windows.Controls.StackPanel
-        $pingRow.Orientation = "Horizontal"
-        $pingRow.Margin      = New-Object Windows.Thickness(0,8,0,0)
-
-        $pingBtn = New-Object Windows.Controls.Button
-        $pingBtn.Content   = "[PING] Ping Test (Gateway + 1.1.1.1 + 8.8.8.8)"
-        $pingBtn.Style     = $Window.FindResource("PrimaryBtn")
-        $pingBtn.Padding   = New-Object Windows.Thickness(8,4,8,4)
-
-        $pingResult = New-Object Windows.Controls.TextBlock
-        $pingResult.FontSize     = 12
-        $pingResult.FontFamily   = New-Object Windows.Media.FontFamily("Consolas")
-        $pingResult.Margin       = New-Object Windows.Thickness(0,8,0,0)
-        $pingResult.Foreground   = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(170,170,170))
-        $pingResult.TextWrapping = [Windows.TextWrapping]::Wrap
-        $pingResult.Text         = "Not tested yet  --  10 pings per target: avg latency, packet loss, jitter"
-
-        $capturedGateway = $gateway
-        $pingBtn.Add_Click({
-            $pingBtn.IsEnabled = $false
-            $pingResult.Text   = "Testing (10 pings per target -- UI stays responsive)..."
-
-            # Build target list (gateway may be unknown)
-            $tgts = New-Object System.Collections.ArrayList
-            if ($capturedGateway) { [void]$tgts.Add(@{ Name = "Gateway ($capturedGateway)"; Host = $capturedGateway }) }
-            [void]$tgts.Add(@{ Name = "Cloudflare (1.1.1.1)"; Host = "1.1.1.1" })
-            [void]$tgts.Add(@{ Name = "Google (8.8.8.8)";     Host = "8.8.8.8" })
-
-            # Run the pings on a background runspace so the WPF thread never freezes.
-            $sync = [hashtable]::Synchronized(@{ Done = $false; Text = "" })
-            $Script:pingRs = [runspacefactory]::CreateRunspace()
-            $Script:pingRs.ApartmentState = "MTA"
-            $Script:pingRs.ThreadOptions  = "ReuseThread"
-            $Script:pingRs.Open()
-            $Script:pingRs.SessionStateProxy.SetVariable("sync", $sync)
-            $Script:pingRs.SessionStateProxy.SetVariable("tgts", $tgts)
-
-            $Script:pingPs = [powershell]::Create()
-            $Script:pingPs.Runspace = $Script:pingRs
-            [void]$Script:pingPs.AddScript({
-                $inv   = [System.Globalization.CultureInfo]::InvariantCulture
-                $count = 10
-                $lines = @()
-                foreach ($t in $tgts) {
-                    $replies = @(Test-Connection -ComputerName $t.Host -Count $count -ErrorAction SilentlyContinue)
-                    $recv = $replies.Count
-                    if ($recv -eq 0) { $lines += ("{0}: unreachable (100% loss)" -f $t.Name); continue }
-                    $loss = [math]::Round((($count - $recv) / $count) * 100, 0)
-                    $rtts = @($replies | ForEach-Object { [double]$_.ResponseTime })
-                    $avg  = ([math]::Round(($rtts | Measure-Object -Average).Average, 1)).ToString("0.#", $inv)
-                    $jit  = "0"
-                    if ($rtts.Count -ge 2) {
-                        $diffs = for ($j = 1; $j -lt $rtts.Count; $j++) { [math]::Abs($rtts[$j] - $rtts[$j-1]) }
-                        $jit = ([math]::Round(($diffs | Measure-Object -Average).Average, 1)).ToString("0.#", $inv)
-                    }
-                    $lines += ("{0}: {1} ms  |  loss {2}%  |  jitter {3} ms" -f $t.Name, $avg, $loss, $jit)
-                }
-                $sync.Text = $lines -join "`n"
-                $sync.Done = $true
-            })
-            $handle = $Script:pingPs.BeginInvoke()
-
-            # Poll for completion on the UI thread and clean up when done.
-            $timer = New-Object System.Windows.Threading.DispatcherTimer
-            $timer.Interval = [TimeSpan]::FromMilliseconds(300)
-            $timer.Add_Tick({
-                if ($sync.Done) {
-                    $timer.Stop()
-                    try { $Script:pingPs.EndInvoke($handle) } catch { }
-                    try { $Script:pingPs.Dispose() } catch { }
-                    try { $Script:pingRs.Close() }   catch { }
-                    try { $Script:pingRs.Dispose() } catch { }
-                    $Script:pingPs = $null; $Script:pingRs = $null
-                    $pingResult.Text   = $sync.Text
-                    $pingBtn.IsEnabled = $true
-                }
-            }.GetNewClosure())
-            $timer.Start()
-        }.GetNewClosure())
-
-        $pingRow.Children.Add($pingBtn)         | Out-Null
-        $netInfoStack.Children.Add($pingRow)    | Out-Null
-        $netInfoStack.Children.Add($pingResult) | Out-Null
-
-        $netInfoBorder.Child = $netInfoStack
-        $panel.Children.Add($netInfoBorder) | Out-Null
+    $PresetsPanel.Children.Add((New-SectionTitle 'Status by category' $U.WIN11 '' @(0, 4, 0, 10))) | Out-Null
+    $cg = New-Object Windows.Controls.Grid; $cg.Margin = Th 0, 0, -12, 0
+    foreach ($i in 0..3) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $cg.ColumnDefinitions.Add($cd) }
+    foreach ($i in 0, 1) { $rd = New-Object Windows.Controls.RowDefinition; $rd.Height = [Windows.GridLength]::Auto; $cg.RowDefinitions.Add($rd) }
+    $icons = @(0xE7F8, 0xE7FC, 0xE839, 0xEDA2, 0xE7F4, 0xE767, 0xEEA1, 0xE945)
+    for ($i = 0; $i -lt $Script:Cats.Count; $i++) {
+        $c = $Script:Cats[$i]; $catKey = $c.Key
+        $cnt = New-Text '' 12.5 $c.Color 'SemiBold'; $cnt.HorizontalAlignment = 'Right'
+        $hdr = New-Object Windows.Controls.Grid; $hdr.Margin = Th 0, 0, 0, 8
+        $hdr.Children.Add((New-HStack @((New-Icon $icons[$i] 14 $c.Color @(0, 0, 9, 0)), (New-Text $c.Label 13 $U.TEXT 'SemiBold')))) | Out-Null
+        $hdr.Children.Add($cnt) | Out-Null
+        $bar = New-Bar 0 $c.Color 4
+        $card = New-Card (New-VStack @($hdr, $bar)) @(0, 0, 12, 12) @(14, 12, 14, 12)
+        $card.Cursor = [System.Windows.Input.Cursors]::Hand
+        $card.ToolTip = "Open the $($c.Label) tweaks"
+        $card.Add_MouseLeftButtonUp({ Show-Page 'tweaks'; Select-Category $catKey }.GetNewClosure())
+        [Windows.Controls.Grid]::SetRow($card, [math]::Floor($i / 4)); [Windows.Controls.Grid]::SetColumn($card, $i % 4)
+        $cg.Children.Add($card) | Out-Null
+        $V.Cats[$catKey] = @{ Cnt = $cnt; Bar = $bar }
     }
+    $PresetsPanel.Children.Add($cg) | Out-Null
 
-    # GPU tab: show detected GPU and info about brand-specific tweaks
-    if ($cat -eq "GPU Tweaks") {
-        $gpuNotice = New-Object Windows.Controls.TextBlock
-        if ($IsNVIDIA) {
-            $gpuNotice.Text       = "[NVIDIA] $GPU detected  --  NVIDIA tweaks active, AMD tweaks grayed out."
-            $gpuNotice.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(118,185,0))
-        } elseif ($IsAMD) {
-            $gpuNotice.Text       = "[AMD] $GPU detected  --  AMD tweaks active, NVIDIA tweaks grayed out."
-            $gpuNotice.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(237,28,36))
-        } else {
-            $gpuNotice.Text       = "[INTEL/OTHER] $GPU detected  --  no brand-specific tweaks available."
-            $gpuNotice.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(200,120,0))
-        }
-        $gpuNotice.FontSize     = 12
-        $gpuNotice.FontWeight   = "SemiBold"
-        $gpuNotice.Margin       = New-Object Windows.Thickness(0,4,0,10)
-        $gpuNotice.TextWrapping = [Windows.TextWrapping]::Wrap
-        $panel.Children.Add($gpuNotice) | Out-Null
-    }
+    $V.PreviewTitle = New-Text '' 15 $U.TEXT 'SemiBold'
+    $V.PreviewWrap = New-Object Windows.Controls.WrapPanel
+    $ptitle = New-Object Windows.Controls.Grid; $ptitle.Margin = Th 0, 0, 0, 12
+    $bar2 = New-Object Windows.Controls.Border; $bar2.Width = 3; $bar2.Height = 16; $bar2.CornerRadius = New-Object Windows.CornerRadius(2); $bar2.Background = Brush $U.AMBER; $bar2.Margin = Th 0, 0, 10, 0
+    $V.PreviewBar = $bar2
+    $ptitle.Children.Add((New-HStack @($bar2, $V.PreviewTitle))) | Out-Null
+    $lg = New-Text "green = already active$($Script:Mid)grey = would be applied" 11.5 $U.DIM; $lg.HorizontalAlignment = 'Right'
+    $ptitle.Children.Add($lg) | Out-Null
+    $PresetsPanel.Children.Add((New-Card (New-VStack @($ptitle, $V.PreviewWrap)) @(0, 4, 0, 14))) | Out-Null
 
-    $groups = $AllTweaks | Where-Object { $_.Category -eq $cat } | Select-Object -ExpandProperty Group -Unique
-    foreach ($group in $groups) {
-        $panel.Children.Add((New-GroupHeader "-- $group")) | Out-Null
-        $tweaks = $AllTweaks | Where-Object { $_.Category -eq $cat -and $_.Group -eq $group }
-        foreach ($tweak in $tweaks) {
-            $panel.Children.Add((New-TweakRow $tweak)) | Out-Null
-        }
+    $drift = New-HStack @((New-Icon 0xEA18 16 $U.GREEN @(0, 0, 12, 0)),
+        (New-VStack @((New-Text 'Drift check' 13.5 $U.TEXT 'SemiBold'), (New-Text 'At every start the tool compares your last Apply with the live state and offers to re-apply what a Windows update reset. No background process, no autostart.' 12 $U.DIM 'Normal' -Wrap))))
+    $PresetsPanel.Children.Add((New-Card $drift)) | Out-Null
+}
+
+function Update-PresetCards {
+    $V = $Script:PresetView; if (-not $V.PreviewWrap) { return }
+    foreach ($name in 'Minimal', 'Balanced', 'Aggressive') {
+        $list = @(Get-PresetList $name)
+        $chk = @($list | Where-Object { $Script:TweakState[$_] -and $Script:TweakState[$_] -ne 'unknown' })
+        $on = @($chk | Where-Object { $Script:TweakState[$_] -eq 'active' }).Count
+        $c = $V.Cards[$name]
+        $c.Sub.Text = "$on/$($chk.Count) active$($Script:Mid)$($list.Count) tweaks"
+        Set-Bar $c.Bar $(if ($chk.Count) { $on / $chk.Count * 100 } else { 0 })
+        $c.Card.BorderBrush = Brush $(if ($name -eq $V.Preview) { (Mix-Hex $Script:UI.CARD $c.Color 0.55) } else { $Script:UI.BORDER })
     }
+    foreach ($c in $Script:Cats) {
+        $names = @($AllTweaks | Where-Object { $_.Category -eq $c.Key } | ForEach-Object { $_.Name })
+        $chk = @($names | Where-Object { $Script:TweakState[$_] -and $Script:TweakState[$_] -ne 'unknown' })
+        $on = @($chk | Where-Object { $Script:TweakState[$_] -eq 'active' }).Count
+        $V.Cats[$c.Key].Cnt.Text = "$on/$($chk.Count)"
+        Set-Bar $V.Cats[$c.Key].Bar $(if ($chk.Count) { $on / $chk.Count * 100 } else { 0 })
+    }
+    $pv = $V.Preview
+    $V.PreviewTitle.Text = "Preview: $pv"
+    $V.PreviewBar.Background = Brush $V.Cards[$pv].Color
+    $V.PreviewWrap.Children.Clear()
+    foreach ($t in ($AllTweaks | Where-Object { (Get-PresetList $pv) -contains $_.Name })) {
+        $s = $Script:TweakState[$t.Name]
+        $e = New-Object Windows.Shapes.Ellipse; $e.Width = 6; $e.Height = 6; $e.Margin = Th 0, 0, 6, 0; $e.VerticalAlignment = 'Center'
+        $e.Fill = Brush $(if ($s -eq 'active') { $Script:UI.GREEN } else { $Script:UI.MUTED })
+        $chip = New-Object Windows.Controls.Border
+        $chip.CornerRadius = New-Object Windows.CornerRadius(6); $chip.Background = Brush $Script:UI.CARD2; $chip.BorderBrush = Brush $Script:UI.BORDER
+        $chip.BorderThickness = Th 1; $chip.Padding = Th 8, 3, 8, 3; $chip.Margin = Th 0, 0, 6, 6
+        $chip.Child = New-HStack @($e, (New-Text $t.Name 11.5 $Script:UI.TEXT2))
+        if ($CheckBoxMap.ContainsKey($t.Name) -and -not $CheckBoxMap[$t.Name].IsEnabled) { $chip.Opacity = 0.45; $chip.ToolTip = 'Not available on this PC -- skipped' }
+        $V.PreviewWrap.Children.Add($chip) | Out-Null
+    }
+}
+
+# =============================================================================
+# BACKUPS & LOG PAGE
+# =============================================================================
+function Build-BackupsPage {
+    $U = $Script:UI
+    $BackupsPanel.Children.Clear()
+    $BackupsPanel.Children.Add((New-PageHeader 'Backups & Log' 'Everything GameOptimizerPro changes is backed up first -- here are the backups, the log and the ways back.' $U.VIOLET)) | Out-Null
+    $grid = New-Grid2
+    $bk = Get-BackupSummary
+    $mk = {
+        param([string]$Title, [string]$Accent, [string]$Text, [object[]]$Extra, $Button)
+        $v = New-VStack @((New-CardTitle $Title $Accent), (New-Text $Text 12.5 $Script:UI.TEXT2 'Normal' -Wrap))
+        foreach ($x in $Extra) { if ($x) { $v.Children.Add($x) | Out-Null } }
+        if ($Button) { $Button.HorizontalAlignment = 'Left'; $Button.Margin = Th 0, 12, 0, 0; $v.Children.Add($Button) | Out-Null }
+        $c = New-Card $v @(0, 0, 0, 0); $c.VerticalAlignment = 'Stretch'; $c
+    }
+    $b1 = New-Btn 'Open backup folder' $U.VIOLET '#120a24' 0xE838 -Bold; $b1.Add_Click({ Open-BackupFolder })
+    Add-Grid2 $grid (& $mk 'Registry backups' $U.VIOLET 'Before every Apply and Revert, every registry key a tweak touches is exported to .reg files. Double-click a .reg file to restore it.' @(
+        (New-Text "$($bk.Count) backup(s)$($Script:Mid)last: $($bk.Last)" 12 $U.DIM 'Normal' -Wrap -Margin 0, 8, 0, 0),
+        (New-Text $Script:RegistryBackupRoot 11.5 $U.MUTED 'Normal' -Wrap -Mono -Margin 0, 4, 0, 0)) $b1)
+    $b2 = New-Btn 'Open log' $U.CARD2 $U.TEXT 0xE838; $b2.Add_Click({ Open-LogFile })
+    Add-Grid2 $grid (& $mk 'Log' $U.CYAN 'Every action of this session is written to a log file -- what was applied, what failed and why.' @(
+        (New-Text $LogFile 11.5 $U.MUTED 'Normal' -Wrap -Mono -Margin 0, 8, 0, 0)) $b2)
+    $b3 = New-Btn 'Open System Restore' $U.CARD2 $U.TEXT 0xE7A7
+    $b3.Add_Click({ try { Start-Process "rstrui.exe" } catch { [System.Windows.MessageBox]::Show("Could not open System Restore (rstrui.exe). Run it manually: Start -> type rstrui", "Error") | Out-Null } })
+    Add-Grid2 $grid (& $mk 'System Restore' $U.GREEN 'A restore point is created before every Apply (the tool lifts the 24-hour limit Windows normally applies). System Restore is also the only way to bring back removed apps.' @() $b3)
+    $b4 = New-Btn 'Revert all ...' $U.AMBER '#1a1205' 0xE7A7 -Bold
+    $b4.Add_Click({ $BtnRevertAll.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Button]::ClickEvent))) })
+    Add-Grid2 $grid (& $mk 'Revert all' $U.AMBER 'Sets every registry, service and network change back to the Windows defaults -- no reboot needed. Removed apps need System Restore.' @() $b4)
+    Add-Grid2 $grid (& $mk 'Drift check' $U.WIN11 'After every Apply the active tweaks are recorded. At every start the tool checks whether a Windows update reset any of them and offers to re-apply them -- no background process, no autostart.' @(
+        (New-Text "Baseline: $(Get-BaselineSummary)" 12 $U.DIM 'Normal' -Wrap -Margin 0, 8, 0, 0)) $null)
+    $BackupsPanel.Children.Add($grid) | Out-Null
+}
+
+# =============================================================================
+# LANGUAGE (descriptions only -- the interface stays English)
+# =============================================================================
+function Update-LangButton {
+    $BtnLang.Content = New-HStack @((New-Icon 0xE774 12 $Script:UI.TEXT2 @(0, 0, 6, 0)), (New-Text "Info: $($LangState.Current)" 11.5 $Script:UI.TEXT 'SemiBold'))
 }
 
 # -----------------------------------------
@@ -4189,8 +5084,21 @@ function Set-Preset {
             else { $skipped++ }
         }
     }
-    $StatusText.Text = "Preset '$Label': $sel tweaks selected$(if ($skipped) { " ($skipped skipped -- not compatible with this system)" }). Review, then click Apply Selected."
+    $StatusText.Text = "Preset '$Label': $sel tweaks ticked$(if ($skipped) { " ($skipped skipped -- not available on this PC)" }). Review the list, then click 'Apply selected'."
 }
+
+# =============================================================================
+# BUILD THE PAGES  (here, because the Presets page needs the preset lists above)
+# =============================================================================
+Build-DashboardPage
+Build-PresetsPage
+Build-BiosPlatformList
+Update-BiosPlatformList
+Render-BiosPage
+Update-LangButton
+Update-Counts
+Select-Category 'Windows'
+Show-Page 'dashboard'
 
 # -----------------------------------------
 # BUTTON EVENTS
@@ -4203,58 +5111,26 @@ $BtnDeselect.Add_Click({
     foreach ($cb in $CheckBoxMap.Values) { $cb.IsChecked = $false }
 })
 
-$BtnPresetMin.Add_Click({ Set-Preset $Script:PresetMinimal    "Minimal" })
-$BtnPresetBal.Add_Click({ Set-Preset $Script:PresetBalanced   "Balanced" })
+# Preset buttons live on the Presets page; after selecting, jump to the tweak list
+# so the user sees what got ticked and where "Apply selected" is.
+$BtnPresetMin.Add_Click({ Set-Preset $Script:PresetMinimal "Minimal"; Show-Preset-Result })
+$BtnPresetBal.Add_Click({ Set-Preset $Script:PresetBalanced "Balanced"; Show-Preset-Result })
 $BtnPresetAgg.Add_Click({
     $r = [System.Windows.MessageBox]::Show(
-        "The 'Aggressive' preset also selects app removals (Cortana, OneDrive, Teams, Xbox, Recall, bloatware) and aggressive tweaks.`n`nRemoved apps cannot be restored by 'Revert All' -- only via System Restore.`n`nSelect the aggressive preset now? (Nothing is applied until you click 'Apply Selected'.)",
+        "The 'Aggressive' preset also selects app removals (Cortana, OneDrive, Teams, Xbox, Recall, bloatware) and aggressive tweaks.`n`nRemoved apps cannot be restored by 'Revert All' -- only via System Restore.`n`nSelect the aggressive preset now? (Nothing is applied until you click 'Apply selected'.)",
         "GameOptimizerPro -- Aggressive Preset",
         [System.Windows.MessageBoxButton]::YesNo,
         [System.Windows.MessageBoxImage]::Warning)
-    if ($r -eq [System.Windows.MessageBoxResult]::Yes) { Set-Preset $Script:PresetAggressive "Aggressive" }
+    if ($r -eq [System.Windows.MessageBoxResult]::Yes) { Set-Preset $Script:PresetAggressive "Aggressive"; Show-Preset-Result }
 })
+function Show-Preset-Result {
+    if ($SearchBox.Text) { $SearchBox.Text = '' }
+    Show-Page 'tweaks'
+}
 
-$BtnOpenLog.Add_Click({
-    if (Test-Path $LogFile) { Start-Process notepad.exe $LogFile }
-    else {
-        [System.Windows.MessageBox]::Show("No log file yet. Apply some tweaks first.", "Log", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information)
-    }
-})
-
-$BtnOpenBackups.Add_Click({
-    if (Test-Path $Script:RegistryBackupRoot) { Start-Process explorer.exe $Script:RegistryBackupRoot }
-    else {
-        [System.Windows.MessageBox]::Show("No registry backups yet. Apply or revert some tweaks first.", "Backups", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information)
-    }
-})
-
-$BtnVerify.Add_Click({
-    $StatusText.Text = "Verifying tweak status..."
-    $active = 0; $inactive = 0; $unknown = 0
-    foreach ($tweak in $AllTweaks) {
-        if ($Script:TweakDots.ContainsKey($tweak.Name)) {
-            $result = Update-TweakDot $Script:TweakDots[$tweak.Name] $tweak.Name
-            switch ($result) {
-                "active"   {
-                    $active++
-                    # Tick the checkbox for tweaks detected as already active (green dot).
-                    # Purely additive -- a manual selection on inactive tweaks is left alone.
-                    if ($CheckBoxMap.ContainsKey($tweak.Name) -and $CheckBoxMap[$tweak.Name].IsEnabled) {
-                        $CheckBoxMap[$tweak.Name].IsChecked = $true
-                    }
-                }
-                "inactive" { $inactive++ }
-                default    { $unknown++ }
-            }
-        }
-    }
-    $checkable = $active + $inactive
-    if ($LangState.Current -eq "EN") {
-        $StatusText.Text = "Verify complete: $active of $checkable checkable tweaks active (ticked)  |  $unknown one-time/unknown  |  green = active, grey = inactive"
-    } else {
-        $StatusText.Text = "Verify fertig: $active von $checkable pruefbaren Tweaks aktiv (angehakt)  |  $unknown einmalig/unbekannt  |  gruen = aktiv, grau = inaktiv"
-    }
-})
+$BtnOpenLog.Add_Click({ Open-LogFile })
+$BtnOpenBackups.Add_Click({ Open-BackupFolder })
+$BtnVerify.Add_Click({ Invoke-Verify })
 
 $BtnApply.Add_Click({
     $selected = @($AllTweaks | Where-Object { $CheckBoxMap[$_.Name].IsChecked -eq $true })
@@ -4341,6 +5217,7 @@ $BtnApply.Add_Click({
             Update-TweakDot $Script:TweakDots[$tweak.Name] $tweak.Name | Out-Null
         }
     }
+    Update-Counts
 
     # Snapshot the now-active tweaks so the next launch can detect Windows-reverted drift.
     Save-Baseline
@@ -4480,6 +5357,7 @@ $BtnRevertAll.Add_Click({
             Update-TweakDot $Script:TweakDots[$tweak.Name] $tweak.Name | Out-Null
         }
     }
+    Update-Counts
 
     $StatusText.Text = "Revert complete! $done/$total settings processed. Log: $LogFile"
     Write-Log "Revert All complete: $done processed, $failed failed"
@@ -4501,21 +5379,15 @@ $BtnRevertAll.Add_Click({
 })
 
 $BtnLang.Add_Click({
-    # UI stays permanently English. This toggle ONLY switches the language of
-    # the "?" info-popup descriptions (DE/EN).
-    if ($LangState.Current -eq "EN") {
-        $LangState.Current   = "DE"
-        $Script:CurrentLang  = "DE"
-        $BtnLang.Content     = "[DE/EN]"
-        $BtnLang.Background  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(42,42,110))
-        $StatusText.Text     = "Info descriptions (?) now in German. Interface stays English."
-    } else {
-        $LangState.Current   = "EN"
-        $Script:CurrentLang  = "EN"
-        $BtnLang.Content     = "[EN/DE]"
-        $BtnLang.Background  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(15,90,150))
-        $StatusText.Text     = "Info descriptions (?) now in English."
-    }
+    # The interface stays permanently English. This toggle switches the language
+    # of the tweak descriptions and the BIOS Guide explanations (DE/EN).
+    $LangState.Current  = if ($LangState.Current -eq "EN") { "DE" } else { "EN" }
+    $Script:CurrentLang = $LangState.Current
+    Update-LangButton
+    Set-DescLanguage
+    Render-BiosPage
+    if ($SearchBox.Text) { Apply-TweakFilter }
+    $StatusText.Text = if ($LangState.Current -eq "DE") { "Descriptions now in German. The interface stays English." } else { "Descriptions now in English." }
 })
 
 # -----------------------------------------
@@ -4655,7 +5527,75 @@ $BtnStartup.Add_Click({
         Title="GameOptimizerPro  --  Startup Manager"
         Height="540" Width="920"
         WindowStartupLocation="CenterScreen"
-        Background="#1a1a2e">
+        Background="#0b0e13" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" FontFamily="Segoe UI" TextOptions.TextFormattingMode="Display">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Foreground" Value="#ffffff"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="9" Padding="12,0">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.86"/></Trigger>
+                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.7"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid Width="18" Height="18" Background="Transparent" HorizontalAlignment="Left">
+                            <Border x:Name="Bx" CornerRadius="4" BorderThickness="1.5" BorderBrush="#4f5a69" Background="Transparent"/>
+                            <TextBlock x:Name="Mk" Text="&#xE73E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="11" Foreground="#ffffff"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bx" Property="BorderBrush" Value="#7d8896"/></Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bx" Property="Background" Value="#3b82f6"/>
+                                <Setter TargetName="Bx" Property="BorderBrush" Value="#3b82f6"/>
+                                <Setter TargetName="Mk" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="ToolTip">
+            <Setter Property="Background" Value="#1b212b"/>
+            <Setter Property="Foreground" Value="#e6edf3"/>
+            <Setter Property="BorderBrush" Value="#313b4a"/>
+        </Style>
+        <Style TargetType="ScrollBar">
+            <Setter Property="Width" Value="10"/>
+            <Setter Property="MinWidth" Value="10"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="Transparent">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.Thumb>
+                                    <Thumb>
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb"><Border CornerRadius="4" Background="#313b4a" Margin="2,0,2,0"/></ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
     <Grid Margin="14">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -4665,31 +5605,31 @@ $BtnStartup.Add_Click({
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <TextBlock Grid.Row="0" Name="SwTitle" Text="Startup Manager" FontSize="18" FontWeight="Bold"
-                   Foreground="#e94560" Margin="0,0,0,4"/>
-        <Border Grid.Row="1" Background="#16213e" CornerRadius="6" Padding="8,5" Margin="0,0,0,10">
+                   Foreground="#e6edf3" Margin="0,0,0,4"/>
+        <Border Grid.Row="1" Background="#151a22" CornerRadius="6" Padding="8,5" Margin="0,0,0,10">
             <StackPanel Orientation="Horizontal">
-                <TextBlock Name="SwColSelect" Text="Select" Foreground="#888" FontSize="11" Width="38"/>
-                <TextBlock Name="SwColName" Text="Name" Foreground="#888" FontSize="11" FontWeight="Bold" Width="165"/>
-                <TextBlock Name="SwColCommand" Text="Command" Foreground="#888" FontSize="11" FontWeight="Bold" Width="280"/>
-                <TextBlock Name="SwColLocation" Text="Location" Foreground="#888" FontSize="11" FontWeight="Bold" Width="90"/>
-                <TextBlock Name="SwColStatus" Text="Status" Foreground="#888" FontSize="11" FontWeight="Bold" Width="75"/>
-                <TextBlock Name="SwColDelay" Text="Boot Delay" Foreground="#888" FontSize="11" FontWeight="Bold" Width="110"/>
+                <TextBlock Name="SwColSelect" Text="Select" Foreground="#7d8896" FontSize="11" Width="38"/>
+                <TextBlock Name="SwColName" Text="Name" Foreground="#7d8896" FontSize="11" FontWeight="Bold" Width="165"/>
+                <TextBlock Name="SwColCommand" Text="Command" Foreground="#7d8896" FontSize="11" FontWeight="Bold" Width="280"/>
+                <TextBlock Name="SwColLocation" Text="Location" Foreground="#7d8896" FontSize="11" FontWeight="Bold" Width="90"/>
+                <TextBlock Name="SwColStatus" Text="Status" Foreground="#7d8896" FontSize="11" FontWeight="Bold" Width="75"/>
+                <TextBlock Name="SwColDelay" Text="Boot Delay" Foreground="#7d8896" FontSize="11" FontWeight="Bold" Width="110"/>
             </StackPanel>
         </Border>
         <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
             <StackPanel Name="SwList"/>
         </ScrollViewer>
-        <TextBlock Grid.Row="3" Name="SwStatus" Text="" Foreground="#aaaaaa"
+        <TextBlock Grid.Row="3" Name="SwStatus" Text="" Foreground="#b3bdcb"
                    FontSize="11" FontFamily="Consolas" Margin="0,8,0,4"/>
         <WrapPanel Grid.Row="4" HorizontalAlignment="Center">
             <Button Name="SwBtnDisable" Content="Disable Selected"  Width="155" Height="32"
-                    Margin="6,0" Background="#e94560" Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
+                    Margin="6,0" Background="#e53935" Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
             <Button Name="SwBtnEnable"  Content="Enable Selected"   Width="155" Height="32"
-                    Margin="6,0" Background="#1a7a3c" Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
+                    Margin="6,0" Background="#16a34a" Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
             <Button Name="SwBtnRefresh" Content="Refresh"           Width="100" Height="32"
-                    Margin="6,0" Background="#0f3460" Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
+                    Margin="6,0" Background="#1b212b" Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
             <Button Name="SwBtnClose"   Content="Close"             Width="100" Height="32"
-                    Margin="6,0" Background="#444"    Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
+                    Margin="6,0" Background="#313b4a"    Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
         </WrapPanel>
     </Grid>
 </Window>
@@ -4908,7 +5848,75 @@ $BtnServices.Add_Click({
         Title="GameOptimizerPro  --  Services Manager"
         Height="600" Width="980"
         WindowStartupLocation="CenterScreen"
-        Background="#1a1a2e">
+        Background="#0b0e13" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" FontFamily="Segoe UI" TextOptions.TextFormattingMode="Display">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Foreground" Value="#ffffff"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="9" Padding="12,0">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.86"/></Trigger>
+                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bd" Property="Opacity" Value="0.7"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid Width="18" Height="18" Background="Transparent" HorizontalAlignment="Left">
+                            <Border x:Name="Bx" CornerRadius="4" BorderThickness="1.5" BorderBrush="#4f5a69" Background="Transparent"/>
+                            <TextBlock x:Name="Mk" Text="&#xE73E;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="11" Foreground="#ffffff"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bx" Property="BorderBrush" Value="#7d8896"/></Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bx" Property="Background" Value="#3b82f6"/>
+                                <Setter TargetName="Bx" Property="BorderBrush" Value="#3b82f6"/>
+                                <Setter TargetName="Mk" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="ToolTip">
+            <Setter Property="Background" Value="#1b212b"/>
+            <Setter Property="Foreground" Value="#e6edf3"/>
+            <Setter Property="BorderBrush" Value="#313b4a"/>
+        </Style>
+        <Style TargetType="ScrollBar">
+            <Setter Property="Width" Value="10"/>
+            <Setter Property="MinWidth" Value="10"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="Transparent">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.Thumb>
+                                    <Thumb>
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb"><Border CornerRadius="4" Background="#313b4a" Margin="2,0,2,0"/></ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
     <Grid Margin="14">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -4921,43 +5929,43 @@ $BtnServices.Add_Click({
 
         <!-- Title -->
         <StackPanel Grid.Row="0" Margin="0,0,0,10">
-            <TextBlock Name="SvcTitle" Text="Services Manager" FontSize="18" FontWeight="Bold" Foreground="#e94560"/>
+            <TextBlock Name="SvcTitle" Text="Services Manager" FontSize="18" FontWeight="Bold" Foreground="#e6edf3"/>
             <TextBlock Name="SvcSubtitle" Text="Deaktiviere unnoetige Windows-Dienste fuer bessere Performance und Datenschutz."
-                       FontSize="11" Foreground="#888" Margin="0,2,0,0"/>
+                       FontSize="11" Foreground="#7d8896" Margin="0,2,0,0"/>
         </StackPanel>
 
         <!-- Legend -->
         <WrapPanel Grid.Row="1" Margin="0,0,0,10">
-            <Border Background="#1e2e1e" CornerRadius="4" Padding="8,4" Margin="0,0,6,0">
+            <Border Background="#14281c" CornerRadius="4" Padding="8,4" Margin="0,0,6,0">
                 <StackPanel Orientation="Horizontal">
-                    <Ellipse Width="8" Height="8" Fill="#00c853" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                    <TextBlock Name="SvcLegSafe" Text="Sicher deaktivierbar" FontSize="11" Foreground="#aaa" VerticalAlignment="Center"/>
+                    <Ellipse Width="8" Height="8" Fill="#22c55e" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                    <TextBlock Name="SvcLegSafe" Text="Sicher deaktivierbar" FontSize="11" Foreground="#b3bdcb" VerticalAlignment="Center"/>
                 </StackPanel>
             </Border>
-            <Border Background="#2e1e1e" CornerRadius="4" Padding="8,4" Margin="0,0,6,0">
+            <Border Background="#2a161a" CornerRadius="4" Padding="8,4" Margin="0,0,6,0">
                 <StackPanel Orientation="Horizontal">
-                    <Ellipse Width="8" Height="8" Fill="#e94560" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                    <TextBlock Name="SvcLegCaution" Text="Vorsicht -- Systemdienst" FontSize="11" Foreground="#aaa" VerticalAlignment="Center"/>
+                    <Ellipse Width="8" Height="8" Fill="#e53935" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                    <TextBlock Name="SvcLegCaution" Text="Vorsicht -- Systemdienst" FontSize="11" Foreground="#b3bdcb" VerticalAlignment="Center"/>
                 </StackPanel>
             </Border>
-            <Border Background="#1e1e2e" CornerRadius="4" Padding="8,4">
+            <Border Background="#1b212b" CornerRadius="4" Padding="8,4">
                 <StackPanel Orientation="Horizontal">
                     <Ellipse Width="8" Height="8" Fill="#555" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                    <TextBlock Name="SvcLegDone" Text="Bereits deaktiviert" FontSize="11" Foreground="#aaa" VerticalAlignment="Center"/>
+                    <TextBlock Name="SvcLegDone" Text="Bereits deaktiviert" FontSize="11" Foreground="#b3bdcb" VerticalAlignment="Center"/>
                 </StackPanel>
             </Border>
         </WrapPanel>
 
         <!-- Column headers -->
-        <Border Grid.Row="2" Background="#16213e" CornerRadius="6" Padding="8,6" Margin="0,0,0,4">
+        <Border Grid.Row="2" Background="#151a22" CornerRadius="6" Padding="8,6" Margin="0,0,0,4">
             <StackPanel Orientation="Horizontal">
-                <TextBlock Name="SvcColSel" Text="Sel"         Foreground="#888" FontSize="11" Width="34"/>
-                <TextBlock Name="SvcColName" Text="Service Name" Foreground="#888" FontSize="11" FontWeight="Bold" Width="160"/>
-                <TextBlock Name="SvcColDesc" Text="Beschreibung" Foreground="#888" FontSize="11" FontWeight="Bold" Width="310"/>
-                <TextBlock Name="SvcColStatus" Text="Status"      Foreground="#888" FontSize="11" FontWeight="Bold" Width="85"/>
-                <TextBlock Name="SvcColStart" Text="Starttyp"    Foreground="#888" FontSize="11" FontWeight="Bold" Width="95"/>
-                <TextBlock Name="SvcColCat" Text="Kategorie"   Foreground="#888" FontSize="11" FontWeight="Bold" Width="90"/>
-                <TextBlock Name="SvcColSafe" Text="Sicher"      Foreground="#888" FontSize="11" FontWeight="Bold" Width="60"/>
+                <TextBlock Name="SvcColSel" Text="Sel"         Foreground="#7d8896" FontSize="11" Width="34"/>
+                <TextBlock Name="SvcColName" Text="Service Name" Foreground="#7d8896" FontSize="11" FontWeight="Bold" Width="160"/>
+                <TextBlock Name="SvcColDesc" Text="Beschreibung" Foreground="#7d8896" FontSize="11" FontWeight="Bold" Width="310"/>
+                <TextBlock Name="SvcColStatus" Text="Status"      Foreground="#7d8896" FontSize="11" FontWeight="Bold" Width="85"/>
+                <TextBlock Name="SvcColStart" Text="Starttyp"    Foreground="#7d8896" FontSize="11" FontWeight="Bold" Width="95"/>
+                <TextBlock Name="SvcColCat" Text="Kategorie"   Foreground="#7d8896" FontSize="11" FontWeight="Bold" Width="90"/>
+                <TextBlock Name="SvcColSafe" Text="Sicher"      Foreground="#7d8896" FontSize="11" FontWeight="Bold" Width="60"/>
             </StackPanel>
         </Border>
 
@@ -4967,19 +5975,19 @@ $BtnServices.Add_Click({
         </ScrollViewer>
 
         <!-- Status bar -->
-        <TextBlock Grid.Row="4" Name="SvcStatus" Text="" Foreground="#aaaaaa"
+        <TextBlock Grid.Row="4" Name="SvcStatus" Text="" Foreground="#b3bdcb"
                    FontSize="11" FontFamily="Consolas" Margin="0,8,0,4"/>
 
         <!-- Buttons -->
         <WrapPanel Grid.Row="5" HorizontalAlignment="Center">
             <Button Name="SvcBtnDisable" Content="Disable Selected"  Width="155" Height="32"
-                    Margin="6,0" Background="#e94560" Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
+                    Margin="6,0" Background="#e53935" Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
             <Button Name="SvcBtnEnable"  Content="Enable Selected"   Width="155" Height="32"
-                    Margin="6,0" Background="#1a7a3c" Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
+                    Margin="6,0" Background="#16a34a" Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
             <Button Name="SvcBtnRefresh" Content="Refresh"           Width="100" Height="32"
-                    Margin="6,0" Background="#0f3460" Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
+                    Margin="6,0" Background="#1b212b" Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
             <Button Name="SvcBtnClose"   Content="Close"             Width="100" Height="32"
-                    Margin="6,0" Background="#444"    Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
+                    Margin="6,0" Background="#313b4a"    Foreground="White" FontWeight="Bold" BorderThickness="0" Cursor="Hand"/>
         </WrapPanel>
     </Grid>
 </Window>
@@ -5219,10 +6227,6 @@ $BtnServices.Add_Click({
 # -----------------------------------------
 # LAUNCH
 # -----------------------------------------
-# Apply the default language (EN) to all static UI elements before showing.
-$BtnLang.Content    = "[EN/DE]"
-$BtnLang.Background  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(15,90,150))
-Apply-Language
 $StatusText.Text    = Get-UIString "status_ready"
 
 Write-Log "GameOptimizerPro v$($Script:AppVersion) started | $HWInfo"
