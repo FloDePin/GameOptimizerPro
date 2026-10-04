@@ -2610,7 +2610,10 @@ $CheckFunctions = @{
     "Show Hidden Files"                  = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "Hidden") -eq 1 }
     "Disable Reserved Storage"           = { try { (Get-WindowsReservedStorageState -ErrorAction Stop).ReservedStorageState -eq "Disabled" } catch { $null } }
     "Disable Storage Sense"              = { (Get-RegVal "HKLM:\Software\Policies\Microsoft\Windows\StorageSense" "AllowStorageSenseGlobal") -eq 0 }
-    "Num Lock on Startup"                = { (Get-RegVal "HKCU:\Control Panel\Keyboard" "InitialKeyboardIndicators") -eq "2147483650" }
+    # Windows rewrites this value at every sign-out with the CURRENT keyboard state
+    # ("2" when NumLock was on), so test the NumLock bit (2), not the exact string --
+    # comparing against "2147483650" reported the tweak as reverted after every reboot.
+    "Num Lock on Startup"                = { $v = Get-RegVal "HKCU:\Control Panel\Keyboard" "InitialKeyboardIndicators"; $n = 0L; if ($null -ne $v -and [int64]::TryParse("$v", [ref]$n)) { ($n -band 2) -ne 0 } else { $false } }
     "Disable Lock Screen"                = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization" "NoLockScreen") -eq 1 }
     "Enable Long Paths"                  = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" "LongPathsEnabled") -eq 1 }
 
@@ -2697,8 +2700,12 @@ $CheckFunctions = @{
     "Optimize TCP Settings (ECN/SACK/Timestamps)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" "SackOpts") -eq 1 }
     "Disable QoS Packet Scheduler Limit" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Psched" "NonBestEffortLimit") -eq 0 }
     "Disable Network Adapter Power Saving" = {
+        # Physical adapters only (NCF_PHYSICAL = 0x4 in Characteristics): virtual ones
+        # (WAN Miniport, Wi-Fi Direct, Bluetooth PAN, ...) have no power saving that
+        # matters, and some get re-created without the value -- which made the tweak
+        # look reverted on every start.
         $netClass = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}"
-        $adapters = Get-ChildItem $netClass -ErrorAction SilentlyContinue | Where-Object { Get-ItemProperty $_.PSPath -Name "NetCfgInstanceId" -EA SilentlyContinue }
+        $adapters = @(Get-ChildItem $netClass -ErrorAction SilentlyContinue | Where-Object { (Get-ItemProperty $_.PSPath -Name "NetCfgInstanceId" -EA SilentlyContinue) -and (([int64](Get-RegVal $_.PSPath "Characteristics")) -band 0x4) })
         if (-not $adapters) { return $null }
         $off = @($adapters | Where-Object { (Get-RegVal $_.PSPath "PnPCapabilities") -eq 24 })
         $off.Count -eq $adapters.Count
@@ -3816,14 +3823,15 @@ function Update-TweakDot($dot, $tweakName) {
         try {
             $isActive = & $CheckFunctions[$tweakName]
             if ($isActive -eq $true) { $state = "active" } elseif ($isActive -eq $false) { $state = "inactive" }
-            $Script:CheckRaw[$tweakName] = $(if ($isActive -eq $true) { 'T' } else { 'F' })
+            $Script:CheckRaw[$tweakName] = $(if ($isActive -eq $true) { 'T' } elseif ($isActive -is [bool]) { 'F' } else { 'N' })
         } catch { $state = "unknown"; $Script:CheckRaw[$tweakName] = 'E' }
     }
     $Script:TweakState[$tweakName] = $state
     switch ($state) {
         "active"   { $dot.Fill = Brush $Script:UI.GREEN; $dot.Stroke = $null; $dot.ToolTip = "Active -- this tweak is in effect" }
         "inactive" { $dot.Fill = [Windows.Media.Brushes]::Transparent; $dot.Stroke = Brush $Script:UI.MUTED; $dot.StrokeThickness = 1.5; $dot.ToolTip = "Not active" }
-        default    { $dot.Fill = Brush $Script:UI.MUTED; $dot.Stroke = $null; $dot.ToolTip = "One-time action -- nothing lasting to check" }
+        default    { $dot.Fill = Brush $Script:UI.MUTED; $dot.Stroke = $null
+                     $dot.ToolTip = $(if ($Script:OneTimeNames -contains $tweakName) { "One-time action -- nothing lasting to check" } else { "Status unknown right now -- not applicable to this PC, or Windows didn't answer (e.g. busy installing updates). Verify checks again." }) }
     }
     if ($Script:TweakBadges.ContainsKey($tweakName)) { $Script:TweakBadges[$tweakName].Visibility = $(if ($state -eq "active") { 'Visible' } else { 'Collapsed' }) }
     return $state
@@ -4045,9 +4053,23 @@ function Save-Baseline {
     } catch { Write-Log "Baseline save failed: $_" }
 }
 
+# The user declined re-applying these at launch: stop tracking them, so the same
+# question doesn't come back on every start. The next Apply records them again if
+# they are active then.
+function Remove-FromBaseline([string[]]$Names) {
+    if (-not (Test-Path $Script:BaselineFile)) { return }
+    try {
+        $keep = @(Get-Content $Script:BaselineFile -ErrorAction Stop | Where-Object { $_ -and $_.Trim() -ne '' -and $Names -notcontains $_.Trim() })
+        Set-Content -Path $Script:BaselineFile -Value $keep -Encoding UTF8
+        Write-Log "Baseline: re-apply declined, no longer tracking: $($Names -join ', ')"
+    } catch { Write-Log "Baseline update failed: $_" }
+}
+
 function Get-DriftedTweaks {
-    # -Known: check results already gathered this session (Name -> T/F/E, see
+    # -Known: check results already gathered this session (Name -> T/F/N/E, see
     # $Script:CheckRaw), so the launch check doesn't run every check a second time.
+    # Only a definite $false counts as reverted: "can't read it right now" ($null,
+    # e.g. while Windows Update servicing locks the reserved-storage API) is not.
     param([hashtable]$Known = @{})
     if (-not (Test-Path $Script:BaselineFile)) { return @() }
     try { $baseline = @(Get-Content $Script:BaselineFile -ErrorAction Stop | Where-Object { $_ -and $_.Trim() -ne '' }) } catch { return @() }
@@ -4056,7 +4078,7 @@ function Get-DriftedTweaks {
         $n = $name.Trim()
         if ($Known.ContainsKey($n)) { if ($Known[$n] -eq 'F') { $drifted += $n }; continue }
         if ($CheckFunctions.ContainsKey($n)) {
-            try { if ((& $CheckFunctions[$n]) -ne $true) { $drifted += $n } } catch { }
+            try { $r = & $CheckFunctions[$n]; if ($r -is [bool] -and -not $r) { $drifted += $n } } catch { }
         }
     }
     return $drifted
@@ -6334,7 +6356,7 @@ try {
     if ($drifted.Count -gt 0) {
         $list = ($drifted | ForEach-Object { " - $_" }) -join "`n"
         $r = [System.Windows.MessageBox]::Show(
-            "$($drifted.Count) tweak(s) you applied earlier are no longer active -- a Windows update most likely reset them:`n`n$list`n`nRe-apply them now? (A registry backup is created first.)",
+            "$($drifted.Count) tweak(s) you applied earlier are no longer active -- a Windows update most likely reset them:`n`n$list`n`nRe-apply them now? (A registry backup is created first.)`n`nNo = keep the current settings -- you won't be asked about these again.",
             "GameOptimizerPro -- Tweaks were reverted",
             [System.Windows.MessageBoxButton]::YesNo,
             [System.Windows.MessageBoxImage]::Warning)
@@ -6349,11 +6371,16 @@ try {
                 }
             }
             Save-Baseline
+            # The list was built before the re-apply -- refresh those rows + counts
+            foreach ($name in $drifted) { if ($Script:TweakDots.ContainsKey($name)) { Update-TweakDot $Script:TweakDots[$name] $name | Out-Null } }
+            Update-Counts
             [System.Windows.MessageBox]::Show(
                 "Re-applied $reapplied tweak(s). A restart may be needed for some to take effect.",
                 "GameOptimizerPro",
                 [System.Windows.MessageBoxButton]::OK,
                 [System.Windows.MessageBoxImage]::Information) | Out-Null
+        } else {
+            Remove-FromBaseline $drifted
         }
     }
 } catch { Write-Log "Drift check skipped: $_" }
