@@ -93,7 +93,7 @@ Registry keys sourced **1:1 from Chris Titus Tech WinUtil** for guaranteed accur
 - **Disable File Explorer Automatic Folder Discovery** — Opens large folders faster
 - **Run Disk Cleanup** — Automated cleanmgr + DISM component cleanup
 
-**All 7 tweaks include:** Full Apply/Revert functionality + Status checks + EN/DE descriptions
+**All 7 tweaks include:** Full Apply/Revert functionality + EN/DE descriptions; 6 of them have a live status check ("Run Disk Cleanup" is a one-time action)
 
 ---
 
@@ -281,9 +281,9 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ## 📜 Changelog
 
 ### v1.0 — Initial public release
-A complete, hardened Windows & gaming optimizer. Every tweak ships with a full **Apply + Revert + live status check**, and each Apply first creates a **System Restore Point** and a **`.reg` registry backup** (stored in `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`, safe from temp cleanup).
+A complete, hardened Windows & gaming optimizer. Every tweak ships with **Apply + Revert**, and 98 of the 108 also with a **live status check** (the other 10 are one-time cleanups with nothing lasting to check), and each Apply first creates a **System Restore Point** and a **`.reg` registry backup** (stored in `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`, safe from temp cleanup).
 
-**Tweak library (108 tweaks, all reversible):**
+**Tweak library (108 tweaks, each with a revert; removed apps come back via System Restore):**
 - 🪟 **Windows** — debloat, privacy, performance, CTT-Essentials & Quality-of-Life tweaks, including disabling on-device generative AI (Text & Image Generation), Click to Do, the Settings AI agent and AI in Paint & Notepad
 - 🎮 **Gaming & GPU** — MSI mode, HAGS, NVIDIA/AMD driver tweaks, GPU timeout (TDR) tolerance, shader-cache tools
 - 🌐 **Network** — latency (Nagle/LSO/throttling), DNS (Cloudflare/Google), TCP tuning, QoS, adapter power
@@ -304,7 +304,7 @@ A complete, hardened Windows & gaming optimizer. Every tweak ships with a full *
 - 🛡️ Startup **sanity check** guards against a status-check ever being confused with a revert action
 - 🌍 **Locale-independent** throughout (SIDs, fixed GUIDs, CIM perf counters) — works on non-English Windows
 - 🔒 **SHA256 integrity chain** — `install.ps1` pins the published hash and verifies it against `CHECKSUMS.txt` before running anything with Admin rights
-- ✅ Verified: **108/108** tweaks have Apply + Revert + Status-Check, no collisions
+- ✅ Verified: **108/108** tweaks have Apply + Revert, **98** of them a live status check (the other 10 are one-time cleanups), no collisions
 
 
 ---

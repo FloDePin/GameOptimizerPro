@@ -1925,7 +1925,8 @@ $RevertActions = @{
     }
     "Disable Store Recommended Search Results" = {
         $storeDb = "$env:LocalAppData\Packages\Microsoft.WindowsStore_8wekyb3d8bbwe\LocalState\store.db"
-        if (Test-Path $storeDb) { icacls "$storeDb" /grant "*S-1-1-0:F" 2>$null | Out-Null }
+        # Remove only the Deny entry again -- /grant would leave an extra explicit Allow behind
+        if (Test-Path $storeDb) { icacls "$storeDb" /remove:d "*S-1-1-0" 2>$null | Out-Null }
         Write-Log "Revert: Store recommended search results re-enabled (store.db unlocked)"
     }
     "Enable Start Menu Previous Layout" = {
@@ -2600,7 +2601,14 @@ $CheckFunctions = @{
     "Prevent Device Companion Apps" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Device Metadata" "PreventDeviceMetadataFromNetwork") -eq 1 }
     "Disable Consumer Features" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableWindowsConsumerFeatures") -eq 1 }
     "Disable Windows Platform Binary Table (WPBT)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" "DisableWpbtExecution") -eq 1 }
-    "Disable Store Recommended Search Results" = { $null }
+    # Apply puts a Deny ACE for Everyone (SID S-1-1-0) on store.db. SDDL writes
+    # Everyone as the locale-independent alias WD, so this works on every language.
+    # If Windows doesn't let us read the ACL, the status stays unknown (null).
+    "Disable Store Recommended Search Results" = {
+        $storeDb = "$env:LocalAppData\Packages\Microsoft.WindowsStore_8wekyb3d8bbwe\LocalState\store.db"
+        if (-not (Test-Path $storeDb)) { return $null }
+        try { [bool]([regex]::IsMatch((Get-Acl -LiteralPath $storeDb -ErrorAction Stop).Sddl, '\(D;[^)]*;;;WD\)')) } catch { $null }
+    }
     "Enable Start Menu Previous Layout" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\8\3036241548" "EnabledState") -eq 1 }
     "Disable File Explorer Automatic Folder Discovery" = { (Get-RegVal "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" "FolderType") -eq "NotSpecified" }
     "Run Disk Cleanup" = { $null }
@@ -2778,7 +2786,16 @@ $CheckFunctions = @{
             $null -eq $loud
         } catch { $null }
     }
-    "Disable Spatial Sound (Windows Sonic)" = { $null }
+    "Disable Spatial Sound (Windows Sonic)" = {
+        # Apply writes SpatialAudioMode=0 on every render device -- active only if
+        # every device has it (a device without the value is not covered yet)
+        $renderPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
+        if (-not (Test-Path $renderPath)) { return $null }
+        $devs = @(Get-ChildItem $renderPath -ErrorAction SilentlyContinue)
+        if (-not $devs.Count) { return $null }
+        $off = @($devs | Where-Object { (Get-RegVal $_.PSPath "SpatialAudioMode") -eq 0 })
+        $off.Count -eq $devs.Count
+    }
     "Disable Audio Device Power Save"    = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Services\usbaudio2" "DisableSelectiveSuspend") -eq 1 }
 
     # GPU NVIDIA
@@ -3355,7 +3372,7 @@ Set-Splash "Building the interface ..." 22
                             <Border Width="3" CornerRadius="2" Background="#e53935" Margin="0,2,16,2"/>
                             <StackPanel Grid.Column="1">
                                 <TextBlock Text="Tweaks" FontSize="26" FontWeight="SemiBold" Foreground="#e6edf3"/>
-                                <TextBlock Text="Windows, gaming, network and audio tweaks -- every one with live status check, Apply and Revert" FontSize="12.5" Foreground="#7d8896" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Text="Windows, gaming, network and audio tweaks -- every one with Apply and Revert, live status where Windows reports it" FontSize="12.5" Foreground="#7d8896" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
                             </StackPanel>
                             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                 <Button Name="BtnSelectAll" Style="{StaticResource GopBtn}" Content="All" Margin="8,0,0,0"/>
@@ -4418,10 +4435,11 @@ $Script:BiosProfiles = @(
 # -- Matching (CPU name -> profile id, board manufacturer -> vendor key) --------
 function Get-BiosProfileId([string]$CpuName) {
     $c = ((($CpuName -replace '\(TM\)', ' ' -replace '\(R\)', ' ').ToUpper()) -split '\s+' | Where-Object { $_ }) -join ' '
-    if ($c -notmatch 'THREADRIPPER' -and $c -match 'RYZEN\s+(?:\d\s+)?(?:PRO\s+)?(\d{4})(X3D|XT|X|GE|G|F|E)?\b') {
-        # mobile Ryzen ("7840HS", "5600H") never matches: no word boundary after the digits
+    if ($c -notmatch 'THREADRIPPER' -and $c -match 'RYZEN\s+(?:\d\s+)?(?:PRO\s+)?(\d{4})(X3D|XT|X|GT|GE|G|F|E)?\b') {
+        # mobile Ryzen ("7840HS", "5600H") never matches: no word boundary after the digits.
+        # GT = the 2024 AM4 APU refresh (5600GT / 5500GT).
         $num = [int]$matches[1]; $suf = "$($matches[2])"; $series = [math]::Floor($num / 1000)
-        $apu = $suf -in @('G', 'GE')
+        $apu = $suf -in @('G', 'GE', 'GT')
         switch ($series) {
             9 { return $(if ($suf -eq 'X3D') { 'am5_zen5_x3d' } else { 'am5_zen5' }) }
             8 { return 'am5_apu' }

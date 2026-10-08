@@ -6,8 +6,8 @@ $dest = "$env:TEMP\GameOptimizerPro.ps1"
 # whenever GameOptimizerPro.ps1 changes (see CHECKSUMS.txt). This is an
 # integrity check against corruption/tampering in transit -- it does not
 # replace reading the source, but lets users verify what they're about
-# to run with Admin rights without having to read all 3800 lines by hand.
-$ExpectedHash = "EFEB74C6984CA027A933AC221C1C528F07659BCE7E180187A39CB9D3F3AA7465"
+# to run with Admin rights without having to read the whole script by hand.
+$ExpectedHash = "7B5339BBC637BC15E52DED5153B9277ECAF6CFFBCAE9A55B4D6C5F44FC2EB283"
 
 # Keep this in sync with $Script:AppVersion in GameOptimizerPro.ps1 (used for
 # display only -- integrity is enforced by $ExpectedHash above, not this string).
@@ -54,9 +54,11 @@ if ($actualHash -ne $ExpectedHash) {
     Write-Host "  Checksum verified OK." -ForegroundColor Green
 }
 
-# Force UTF-8 re-encode so PowerShell reads it correctly
+# Make sure the file is UTF-8 WITH a BOM: Windows PowerShell 5.1 reads BOM-less
+# scripts as ANSI. For the published file this rewrite is byte-identical, so the
+# file that runs is exactly the one whose hash was checked above.
 $raw = [System.IO.File]::ReadAllText($dest, [System.Text.Encoding]::UTF8)
-[System.IO.File]::WriteAllText($dest, $raw, (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText($dest, $raw, (New-Object System.Text.UTF8Encoding($true)))
 Write-Host "  Encoding verified (UTF-8)." -ForegroundColor DarkGray
 
 Write-Host "  Launching as Administrator..." -ForegroundColor Yellow

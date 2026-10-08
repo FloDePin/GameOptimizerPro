@@ -269,9 +269,9 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ## 📜 Changelog
 
 ### v1.0 — Erste öffentliche Veröffentlichung
-Ein vollständiger, gehärteter Windows- & Gaming-Optimierer. Jeder Tweak hat volles **Apply + Revert + Live-Status-Check**, und jedes Apply legt zuerst einen **Systemwiederherstellungspunkt** und ein **`.reg`-Registry-Backup** an (gespeichert unter `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`, sicher vor der Temp-Bereinigung).
+Ein vollständiger, gehärteter Windows- & Gaming-Optimierer. Jeder Tweak hat **Apply + Revert**, 98 der 108 zusätzlich einen **Live-Status-Check** (die anderen 10 sind einmalige Aufräumaktionen, bei denen es nichts Bleibendes zu prüfen gibt), und jedes Apply legt zuerst einen **Systemwiederherstellungspunkt** und ein **`.reg`-Registry-Backup** an (gespeichert unter `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`, sicher vor der Temp-Bereinigung).
 
-**Tweak-Bibliothek (108 Tweaks, alle reversibel):**
+**Tweak-Bibliothek (108 Tweaks, jeder mit Revert; entfernte Apps kommen per Systemwiederherstellung zurück):**
 - 🪟 **Windows** — Debloat, Privatsphäre, Performance, CTT-Essentials & Quality-of-Life-Tweaks, inkl. Abschalten der geräteweiten generativen KI (Text- & Bildgenerierung), Click to Do, des KI-Agenten in den Einstellungen und der KI in Paint & Notepad
 - 🎮 **Gaming & GPU** — MSI-Modus, HAGS, NVIDIA/AMD-Treiber-Tweaks, GPU-Timeout-Toleranz (TDR), Shader-Cache-Tools
 - 🌐 **Netzwerk** — Latenz (Nagle/LSO/Throttling), DNS (Cloudflare/Google), TCP-Tuning, QoS, Adapter-Energie
@@ -292,7 +292,7 @@ Ein vollständiger, gehärteter Windows- & Gaming-Optimierer. Jeder Tweak hat vo
 - 🛡️ Startup-**Sanity-Check** verhindert, dass ein Status-Check je mit einer Revert-Aktion verwechselt wird
 - 🌍 Durchgängig **locale-unabhängig** (SIDs, feste GUIDs, CIM-Perf-Counter) — funktioniert auf nicht-englischem Windows
 - 🔒 **SHA256-Integritätskette** — `install.ps1` pinnt den veröffentlichten Hash und prüft ihn gegen `CHECKSUMS.txt`, bevor irgendetwas mit Admin-Rechten läuft
-- ✅ Verifiziert: **108/108** Tweaks haben Apply + Revert + Status-Check, keine Kollisionen
+- ✅ Verifiziert: **108/108** Tweaks haben Apply + Revert, **98** davon einen Live-Status-Check (die anderen 10 sind einmalige Aufräumaktionen), keine Kollisionen
 
 
 ---
