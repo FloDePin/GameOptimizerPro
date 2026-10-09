@@ -40,7 +40,7 @@ The interface follows the design of GameOptimizerPro v2.1:
 | Tab | Features | Description |
 |-----|----------|-------------|
 | 🎚️ Presets | 3 levels | One-click **Minimal / Balanced / Aggressive** tweak selection (cumulative, safe-by-default) |
-| 🪟 Windows | 43 Tweaks | Debloat, privacy, performance tweaks + CTT Essentials + Quality of Life |
+| 🪟 Windows | 46 Tweaks | Debloat, privacy, performance tweaks + CTT Essentials + Quality of Life |
 | 🎮 Gaming | 12 Tweaks | Game Mode, Game Bar, MMCSS, CPU priority, fullscreen optimizations, MSI mode, HAGS |
 | 🌐 Network | 11 Tweaks | Nagle, LSO, DNS, TCP tuning, QoS, adapter power saving, delivery optimization |
 | 💾 RAM & Storage | 15 Tweaks | Page file, memory compression, hibernation, SSD/NVMe tweaks, temp cleanup + Deep Clean (6 tools, shows MB freed) |
@@ -52,11 +52,11 @@ The interface follows the design of GameOptimizerPro v2.1:
 | 🔧 **BIOS Guide** | 16 platforms | AM5 / AM4 / Intel LGA1851 / 1700 / 1200 / 1151 + generic, menu paths for ASUS / MSI / Gigabyte / ASRock, live check of EXPO/XMP, Resizable BAR, CSM and Secure Boot |
 | 🚀 Startup Manager | ✅ | Own window, HKCU/HKLM/Run32 + startup folders, disable/enable/refresh |
 | 🗄️ Backups & Log | ✅ | Registry backups, log, System Restore, Revert all and drift check in one place |
-| 🌍 Language DE/EN | ✅ | 108 tweak descriptions + the whole BIOS Guide in German and English, switches live |
+| 🌍 Language DE/EN | ✅ | 111 tweak descriptions + the whole BIOS Guide in German and English, switches live |
 
 ---
 
-## 🪟 Windows Tab - 43 Tweaks
+## 🪟 Windows Tab - 46 Tweaks
 
 ### 🧹 Debloat & System Cleanup
 - **Remove Cortana** — Completely removes Windows' voice assistant
@@ -66,12 +66,15 @@ The interface follows the design of GameOptimizerPro v2.1:
 - **Remove OneDrive** — Removes the OneDrive integration
 - **Remove Windows Recall** — Disables and removes Windows Recall (official policy; existing snapshots are deleted)
 - **Remove Other Bloatware** — Removes additional pre-installed bloatware
+- **Stop Auto-Installed Suggested Apps** — Windows no longer silently installs suggested apps and games (works on Home and Pro too)
+- **Disable Get Started & Copilot Sign-in Screens** — New 26H2 policies: no automatic Get Started app, no Microsoft 365 Copilot promotion at sign-in
 
 ### 🔐 Privacy Settings
 - **Disable Telemetry & Data Collection** — Disables data collection
 - **Disable Activity History** — Disables activity history storage
 - **Disable Click to Do & Settings Agent (AI)** — Turns off AI screen analysis and the AI agent in Settings search (Copilot+ PCs)
 - **Disable AI in Paint & Notepad** — Official policies for Cocreator, Image Creator, Generative Fill and Notepad AI
+- **Disable Windows Settings Backup (Cloud)** — Stops the settings backup to your Microsoft account that 26H2 turns on by default
 
 ### 📦 Windows 11 & 10 Optimization
 - **OS Scan** — Scans the operating system for optimization potential
@@ -86,7 +89,7 @@ The interface follows the design of GameOptimizerPro v2.1:
 ### 🎯 CTT Essentials
 Registry keys sourced **1:1 from Chris Titus Tech WinUtil** for guaranteed accuracy:
 - **Prevent Device Companion Apps** — Blocks device metadata downloads + auto-suggested companion apps
-- **Disable Consumer Features** — Stops auto-installed suggested apps/games in the Start menu
+- **Disable Consumer Features** — Official policy against suggested apps/games; Microsoft only honours it on Enterprise/Education (on Home/Pro, 'Stop Auto-Installed Suggested Apps' does the job)
 - **Disable Windows Platform Binary Table (WPBT)** — Blocks OEM firmware from injecting programs at boot (Security hardening)
 - **Disable Store Recommended Search Results** — Removes sponsored results in the Microsoft Store
 - **Enable Start Menu Previous Layout** — Classic Start layout on supported Win11 builds
@@ -176,7 +179,7 @@ Four settings are read directly from Windows (no admin rights needed): **EXPO/XM
 ## 🌍 Language Toggle - DE/EN
 
 ### 🗣️ Bilingual Tweak Descriptions (DE/EN)
-- **108 tweak descriptions in German & English** — shown right under each tweak (full text as tooltip)
+- **111 tweak descriptions in German & English** — shown right under each tweak (full text as tooltip)
 - **BIOS Guide in German & English** — all explanations and notes
 - **Toggle Button** — "Info: DE / EN" in the sidebar switches everything live, no restart
 - **Interface labels stay English** — the toggle affects the tweak descriptions, not the UI chrome
@@ -281,9 +284,9 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ## 📜 Changelog
 
 ### v1.0 — Initial public release
-A complete, hardened Windows & gaming optimizer. Every tweak ships with **Apply + Revert**, and 98 of the 108 also with a **live status check** (the other 10 are one-time cleanups with nothing lasting to check), and each Apply first creates a **System Restore Point** and a **`.reg` registry backup** (stored in `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`, safe from temp cleanup).
+A complete, hardened Windows & gaming optimizer. Every tweak ships with **Apply + Revert**, and 101 of the 111 also with a **live status check** (the other 10 are one-time cleanups with nothing lasting to check), and each Apply first creates a **System Restore Point** and a **`.reg` registry backup** (stored in `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`, safe from temp cleanup).
 
-**Tweak library (108 tweaks, each with a revert; removed apps come back via System Restore):**
+**Tweak library (111 tweaks, each with a revert; removed apps come back via System Restore):**
 - 🪟 **Windows** — debloat, privacy, performance, CTT-Essentials & Quality-of-Life tweaks, including disabling on-device generative AI (Text & Image Generation), Click to Do, the Settings AI agent and AI in Paint & Notepad
 - 🎮 **Gaming & GPU** — MSI mode, HAGS, NVIDIA/AMD driver tweaks, GPU timeout (TDR) tolerance, shader-cache tools
 - 🌐 **Network** — latency (Nagle/LSO/throttling), DNS (Cloudflare/Google), TCP tuning, QoS, adapter power
@@ -304,7 +307,7 @@ A complete, hardened Windows & gaming optimizer. Every tweak ships with **Apply 
 - 🛡️ Startup **sanity check** guards against a status-check ever being confused with a revert action
 - 🌍 **Locale-independent** throughout (SIDs, fixed GUIDs, CIM perf counters) — works on non-English Windows
 - 🔒 **SHA256 integrity chain** — `install.ps1` pins the published hash and verifies it against `CHECKSUMS.txt` before running anything with Admin rights
-- ✅ Verified: **108/108** tweaks have Apply + Revert, **98** of them a live status check (the other 10 are one-time cleanups), no collisions
+- ✅ Verified: **111/111** tweaks have Apply + Revert, **101** of them a live status check (the other 10 are one-time cleanups), no collisions
 
 
 ---

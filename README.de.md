@@ -40,7 +40,7 @@ Die Oberfläche folgt dem Design von GameOptimizerPro v2.1:
 | Tab | Features | Description |
 |-----|----------|-------------|
 | 🎚️ Presets | 3 Stufen | Ein-Klick **Minimal / Balanced / Aggressive** Tweak-Auswahl (kumulativ, sicher als Standard) |
-| 🪟 Windows | 43 Tweaks | Debloat, Datenschutz, Performance-Tweaks + CTT Essentials + Quality of Life |
+| 🪟 Windows | 46 Tweaks | Debloat, Datenschutz, Performance-Tweaks + CTT Essentials + Quality of Life |
 | 🎮 Gaming | 12 Tweaks | Game Mode, Game Bar, MMCSS, CPU-Priorität, Vollbild-Optimierungen, MSI-Modus, HAGS |
 | 🌐 Network | 11 Tweaks | Nagle, LSO, DNS, TCP-Tuning, QoS, Adapter Power Saving, Delivery Optimization |
 | 💾 RAM & Storage | 15 Tweaks | Auslagerungsdatei, Speicherkomprimierung, Ruhezustand, SSD/NVMe-Tweaks, Temp-Bereinigung + Deep Clean (6 Tools, zeigt freigegebene MB) |
@@ -52,11 +52,11 @@ Die Oberfläche folgt dem Design von GameOptimizerPro v2.1:
 | 🔧 **BIOS Guide** | 16 Plattformen | AM5 / AM4 / Intel LGA1851 / 1700 / 1200 / 1151 + generisch, Menüpfade für ASUS / MSI / Gigabyte / ASRock, Live-Check von EXPO/XMP, Resizable BAR, CSM und Secure Boot |
 | 🚀 Startup Manager | ✅ | Eigenes Fenster, HKCU/HKLM/Run32 + Autostart-Ordner, Disable/Enable/Refresh |
 | 🗄️ Backups & Log | ✅ | Registry-Backups, Log, Systemwiederherstellung, Revert all und Drift-Check an einem Ort |
-| 🌍 Language DE/EN | ✅ | 108 Tweak-Beschreibungen + der komplette BIOS Guide auf Deutsch und Englisch, live umschaltbar |
+| 🌍 Language DE/EN | ✅ | 111 Tweak-Beschreibungen + der komplette BIOS Guide auf Deutsch und Englisch, live umschaltbar |
 
 ---
 
-## 🪟 Windows Tab - 43 Tweaks
+## 🪟 Windows Tab - 46 Tweaks
 
 ### 🧹 Debloat & System Cleanup
 - **Remove Cortana** — Entfernt den Windows Sprachassistenten
@@ -66,12 +66,15 @@ Die Oberfläche folgt dem Design von GameOptimizerPro v2.1:
 - **Remove OneDrive** — Entfernt die OneDrive-Integration
 - **Remove Windows Recall** — Deaktiviert und entfernt Windows Recall (offizielle Richtlinie; vorhandene Snapshots werden gelöscht)
 - **Remove Other Bloatware** — Entfernt zusätzliche vorinstallierte Bloatware
+- **Stop Auto-Installed Suggested Apps** — Windows installiert keine vorgeschlagenen Apps und Spiele mehr still nach (wirkt auch auf Home und Pro)
+- **Disable Get Started & Copilot Sign-in Screens** — Neue 26H2-Richtlinien: keine automatische Get-Started-App, keine Microsoft-365-Copilot-Werbung bei der Anmeldung
 
 ### 🔐 Privacy-Einstellungen
 - **Disable Telemetry & Data Collection** — Deaktiviert Datenerfassung
 - **Disable Activity History** — Deaktiviert die Aktivitätsverlauf-Speicherung
 - **Disable Click to Do & Settings Agent (AI)** — Schaltet die KI-Bildschirmanalyse und den KI-Agenten in der Einstellungen-Suche ab (Copilot+ PCs)
 - **Disable AI in Paint & Notepad** — Offizielle Richtlinien für Cocreator, Image Creator, generatives Füllen und Notepad-KI
+- **Disable Windows Settings Backup (Cloud)** — Stoppt die Sicherung der Einstellungen ins Microsoft-Konto, die 26H2 standardmäßig einschaltet
 
 ### 📦 Windows 11 & 10 Optimization
 - **OS-Scan** — Scannt das Betriebssystem auf Optimierungspotenziale
@@ -164,7 +167,7 @@ Vier Einstellungen werden direkt aus Windows gelesen (ohne Admin-Rechte): **EXPO
 ## 🌍 Language Toggle - DE/EN
 
 ### 🗣️ Zweisprachige Tweak-Beschreibungen (DE/EN)
-- **108 Tweak-Beschreibungen auf Deutsch & Englisch** — direkt unter jedem Tweak (voller Text als Tooltip)
+- **111 Tweak-Beschreibungen auf Deutsch & Englisch** — direkt unter jedem Tweak (voller Text als Tooltip)
 - **BIOS Guide auf Deutsch & Englisch** — alle Erklärungen und Hinweise
 - **Toggle-Button** — „Info: DE / EN“ in der Seitenleiste schaltet alles live um, kein Neustart
 - **Interface-Beschriftungen bleiben Englisch** — der Umschalter betrifft die Beschreibungen, nicht die UI-Elemente
@@ -269,9 +272,9 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ## 📜 Changelog
 
 ### v1.0 — Erste öffentliche Veröffentlichung
-Ein vollständiger, gehärteter Windows- & Gaming-Optimierer. Jeder Tweak hat **Apply + Revert**, 98 der 108 zusätzlich einen **Live-Status-Check** (die anderen 10 sind einmalige Aufräumaktionen, bei denen es nichts Bleibendes zu prüfen gibt), und jedes Apply legt zuerst einen **Systemwiederherstellungspunkt** und ein **`.reg`-Registry-Backup** an (gespeichert unter `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`, sicher vor der Temp-Bereinigung).
+Ein vollständiger, gehärteter Windows- & Gaming-Optimierer. Jeder Tweak hat **Apply + Revert**, 101 der 111 zusätzlich einen **Live-Status-Check** (die anderen 10 sind einmalige Aufräumaktionen, bei denen es nichts Bleibendes zu prüfen gibt), und jedes Apply legt zuerst einen **Systemwiederherstellungspunkt** und ein **`.reg`-Registry-Backup** an (gespeichert unter `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`, sicher vor der Temp-Bereinigung).
 
-**Tweak-Bibliothek (108 Tweaks, jeder mit Revert; entfernte Apps kommen per Systemwiederherstellung zurück):**
+**Tweak-Bibliothek (111 Tweaks, jeder mit Revert; entfernte Apps kommen per Systemwiederherstellung zurück):**
 - 🪟 **Windows** — Debloat, Privatsphäre, Performance, CTT-Essentials & Quality-of-Life-Tweaks, inkl. Abschalten der geräteweiten generativen KI (Text- & Bildgenerierung), Click to Do, des KI-Agenten in den Einstellungen und der KI in Paint & Notepad
 - 🎮 **Gaming & GPU** — MSI-Modus, HAGS, NVIDIA/AMD-Treiber-Tweaks, GPU-Timeout-Toleranz (TDR), Shader-Cache-Tools
 - 🌐 **Netzwerk** — Latenz (Nagle/LSO/Throttling), DNS (Cloudflare/Google), TCP-Tuning, QoS, Adapter-Energie
@@ -292,7 +295,7 @@ Ein vollständiger, gehärteter Windows- & Gaming-Optimierer. Jeder Tweak hat **
 - 🛡️ Startup-**Sanity-Check** verhindert, dass ein Status-Check je mit einer Revert-Aktion verwechselt wird
 - 🌍 Durchgängig **locale-unabhängig** (SIDs, feste GUIDs, CIM-Perf-Counter) — funktioniert auf nicht-englischem Windows
 - 🔒 **SHA256-Integritätskette** — `install.ps1` pinnt den veröffentlichten Hash und prüft ihn gegen `CHECKSUMS.txt`, bevor irgendetwas mit Admin-Rechten läuft
-- ✅ Verifiziert: **108/108** Tweaks haben Apply + Revert, **98** davon einen Live-Status-Check (die anderen 10 sind einmalige Aufräumaktionen), keine Kollisionen
+- ✅ Verifiziert: **111/111** Tweaks haben Apply + Revert, **101** davon einen Live-Status-Check (die anderen 10 sind einmalige Aufräumaktionen), keine Kollisionen
 
 
 ---

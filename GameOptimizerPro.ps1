@@ -75,7 +75,7 @@ Write-Host "[$(Get-Date -f 'HH:mm:ss')] Admin-Check OK" -ForegroundColor DarkGra
 
 # -----------------------------------------
 # SPLASH -- visible within a moment of the launch while hardware detection and the
-# 108 status checks run (a few seconds). Closed once the main window has rendered.
+# status checks run (a few seconds). Closed once the main window has rendered.
 # Purely cosmetic: if anything about it fails, startup simply continues without it.
 # -----------------------------------------
 $Script:Splash = $null
@@ -262,6 +262,7 @@ $Script:RegistryBackupKeys = @(
     "HKCU\Software\Microsoft\GameBar",
     "HKCU\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo",
     "HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications",
+    "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager",
     "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
     "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved",
     "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects",
@@ -473,6 +474,30 @@ $AllTweaks = @(
             Write-Log "Bloatware removed"
         }
     },
+    [PSCustomObject]@{
+        Name     = "Stop Auto-Installed Suggested Apps"
+        Desc     = "Verhindert, dass Windows vorgeschlagene Apps und Spiele (z.B. Candy Crush, TikTok) still nachinstalliert - auch die von Hersteller und Microsoft vorgesehenen. Wirkt auf allen Editionen inkl. Home und Pro. Bereits installierte Apps bleiben, dafuer gibt es 'Remove Other Bloatware'."
+        Category = "Windows"
+        Group    = "Bloatware"
+        Action   = {
+            $cdm = "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+            reg add $cdm /v SilentInstalledAppsEnabled /t REG_DWORD /d 0 /f | Out-Null
+            reg add $cdm /v OemPreInstalledAppsEnabled /t REG_DWORD /d 0 /f | Out-Null
+            reg add $cdm /v PreInstalledAppsEnabled    /t REG_DWORD /d 0 /f | Out-Null
+            Write-Log "Auto-install of suggested apps disabled (ContentDeliveryManager)"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Get Started & Copilot Sign-in Screens"
+        Desc     = "Offizielle Richtlinien aus Windows 11 26H2: Die 'Get Started'-App startet nicht mehr automatisch (ihre Hintergrundaufgaben laufen nicht mehr), und die Einrichtungs-Werbung fuer Microsoft 365 Copilot bei der Anmeldung entfaellt. Copilot selbst bleibt nutzbar. Aeltere Windows-Versionen ignorieren die Werte einfach."
+        Category = "Windows"
+        Group    = "Bloatware"
+        Action   = {
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableGetStarted /t REG_DWORD /d 1 /f | Out-Null
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableCopilotPinScreen /t REG_DWORD /d 1 /f | Out-Null
+            Write-Log "Get Started and Microsoft 365 Copilot sign-in screens disabled (CloudContent policies)"
+        }
+    },
 
     # == WINDOWS / PRIVACY ================================================
     [PSCustomObject]@{
@@ -524,7 +549,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Click to Do & Settings Agent (AI)"
-        Desc     = "Schaltet 'Click to Do' ab (KI, die auf Tastendruck einen Screenshot macht und den Bildschirminhalt analysiert) sowie den KI-Agenten in der Suche der Einstellungen (neu in 26H2). Offizielle Microsoft-Richtlinien. Beide Funktionen laufen nur auf Copilot+ PCs mit NPU -- auf anderen PCs ist der Tweak harmlos. Hinweis: Die Settings-Agent-Richtlinie ist offiziell fuer Enterprise/Education dokumentiert; Home/Pro koennen sie ignorieren."
+        Desc     = "Schaltet 'Click to Do' ab (KI, die auf Tastendruck einen Screenshot macht und den Bildschirminhalt analysiert) sowie den KI-Agenten in der Suche der Einstellungen (neu in 26H2). Offizielle Microsoft-Richtlinien. Beide Funktionen laufen nur auf Copilot+ PCs mit NPU -- auf anderen PCs ist der Tweak harmlos. Hinweis: Click to Do wird auf allen Editionen abgeschaltet; die Settings-Agent-Richtlinie wertet Windows laut Microsoft nur auf Enterprise/Education aus - auf Home/Pro bleibt der Agent an."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -605,6 +630,16 @@ $AllTweaks = @(
             )
             foreach ($task in $tasks) { schtasks /Change /TN $task /Disable 2>$null }
             Write-Log "Telemetry tasks disabled"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Windows Settings Backup (Cloud)"
+        Desc     = "Windows sichert Einstellungen regelmaessig in dein Microsoft-Konto (seit 26H2 standardmaessig an). Offizielle Richtlinie 'Enable Windows Backup' = aus: es werden keine Einstellungen mehr in die Cloud gesichert. Dateien, OneDrive und lokale Wiederherstellungspunkte sind nicht betroffen."
+        Category = "Windows"
+        Group    = "Privacy"
+        Action   = {
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\SettingSync" /v EnableWindowsBackup /t REG_DWORD /d 0 /f | Out-Null
+            Write-Log "Windows settings backup to the cloud disabled (EnableWindowsBackup=0)"
         }
     },
 
@@ -767,7 +802,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Consumer Features"
-        Desc     = "Deaktiviert Windows Consumer Features. Windows installiert dann keine vorgeschlagenen Apps, Spiele und Werbe-Kacheln mehr automatisch (z.B. Candy Crush oder TikTok im Startmenue)."
+        Desc     = "Setzt die offizielle Richtlinie 'Turn off Microsoft consumer experiences' (1:1 aus WinUtil). Achtung: Laut Microsoft wertet Windows sie nur auf Enterprise und Education aus. Auf Home und Pro stoppt 'Stop Auto-Installed Suggested Apps' (Tab Windows, Bloatware) das automatische Nachinstallieren von Vorschlags-Apps."
         Category = "Windows"
         Group    = "CTT Essentials"
         Action   = {
@@ -1893,6 +1928,19 @@ $RevertActions = @{
     "Remove Other Bloatware" = {
         Write-Log "Revert Bloatware: apps were removed  --  needs System Restore to reinstall"
     }
+    "Stop Auto-Installed Suggested Apps" = {
+        # Windows ships these three values as 1 (auto-install allowed)
+        $cdm = "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+        reg add $cdm /v SilentInstalledAppsEnabled /t REG_DWORD /d 1 /f | Out-Null
+        reg add $cdm /v OemPreInstalledAppsEnabled /t REG_DWORD /d 1 /f | Out-Null
+        reg add $cdm /v PreInstalledAppsEnabled    /t REG_DWORD /d 1 /f | Out-Null
+        Write-Log "Revert: auto-install of suggested apps restored to the Windows default"
+    }
+    "Disable Get Started & Copilot Sign-in Screens" = {
+        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableGetStarted /f 2>$null
+        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableCopilotPinScreen /f 2>$null
+        Write-Log "Revert: Get Started and Copilot sign-in screens restored (policies removed)"
+    }
 
     # == PRIVACY ==========================================================
     "Disable Power Throttling" = {
@@ -2045,6 +2093,10 @@ $RevertActions = @{
         )
         foreach ($task in $tasks) { schtasks /Change /TN $task /Enable 2>$null }
         Write-Log "Revert: Telemetry scheduled tasks re-enabled"
+    }
+    "Disable Windows Settings Backup (Cloud)" = {
+        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\SettingSync" /v EnableWindowsBackup /f 2>$null
+        Write-Log "Revert: Windows settings backup back to the Windows default (policy removed)"
     }
 
     # == PERFORMANCE ======================================================
@@ -2591,6 +2643,11 @@ $CheckFunctions = @{
     "Remove OneDrive"                    = { -not (Test-Path "$env:LOCALAPPDATA\Microsoft\OneDrive\OneDrive.exe") }
     "Remove Windows Recall"              = { ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableAIDataAnalysis") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "AllowRecallEnablement") -eq 0) }
     "Remove Other Bloatware"             = { $null -eq (Get-AppxPackage -AllUsers "*CandyCrush*" -EA SilentlyContinue | Select-Object -First 1) }
+    "Stop Auto-Installed Suggested Apps" = {
+        $cdm = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+        ((Get-RegVal $cdm "SilentInstalledAppsEnabled") -eq 0) -and ((Get-RegVal $cdm "OemPreInstalledAppsEnabled") -eq 0) -and ((Get-RegVal $cdm "PreInstalledAppsEnabled") -eq 0)
+    }
+    "Disable Get Started & Copilot Sign-in Screens" = { ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableGetStarted") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableCopilotPinScreen") -eq 1) }
 
     # PRIVACY
     "Disable Power Throttling" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling" "PowerThrottlingOff") -eq 1 }
@@ -2637,6 +2694,7 @@ $CheckFunctions = @{
     # anchor the pattern so a commented-out line doesn't count.
     "Block Telemetry Hosts (hosts file)" = { $h = Get-Content "$env:SystemRoot\System32\drivers\etc\hosts" -EA SilentlyContinue; if ($null -eq $h) { $null } else { [bool](@($h) -match '^\s*0\.0\.0\.0\s+telemetry\.microsoft\.com\s*$') } }
     "Disable Scheduled Telemetry Tasks"  = { (Get-TaskState "\Microsoft\Windows\Application Experience" "Microsoft Compatibility Appraiser") -eq "Disabled" }
+    "Disable Windows Settings Backup (Cloud)" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync" "EnableWindowsBackup") -eq 0 }
 
     # PERFORMANCE
     "Ultimate Performance Plan"          = { $g = Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "UltimatePerfGuid"; $a = (powercfg /getactivescheme 2>$null) -join " "; ($g -and $a -match [regex]::Escape($g)) -or ($a -match "Ultimate Performance|Ultimative Leistung") }
@@ -2874,7 +2932,6 @@ if ($Script:SanityCheckFailures.Count -gt 0) {
 # LANGUAGE SUPPORT  --  EN Descriptions
 # $TweakDescEN keyed by tweak Name
 # -----------------------------------------
-$Script:CurrentLang = "EN"
 $LangState = @{ Current = "EN" }  # Reference type -- shared across all closures
 $Script:TweakDots = @{}           # tweakName -> dot Border (for Verify button re-check)
 
@@ -2955,7 +3012,7 @@ $TweakDescEN = @{
     "Disable Bing in Windows Search"      = "Disables Bing integration in Windows Search. Start menu searches only locally -- faster, no data exchange with Microsoft on every search."
     "Process Count Reduction (Svchost)"   = "Sets the Svchost split threshold to your RAM size. Windows combines services into fewer separate processes -- noticeably reduces background process count. WARNING: reduces process isolation -- if one service crashes it can take down others in the same host (audio, network etc.). Reboot recommended."
     "Prevent Device Companion Apps"       = "Stops Windows from downloading device metadata from the network and auto-installing or suggesting companion apps for connected devices. Saves background traffic and unwanted app installs."
-    "Disable Consumer Features"           = "Disables Windows Consumer Features so Windows no longer auto-installs suggested apps, games and promoted tiles (e.g. Candy Crush or TikTok in the Start menu)."
+    "Disable Consumer Features"           = "Sets the official 'Turn off Microsoft consumer experiences' policy (1:1 from WinUtil). Note: according to Microsoft, Windows only honours it on Enterprise and Education. On Home and Pro, 'Stop Auto-Installed Suggested Apps' (Windows tab, Bloatware) stops suggested apps from being installed automatically."
     "Disable Windows Platform Binary Table (WPBT)" = "Disables execution of the Windows Platform Binary Table, preventing motherboard/OEM firmware from silently injecting programs into Windows at every boot. Pure security tweak."
     "Disable Store Recommended Search Results" = "Locks the Microsoft Store's store.db via file permissions so the Store stops showing recommended/sponsored search results. Fully reversible."
     "Enable Start Menu Previous Layout"   = "Enables the previous Start menu layout on supported Windows 11 builds via a feature override. Only affects builds that know this feature flag -- otherwise no effect."
@@ -2975,15 +3032,18 @@ $TweakDescEN = @{
     "Remove OneDrive"                             = "Completely uninstalls OneDrive including autostart and Explorer integration. Local files remain untouched."
     "Remove Windows Recall"                       = "Disables AND removes Windows Recall  --  the AI feature that takes screenshots of your activity. Uses Microsoft's official policies: snapshots off + Recall component removed from the system (existing snapshots are deleted). Restart required."
     "Remove Other Bloatware"                      = "Removes pre-installed apps: Candy Crush, TikTok, Disney+, Facebook, Solitaire, Clipchamp, ToDo, Paint3D and more."
+    "Stop Auto-Installed Suggested Apps"          = "Stops Windows from silently installing suggested apps and games (e.g. Candy Crush, TikTok), including the ones planned by the PC maker and Microsoft. Works on every edition including Home and Pro. Apps already installed stay -- use 'Remove Other Bloatware' for those."
+    "Disable Get Started & Copilot Sign-in Screens" = "Official Windows 11 26H2 policies: the 'Get Started' app no longer launches automatically (its background tasks stop too), and the Microsoft 365 Copilot setup promotion at sign-in is gone. Copilot itself stays usable. Older Windows versions simply ignore the values."
     "Disable Telemetry & Data Collection"         = "Disables all Windows telemetry services (DiagTrack, dmwappushservice). Windows stops sending usage data to Microsoft."
     "Disable Activity History"                    = "Disables Windows Timeline/Activity History. Windows stops tracking which apps and files you open."
     "Disable Advertising ID"                      = "Disables the advertising ID Windows assigns each user. Apps can no longer track you across devices for targeted ads."
     "Disable Text & Image Generation (AI)"        = "Disables device-wide Text and Image Generation (on-device generative AI) for all apps via policy (Force Deny). Affects only local on-device AI, not cloud AI services."
-    "Disable Click to Do & Settings Agent (AI)"   = "Turns off 'Click to Do' (AI that takes a screenshot on demand and analyzes what's on screen) and the AI agent in the Settings search (new in 26H2). Official Microsoft policies. Both only run on Copilot+ PCs with an NPU -- harmless on other PCs. Note: the Settings-agent policy is officially documented for Enterprise/Education; Home/Pro may ignore it."
+    "Disable Click to Do & Settings Agent (AI)"   = "Turns off 'Click to Do' (AI that takes a screenshot on demand and analyzes what's on screen) and the AI agent in the Settings search (new in 26H2). Official Microsoft policies. Both only run on Copilot+ PCs with an NPU -- harmless on other PCs. Note: Click to Do is turned off on every edition; according to Microsoft, Windows only honours the Settings-agent policy on Enterprise/Education - on Home/Pro the agent stays on."
     "Disable AI in Paint & Notepad"               = "Disables the AI features in Paint (Cocreator, Image Creator, Generative Fill) and in Notepad (Copilot rewrite/summarize) via Microsoft's official policies. Both apps keep working normally."
     "Disable Location Tracking"                   = "Disables the Windows location service system-wide. Apps can no longer request your location."
     "Block Telemetry Hosts (hosts file)"          = "Adds Microsoft telemetry servers to the Windows hosts file, blocking them even if telemetry services are still running."
     "Disable Scheduled Telemetry Tasks"           = "Disables all scheduled Windows tasks that collect and send telemetry data (e.g. Compatibility Appraiser, CEIP)."
+    "Disable Windows Settings Backup (Cloud)"     = "Windows regularly backs up your settings to your Microsoft account (on by default since 26H2). Sets the official 'Enable Windows Backup' policy to off: no more settings are backed up to the cloud. Files, OneDrive and local restore points are not affected."
     "Ultimate Performance Plan"                   = "Activates the 'Ultimate Performance' power plan and sets it to always-on: Windows stops throttling CPU cores AND the PC no longer sleeps -- display, disks and system stay on (no timeout). Maximum performance at all times. Increases power consumption."
     "Disable HPET (High Precision Event Timer)"   = "Disables the High Precision Event Timer. Can reduce system latency and improve gaming performance on some systems with lower frame times."
     "Set 0.5ms Timer Resolution"                  = "Sets Windows timer resolution to 0.5ms (default 15.6ms). Improves frame timing precision and noticeably reduces input lag in games."
@@ -3932,10 +3992,15 @@ function Update-Counts {
 }
 
 function Invoke-Verify {
+    if ($Script:Busy) { return }
+    Set-Busy $true
+    try {
     $StatusText.Text = "Verifying tweak status..."
     $Window.Dispatcher.Invoke([Action] {}, [System.Windows.Threading.DispatcherPriority]::Render)
-    $active = 0; $inactive = 0; $unknown = 0
+    $active = 0; $inactive = 0; $unknown = 0; $i = 0; $n = @($AllTweaks).Count
     foreach ($tweak in $AllTweaks) {
+        $i++
+        if ($i % 12 -eq 0) { Set-Status "Verifying tweak status ... $i / $n" }
         if ($Script:TweakDots.ContainsKey($tweak.Name)) {
             $result = Update-TweakDot $Script:TweakDots[$tweak.Name] $tweak.Name
             switch ($result) {
@@ -3953,6 +4018,7 @@ function Invoke-Verify {
     Update-Counts
     $checkable = $active + $inactive
     $StatusText.Text = "Verify complete: $active of $checkable checkable tweaks active (ticked)$($Script:Mid)$unknown one-time actions$($Script:Mid)verified $(Get-Date -Format 'HH:mm')"
+    } finally { Set-Busy $false }
 }
 
 # =============================================================================
@@ -4056,8 +4122,12 @@ $SearchBox.Add_TextChanged({ Apply-TweakFilter })
 $Script:BaselineFile = "$env:LOCALAPPDATA\GameOptimizerPro\baseline.txt"
 
 function Save-Baseline {
+    # -FromState: take the results that were just read for every tweak
+    # ($Script:CheckRaw, see Update-AllDots) instead of running every check again.
+    param([switch]$FromState)
     $activeNames = @()
     foreach ($t in $AllTweaks) {
+        if ($FromState -and $Script:CheckRaw.ContainsKey($t.Name)) { if ($Script:CheckRaw[$t.Name] -eq 'T') { $activeNames += $t.Name }; continue }
         if ($CheckFunctions.ContainsKey($t.Name)) {
             try { if ((& $CheckFunctions[$t.Name]) -eq $true) { $activeNames += $t.Name } } catch { }
         }
@@ -5170,6 +5240,7 @@ $Script:PresetMinimal = @(
 )
 $Script:PresetBalanced = $Script:PresetMinimal + @(
     "Remove Xbox Apps","Remove Copilot","Remove Windows Recall","Remove Other Bloatware",
+    "Stop Auto-Installed Suggested Apps","Disable Get Started & Copilot Sign-in Screens",
     "Disable Click to Do & Settings Agent (AI)","Disable AI in Paint & Notepad",
     "Block Telemetry Hosts (hosts file)",
     "Ultimate Performance Plan","Disable HPET (High Precision Event Timer)","Set 0.5ms Timer Resolution",
@@ -5189,6 +5260,7 @@ $Script:PresetBalanced = $Script:PresetMinimal + @(
 )
 $Script:PresetAggressive = $Script:PresetBalanced + @(
     "Remove Cortana","Remove Microsoft Teams (Personal)","Remove OneDrive",
+    "Disable Windows Settings Backup (Cloud)",
     "Disable Windows Search Indexing","Process Count Reduction (Svchost)",
     "Disable Memory Compression","Disable Write-Cache Buffer Flushing","Disable Hibernation","Clear PageFile on Shutdown",
     "Disable Reserved Storage","Disable Storage Sense","Disable Lock Screen","Enable Start Menu Previous Layout",
@@ -5229,6 +5301,51 @@ Select-Category 'Windows'
 Show-Page 'dashboard'
 
 # -----------------------------------------
+# UI HELPERS FOR LONG OPERATIONS
+# Apply, Revert All and Verify run on the UI thread. Set-Status paints a new status
+# text right away (otherwise it only shows up once the work is done), and Set-Busy
+# locks the action buttons so a second click can't start a nested run.
+# -----------------------------------------
+$Script:Busy = $false
+function Set-Status([string]$Text) {
+    $StatusText.Text = $Text
+    try { $Window.Dispatcher.Invoke([Action] {}, [System.Windows.Threading.DispatcherPriority]::Render) } catch { }
+}
+function Set-Busy([bool]$On) {
+    $Script:Busy = $On
+    foreach ($b in @($BtnApply, $BtnRevertAll, $BtnVerify, $BtnSelectAll, $BtnDeselect, $Script:BtnPresetMin, $Script:BtnPresetBal, $Script:BtnPresetAgg)) {
+        if ($b) { $b.IsEnabled = -not $On }
+    }
+}
+# Checkpoint-Computer can take 10-60 s (Volume Shadow Copy). It runs on a background
+# runspace while the window keeps repainting, so Windows never marks the app as
+# "Not responding". Throws, like Checkpoint-Computer, if no point could be created.
+function New-RestorePoint([string]$Description) {
+    $ps = [powershell]::Create()
+    try {
+        [void]$ps.AddScript({ param($d) Checkpoint-Computer -Description $d -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop }).AddArgument($Description)
+        $handle = $ps.BeginInvoke()
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        while (-not $handle.IsCompleted) {
+            Set-Status ("Creating restore point ... {0} s" -f [int]$sw.Elapsed.TotalSeconds)
+            Start-Sleep -Milliseconds 150
+        }
+        $null = $ps.EndInvoke($handle)
+        if ($ps.Streams.Error.Count) { throw $ps.Streams.Error[0] }
+    } finally { $ps.Dispose() }
+}
+# Re-reads every tweak's status (dots, counts, $Script:CheckRaw) with a visible progress
+function Update-AllDots([string]$Label) {
+    $i = 0; $n = @($AllTweaks).Count
+    foreach ($tweak in $AllTweaks) {
+        $i++
+        if ($i % 12 -eq 0) { Set-Status "$Label $i / $n ..." }
+        if ($Script:TweakDots.ContainsKey($tweak.Name)) { Update-TweakDot $Script:TweakDots[$tweak.Name] $tweak.Name | Out-Null }
+    }
+    Update-Counts
+}
+
+# -----------------------------------------
 # BUTTON EVENTS
 # -----------------------------------------
 $BtnSelectAll.Add_Click({
@@ -5261,6 +5378,7 @@ $BtnOpenBackups.Add_Click({ Open-BackupFolder })
 $BtnVerify.Add_Click({ Invoke-Verify })
 
 $BtnApply.Add_Click({
+    if ($Script:Busy) { return }
     $selected = @($AllTweaks | Where-Object { $CheckBoxMap[$_.Name].IsChecked -eq $true })
 
     if ($selected.Count -eq 0) {
@@ -5304,30 +5422,31 @@ $BtnApply.Add_Click({
     )
     if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) { return }
 
+    Set-Busy $true
+    try {
     # Create Restore Point
-    $StatusText.Text = "Creating restore point..."
+    Set-Status "Creating restore point..."
     # Lift the default 24h creation-frequency limit so the point isn't silently
     # skipped when the user runs the tool twice on the same day.
     reg add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v SystemRestorePointCreationFrequency /t REG_DWORD /d 0 /f 2>$null | Out-Null
     try {
-        Checkpoint-Computer -Description "GameOptimizerPro Backup" -RestorePointType "MODIFY_SETTINGS" -ErrorAction Stop
+        New-RestorePoint "GameOptimizerPro Backup"
         Write-Log "Restore point created"
-        $StatusText.Text = "Restore point created. Backing up registry..."
+        Set-Status "Restore point created. Backing up registry..."
     } catch {
         Write-Log "Restore point skipped (VSS error or System Protection disabled): $_"
-        $StatusText.Text = "Restore point skipped. Backing up registry..."
+        Set-Status "Restore point skipped. Backing up registry..."
     }
 
     # Registry backup (independent of restore-point success -- always runs)
     $Script:LastBackupDir = Backup-Registry -Label "PreApply"
-    $StatusText.Text = "Registry backup saved. Applying tweaks..."
+    Set-Status "Registry backup saved. Applying tweaks..."
 
     # Apply tweaks
     $done  = 0
     $total = $selected.Count
     foreach ($tweak in $selected) {
-        $StatusText.Text = "Applying: $($tweak.Name) ($done/$total)..."
-        $Window.Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Render)
+        Set-Status "Applying: $($tweak.Name) ($done/$total)..."
         try {
             & $tweak.Action
             Write-Log "OK: $($tweak.Name)"
@@ -5337,18 +5456,15 @@ $BtnApply.Add_Click({
         $done++
     }
 
-    $StatusText.Text = "Done! $done tweaks applied. Log: $LogFile"
+    # Refresh ALL status dots, not just the applied ones: a tweak can change others
+    # (the Ultimate Performance plan switches the active scheme, so every power
+    # tweak's status changes with it).
+    Update-AllDots "Checking the result:"
+    Set-Status "Done! $done tweaks applied. Log: $LogFile"
 
-    # Refresh status dots so the user sees what changed
-    foreach ($tweak in $selected) {
-        if ($Script:TweakDots.ContainsKey($tweak.Name)) {
-            Update-TweakDot $Script:TweakDots[$tweak.Name] $tweak.Name | Out-Null
-        }
-    }
-    Update-Counts
-
-    # Snapshot the now-active tweaks so the next launch can detect Windows-reverted drift.
-    Save-Baseline
+    # Snapshot the now-active tweaks so the next launch can detect Windows-reverted
+    # drift -- from the results just read, instead of running every check again.
+    Save-Baseline -FromState
 
     [System.Windows.MessageBox]::Show(
         "$done tweaks applied successfully!`n`nSome changes require a restart to take effect.`nLog saved to:`n$LogFile`n`nRegistry backup (.reg files) saved to:`n$Script:LastBackupDir",
@@ -5367,12 +5483,14 @@ $BtnApply.Add_Click({
     if ($restart -eq [System.Windows.MessageBoxResult]::Yes) {
         Restart-Computer -Force
     }
+    } finally { Set-Busy $false }
 })
 
 # -----------------------------------------
 # REVERT ALL BUTTON
 # -----------------------------------------
 $BtnRevertAll.Add_Click({
+    if ($Script:Busy) { return }
 
     # Step 1: Let user choose: System Restore or Quick Registry Reset
     $choice = [System.Windows.MessageBox]::Show(
@@ -5431,21 +5549,23 @@ $BtnRevertAll.Add_Click({
     )
     if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) { return }
 
+    Set-Busy $true
+    try {
     # Restore point before reverting
-    $StatusText.Text = "Creating safety restore point..."
+    Set-Status "Creating safety restore point..."
     reg add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v SystemRestorePointCreationFrequency /t REG_DWORD /d 0 /f 2>$null | Out-Null
     try {
-        Checkpoint-Computer -Description "GameOptimizerPro Pre-Revert Backup" -RestorePointType "MODIFY_SETTINGS" -ErrorAction Stop
+        New-RestorePoint "GameOptimizerPro Pre-Revert Backup"
         Write-Log "Revert restore point created"
-        $StatusText.Text = "Safety restore point created. Backing up registry..."
+        Set-Status "Safety restore point created. Backing up registry..."
     } catch {
         Write-Log "Revert restore point skipped (VSS error or System Protection disabled): $_"
-        $StatusText.Text = "Restore point skipped. Backing up registry..."
+        Set-Status "Restore point skipped. Backing up registry..."
     }
 
     # Registry backup (independent of restore-point success -- always runs)
     $Script:LastBackupDir = Backup-Registry -Label "PreRevert"
-    $StatusText.Text = "Registry backup saved. Starting revert..."
+    Set-Status "Registry backup saved. Starting revert..."
 
     # Run all revert actions
     $done  = 0
@@ -5454,8 +5574,7 @@ $BtnRevertAll.Add_Click({
     $appWarnings = 0
 
     foreach ($tweakName in $RevertActions.Keys) {
-        $StatusText.Text = "Reverting [$done/$total]: $tweakName..."
-        $Window.Dispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Render)
+        Set-Status "Reverting [$done/$total]: $tweakName..."
         try {
             & $RevertActions[$tweakName]
             $done++
@@ -5480,14 +5599,9 @@ $BtnRevertAll.Add_Click({
     } catch { Write-Log "Baseline could not be cleared: $_" }
 
     # Refresh the status dots so they reflect the reverted state (Apply does the same)
-    foreach ($tweak in $AllTweaks) {
-        if ($Script:TweakDots.ContainsKey($tweak.Name)) {
-            Update-TweakDot $Script:TweakDots[$tweak.Name] $tweak.Name | Out-Null
-        }
-    }
-    Update-Counts
+    Update-AllDots "Checking the result:"
 
-    $StatusText.Text = "Revert complete! $done/$total settings processed. Log: $LogFile"
+    Set-Status "Revert complete! $done/$total settings processed. Log: $LogFile"
     Write-Log "Revert All complete: $done processed, $failed failed"
 
     $appNote = if ($appWarnings -gt 0) {
@@ -5504,13 +5618,13 @@ $BtnRevertAll.Add_Click({
         [System.Windows.MessageBoxButton]::OK,
         [System.Windows.MessageBoxImage]::Information
     )
+    } finally { Set-Busy $false }
 })
 
 $BtnLang.Add_Click({
     # The interface stays permanently English. This toggle switches the language
     # of the tweak descriptions and the BIOS Guide explanations (DE/EN).
     $LangState.Current  = if ($LangState.Current -eq "EN") { "DE" } else { "EN" }
-    $Script:CurrentLang = $LangState.Current
     Update-LangButton
     Set-DescLanguage
     Render-BiosPage
