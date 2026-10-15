@@ -115,12 +115,50 @@ try {
 # -----------------------------------------
 # HARDWARE DETECTION
 # -----------------------------------------
-# The WMI results are kept in $Script:VideoCtrls / $Script:CpuObj and reused by the
-# dashboard, so every class is queried only once per start.
+function Get-RegVal($Path, $Name) {
+    try { (Get-ItemProperty $Path -Name $Name -ErrorAction Stop).$Name } catch { $null }
+}
+
+# The gaming GPU. On AM5 / Intel desktops the iGPU often stays enabled next to the
+# graphics card (and laptops have both), and WMI lists the adapters in no fixed order:
+# taking the first one could pick the iGPU -- wrong GPU tweaks, MSI mode on the wrong
+# device, wrong VRAM. The adapter with the most dedicated VRAM wins, read from the
+# driver key of each PRESENT adapter (a removed old card keeps its driver key).
+function Select-PrimaryGpu($Ctrls) {
+    $best = $null
+    foreach ($vc in @($Ctrls | Where-Object { $_.Name -notmatch 'Microsoft' })) {
+        $key = $null; $mem = 0L
+        $drv = Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Enum\$($vc.PNPDeviceID)" 'Driver'
+        if ($drv) {
+            $key = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\$drv"
+            $q = Get-RegVal $key 'HardwareInformation.qwMemorySize'
+            if ($null -eq $q) { $q = Get-RegVal $key 'HardwareInformation.MemorySize' }   # older drivers
+            if ($q -is [byte[]]) { $q = if ($q.Length -ge 8) { [BitConverter]::ToInt64($q, 0) } elseif ($q.Length -ge 4) { [BitConverter]::ToUInt32($q, 0) } else { 0 } }
+            try { $mem = [int64]$q } catch { $mem = 0L }
+        }
+        if ($mem -le 0) { try { $mem = [int64]$vc.AdapterRAM } catch { $mem = 0L } }   # WMI value, capped at 4 GB
+        $vc | Add-Member -NotePropertyName GpuClassKey -NotePropertyValue $key -Force
+        $vc | Add-Member -NotePropertyName VramBytes -NotePropertyValue $mem -Force
+        if (-not $best -or $mem -gt $best.VramBytes) { $best = $vc }
+    }
+    $best
+}
+
+# Driver keys of the AMD display adapters. Only the 4-digit subkeys are drivers: the
+# class key also holds 'Configuration' / 'Properties', and on mixed systems the
+# driver keys of other vendors' GPUs.
+function Get-AmdGpuKeys {
+    Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}" -ErrorAction SilentlyContinue |
+        Where-Object { $_.PSChildName -match '^\d{4}$' -and "$(Get-RegVal $_.PSPath 'ProviderName') $(Get-RegVal $_.PSPath 'DriverDesc')" -match 'Advanced Micro Devices|ATI Tech|\bAMD\b|Radeon' }
+}
+
+# The WMI results are kept in $Script:VideoCtrls / $Script:GpuObj / $Script:CpuObj and
+# reused by the dashboard, so every class is queried only once per start.
 try {
     $Script:VideoCtrls = @(Get-WmiObject Win32_VideoController)
-    $GPU = ($Script:VideoCtrls | Where-Object { $_.Name -notmatch "Microsoft" } | Select-Object -First 1).Name
-} catch { $GPU = $null; $Script:VideoCtrls = @() }
+    $Script:GpuObj = Select-PrimaryGpu $Script:VideoCtrls
+    $GPU = $Script:GpuObj.Name
+} catch { $GPU = $null; $Script:VideoCtrls = @(); $Script:GpuObj = $null }
 if ([string]::IsNullOrWhiteSpace($GPU)) { $GPU = "Unknown GPU" }
 
 try {
@@ -588,7 +626,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Block Telemetry Hosts (hosts file)"
-        Desc     = "Fuegt Microsoft Telemetrie-Server in die Windows hosts-Datei ein und blockt sie. Damit koennen diese Server nicht mehr erreicht werden - auch wenn Telemetry-Services laufen sollten."
+        Desc     = "Fuegt Microsoft Telemetrie-Server in die Windows hosts-Datei ein und blockt sie. Damit koennen diese Server nicht mehr erreicht werden - auch wenn Telemetry-Services laufen sollten. Hinweis: Microsoft Defender meldet solche Eintraege als 'HostsFileHijack' und kann sie wieder entfernen - der Status zeigt das dann an."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -607,11 +645,18 @@ $AllTweaks = @(
                 "0.0.0.0 wes.df.telemetry.microsoft.com"
             )
             $hostsFile = "$env:SystemRoot\System32\drivers\etc\hosts"
-            $existing  = Get-Content $hostsFile
-            foreach ($entry in $hosts) {
-                if ($existing -notcontains $entry) { Add-Content $hostsFile $entry }
+            $existing  = @()
+            if (Test-Path $hostsFile) { $existing = @(Get-Content $hostsFile -ErrorAction Stop) }   # unreadable -> stop, never overwrite blind
+            $trimmed   = @($existing | ForEach-Object { $_.Trim() })
+            $toAdd     = @($hosts | Where-Object { $trimmed -notcontains $_ })
+            if ($toAdd.Count) {
+                # Rewrite line by line instead of appending: Add-Content glued the first entry
+                # onto the last line when the file didn't end with a line break. Default
+                # (ANSI) keeps the bytes of the existing lines.
+                try { Set-Content $hostsFile (@($existing) + $toAdd) -Encoding Default -ErrorAction Stop }
+                catch { throw "hosts file could not be written (read-only, or locked by an antivirus): $($_.Exception.Message)" }
             }
-            Write-Log "Telemetry hosts blocked"
+            Write-Log "Telemetry hosts blocked ($($toAdd.Count) added)"
         }
     },
     [PSCustomObject]@{
@@ -1096,7 +1141,7 @@ $AllTweaks = @(
         Category = "Gaming"
         Group    = "GPU & Driver"
         Action   = {
-            $gpuDev = Get-WmiObject Win32_VideoController | Where-Object { $_.Name -notmatch "Microsoft" } | Select-Object -First 1
+            $gpuDev = $Script:GpuObj   # the gaming GPU (see Select-PrimaryGpu), not just the first adapter
             if ($gpuDev) {
                 $pnpId   = $gpuDev.PNPDeviceID
                 $regPath = "HKLM\SYSTEM\CurrentControlSet\Enum\$pnpId\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties"
@@ -1289,13 +1334,16 @@ $AllTweaks = @(
     # == NETWORK / ADAPTER =================================================
     [PSCustomObject]@{
         Name     = "Disable Network Adapter Power Saving"
-        Desc     = "Deaktiviert 'Computer kann Geraet ausschalten um Strom zu sparen' fuer alle Netzwerkadapter. Verhindert Verbindungsabbrueche und Latenz-Spitzen durch Energiesparfunktionen des Adapters."
+        Desc     = "Deaktiviert 'Computer kann Geraet ausschalten um Strom zu sparen' fuer alle physischen Netzwerkadapter (LAN, WLAN). Verhindert Verbindungsabbrueche und Latenz-Spitzen durch Energiesparfunktionen des Adapters."
         Category = "Network"
         Group    = "Adapter"
         Action   = {
+            # Physical adapters only (NCF_PHYSICAL) -- the same set the status check looks
+            # at; virtual miniports (VPN, Hyper-V, Bluetooth PAN) have no power saving to
+            # turn off. The revert still cleans every adapter, also after older versions.
             $netClass = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}"
             Get-ChildItem $netClass -ErrorAction SilentlyContinue | ForEach-Object {
-                if (Get-ItemProperty $_.PSPath -Name "NetCfgInstanceId" -ErrorAction SilentlyContinue) {
+                if ((Get-ItemProperty $_.PSPath -Name "NetCfgInstanceId" -ErrorAction SilentlyContinue) -and (([int64](Get-RegVal $_.PSPath "Characteristics")) -band 0x4)) {
                     Set-ItemProperty -Path $_.PSPath -Name "PnPCapabilities" -Value 24 -Type DWord -Force -ErrorAction SilentlyContinue
                 }
             }
@@ -1403,7 +1451,7 @@ $AllTweaks = @(
     # == RAM & STORAGE / MAINTENANCE ======================================
     [PSCustomObject]@{
         Name     = "Disable Write-Cache Buffer Flushing"
-        Desc     = "Deaktiviert das erzwungene Leeren des Schreibcache-Puffers bei SSDs. Verbessert die Schreibgeschwindigkeit spuerbar. Nur empfohlen bei Desktop-PCs mit stabiler Stromversorgung (kein Laptop ohne USV)."
+        Desc     = "Deaktiviert das erzwungene Leeren des Schreibcache-Puffers bei SSDs. Verbessert die Schreibgeschwindigkeit spuerbar (wie das Haekchen im Geraete-Manager). Bei Stromausfall koennen noch nicht geschriebene Daten verloren gehen - nur fuer Desktop-PCs mit stabiler Stromversorgung bzw. USV."
         Category = "RAM & Storage"
         Group    = "SSD & NVMe"
         Action   = {
@@ -1419,7 +1467,10 @@ $AllTweaks = @(
                 foreach ($disk in $disks) {
                     $pnpId   = $disk.PNPDeviceID
                     $regPath = "HKLM\SYSTEM\CurrentControlSet\Enum\$pnpId\Device Parameters\Disk"
+                    # Device Manager > Policies: "Enable write caching" (UserWriteCacheSetting)
+                    # must be on for "Turn off write-cache buffer flushing" (CacheIsPowerProtected)
                     reg add "$regPath" /v UserWriteCacheSetting /t REG_DWORD /d 1 /f | Out-Null
+                    reg add "$regPath" /v CacheIsPowerProtected /t REG_DWORD /d 1 /f | Out-Null
                     $count++
                 }
                 Write-Log ("Write-Cache Buffer Flushing disabled (" + $count + " disks updated)")
@@ -1776,12 +1827,9 @@ $AllTweaks = @(
         Group    = "AMD"
         Action   = {
             if ($IsAMD) {
-                $amdClass = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
-                if (Test-Path $amdClass) {
-                    Get-ChildItem $amdClass -ErrorAction SilentlyContinue | ForEach-Object {
-                        Set-ItemProperty -Path $_.PSPath -Name "EnableULPS" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-                        Set-ItemProperty -Path $_.PSPath -Name "EnableULPS_NA" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-                    }
+                foreach ($k in @(Get-AmdGpuKeys)) {
+                    Set-ItemProperty -Path $k.PSPath -Name "EnableULPS" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+                    Set-ItemProperty -Path $k.PSPath -Name "EnableULPS_NA" -Value 0 -Type DWord -ErrorAction SilentlyContinue
                 }
                 Write-Log "AMD: ULPS disabled"
             } else { Write-Log "GPU Tweak skipped: no AMD GPU detected ($GPU)" }
@@ -1795,11 +1843,8 @@ $AllTweaks = @(
         Action   = {
             if ($IsAMD) {
                 reg add "HKLM\SOFTWARE\ATI Technologies\CBT" /v ShaderCacheSizePC /t REG_DWORD /d 0xffffffff /f 2>$null | Out-Null
-                $amdClass = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
-                if (Test-Path $amdClass) {
-                    Get-ChildItem $amdClass -ErrorAction SilentlyContinue | ForEach-Object {
-                        Set-ItemProperty -Path $_.PSPath -Name "KMD_EnableComputePreemption" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-                    }
+                foreach ($k in @(Get-AmdGpuKeys)) {
+                    Set-ItemProperty -Path $k.PSPath -Name "KMD_EnableComputePreemption" -Value 0 -Type DWord -ErrorAction SilentlyContinue
                 }
                 Write-Log "AMD: Shader Cache size maximized"
             } else { Write-Log "GPU Tweak skipped: no AMD GPU detected ($GPU)" }
@@ -1812,11 +1857,8 @@ $AllTweaks = @(
         Group    = "AMD"
         Action   = {
             if ($IsAMD) {
-                $amdClass = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
-                if (Test-Path $amdClass) {
-                    Get-ChildItem $amdClass -ErrorAction SilentlyContinue | ForEach-Object {
-                        Set-ItemProperty -Path $_.PSPath -Name "EnableAntiLag" -Value 1 -Type DWord -ErrorAction SilentlyContinue
-                    }
+                foreach ($k in @(Get-AmdGpuKeys)) {
+                    Set-ItemProperty -Path $k.PSPath -Name "EnableAntiLag" -Value 1 -Type DWord -ErrorAction SilentlyContinue
                 }
                 Write-Log "AMD: Anti-Lag enabled"
             } else { Write-Log "GPU Tweak skipped: no AMD GPU detected ($GPU)" }
@@ -2078,9 +2120,16 @@ $RevertActions = @{
             "0.0.0.0 choice.microsoft.com","0.0.0.0 df.telemetry.microsoft.com",
             "0.0.0.0 reports.wes.df.telemetry.microsoft.com","0.0.0.0 wes.df.telemetry.microsoft.com"
         )
-        $clean = Get-Content $hostsFile | Where-Object { $blocked -notcontains $_.Trim() }
-        Set-Content $hostsFile $clean -Encoding ASCII
-        Write-Log "Revert: Telemetry host entries removed from hosts file"
+        if (-not (Test-Path $hostsFile)) { Write-Log "Revert: no hosts file -- nothing to remove"; return }
+        # -ErrorAction Stop: if the file can't be read (locked), an empty result must
+        # never be written back -- that would wipe the whole hosts file
+        $lines = @(Get-Content $hostsFile -ErrorAction Stop)
+        $clean = @($lines | Where-Object { $blocked -notcontains $_.Trim() })
+        if ($clean.Count -ne $lines.Count) {
+            try { Set-Content $hostsFile $clean -Encoding Default -ErrorAction Stop }
+            catch { throw "hosts file could not be written (read-only, or locked by an antivirus): $($_.Exception.Message)" }
+        }
+        Write-Log "Revert: Telemetry host entries removed from hosts file ($($lines.Count - $clean.Count) lines)"
     }
     "Disable Scheduled Telemetry Tasks" = {
         $tasks = @(
@@ -2184,9 +2233,11 @@ $RevertActions = @{
 
     # == GAMING  --  IN-GAME BOOSTS ==========================================
     "Enable Game Mode" = {
-        reg add "HKCU\Software\Microsoft\GameBar" /v AllowAutoGameMode /t REG_DWORD /d 0 /f | Out-Null
-        reg add "HKCU\Software\Microsoft\GameBar" /v AutoGameModeEnabled /t REG_DWORD /d 0 /f | Out-Null
-        Write-Log "Revert: Game Mode disabled"
+        # Back to the Windows default -- and that is Game Mode ON (no value). Writing 0
+        # here switched Game Mode off, worse than before the tweak.
+        reg delete "HKCU\Software\Microsoft\GameBar" /v AllowAutoGameMode /f 2>$null
+        reg delete "HKCU\Software\Microsoft\GameBar" /v AutoGameModeEnabled /f 2>$null
+        Write-Log "Revert: Game Mode back to the Windows default (on)"
     }
     "Disable Xbox Game Bar" = {
         reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v AppCaptureEnabled /t REG_DWORD /d 1 /f | Out-Null
@@ -2200,7 +2251,7 @@ $RevertActions = @{
     "MMCSS Gaming Profile (High Priority)" = {
         reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "GPU Priority" /t REG_DWORD /d 8 /f | Out-Null
         reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Priority" /t REG_DWORD /d 2 /f | Out-Null
-        reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Scheduling Category" /t REG_SZ /d Normal /f | Out-Null
+        reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Scheduling Category" /t REG_SZ /d Medium /f | Out-Null
         Write-Log "Revert: MMCSS Gaming profile restored to default"
     }
     "Disable Fullscreen Optimizations" = {
@@ -2226,14 +2277,14 @@ $RevertActions = @{
     # == GAMING  --  GPU & DRIVER ============================================
     "NVIDIA Low Latency Mode (Reflex)" = {
         if ($IsNVIDIA) {
-            reg add "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" /v NVLatency /t REG_DWORD /d 0 /f | Out-Null
-            Write-Log "Revert: NVIDIA Low Latency Mode disabled"
+            reg delete "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" /v NVLatency /f 2>$null
+            Write-Log "Revert: NVIDIA Low Latency key removed (driver default)"
         } else {
             Write-Log "Revert: NVIDIA Low Latency skipped (no NVIDIA GPU)"
         }
     }
     "Enable MSI Mode (Message Signaled Interrupts)" = {
-        $gpuDev = Get-WmiObject Win32_VideoController | Where-Object { $_.Name -notmatch "Microsoft" } | Select-Object -First 1
+        $gpuDev = $Script:GpuObj
         if ($gpuDev) {
             $pnpId   = $gpuDev.PNPDeviceID
             $regPath = "HKLM\SYSTEM\CurrentControlSet\Enum\$pnpId\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties"
@@ -2389,9 +2440,12 @@ $RevertActions = @{
         foreach ($disk in $disks) {
             $pnpId   = $disk.PNPDeviceID
             $regPath = "HKLM\SYSTEM\CurrentControlSet\Enum\$pnpId\Device Parameters\Disk"
-            reg add "$regPath" /v UserWriteCacheSetting /t REG_DWORD /d 0 /f | Out-Null
+            # Remove both values = the drive's own default. Writing 0 to UserWriteCacheSetting
+            # turned write caching OFF -- slower than before the tweak.
+            reg delete "$regPath" /v CacheIsPowerProtected /f 2>$null
+            reg delete "$regPath" /v UserWriteCacheSetting /f 2>$null
         }
-        Write-Log "Revert: Write-Cache Buffer Flushing set back to 0 (Windows default)"
+        Write-Log "Revert: write-cache buffer flushing back to the Windows default (on)"
     }
     "Disable Hibernation" = {
         powercfg /hibernate on 2>$null | Out-Null
@@ -2467,8 +2521,8 @@ $RevertActions = @{
     }
     "Optimize MMCSS Audio Profile" = {
         $audioPath = "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Audio"
-        reg add $audioPath /v "Latency Sensitive" /t REG_SZ /d "False" /f | Out-Null
-        reg add $audioPath /v "Priority" /t REG_DWORD /d 2 /f | Out-Null
+        reg delete $audioPath /v "Latency Sensitive" /f 2>$null      # not there on a stock Windows
+        reg add $audioPath /v "Priority" /t REG_DWORD /d 6 /f | Out-Null   # Windows default (2 is the Games task)
         reg add $audioPath /v "Scheduling Category" /t REG_SZ /d "Medium" /f | Out-Null
         reg add $audioPath /v "SFIO Priority" /t REG_SZ /d "Normal" /f | Out-Null
         Write-Log "Revert: MMCSS Audio profile restored to defaults"
@@ -2523,8 +2577,8 @@ $RevertActions = @{
     # == GPU TWEAKS (NVIDIA) ==============================================
     "NVIDIA: Disable Threaded Optimization" = {
         if ($IsNVIDIA) {
-            reg add "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" /v ThreadedOptimization /t REG_DWORD /d 1 /f | Out-Null
-            Write-Log "Revert: NVIDIA Threaded Optimization re-enabled"
+            reg delete "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" /v ThreadedOptimization /f 2>$null
+            Write-Log "Revert: NVIDIA Threaded Optimization key removed (driver default)"
         }
     }
     "NVIDIA: Max Pre-Rendered Frames = 1" = {
@@ -2551,12 +2605,9 @@ $RevertActions = @{
     # == GPU TWEAKS (AMD) =================================================
     "AMD: Disable ULPS (Ultra Low Power State)" = {
         if ($IsAMD) {
-            $amdClass = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
-            if (Test-Path $amdClass) {
-                Get-ChildItem $amdClass -ErrorAction SilentlyContinue | ForEach-Object {
-                    Set-ItemProperty -Path $_.PSPath -Name "EnableULPS" -Value 1 -Type DWord -ErrorAction SilentlyContinue
-                    Set-ItemProperty -Path $_.PSPath -Name "EnableULPS_NA" -Value 1 -Type DWord -ErrorAction SilentlyContinue
-                }
+            foreach ($k in @(Get-AmdGpuKeys)) {
+                Set-ItemProperty -Path $k.PSPath -Name "EnableULPS" -Value 1 -Type DWord -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path $k.PSPath -Name "EnableULPS_NA" -Value 1 -Type DWord -ErrorAction SilentlyContinue
             }
             Write-Log "Revert: AMD ULPS re-enabled"
         }
@@ -2564,17 +2615,14 @@ $RevertActions = @{
     "AMD: Shader Cache (Unlimited)" = {
         if ($IsAMD) {
             reg delete "HKLM\SOFTWARE\ATI Technologies\CBT" /v ShaderCacheSizePC /f 2>$null
-            Write-Log "Revert: AMD Shader Cache key removed (driver default)"
+            # The Apply also turned compute preemption off -- give it back to the driver
+            foreach ($k in @(Get-AmdGpuKeys)) { Remove-ItemProperty -Path $k.PSPath -Name "KMD_EnableComputePreemption" -ErrorAction SilentlyContinue }
+            Write-Log "Revert: AMD Shader Cache and compute preemption back to driver default"
         }
     }
     "AMD: Anti-Lag (Low Latency Mode)" = {
         if ($IsAMD) {
-            $amdClass = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
-            if (Test-Path $amdClass) {
-                Get-ChildItem $amdClass -ErrorAction SilentlyContinue | ForEach-Object {
-                    Remove-ItemProperty -Path $_.PSPath -Name "EnableAntiLag" -ErrorAction SilentlyContinue
-                }
-            }
+            foreach ($k in @(Get-AmdGpuKeys)) { Remove-ItemProperty -Path $k.PSPath -Name "EnableAntiLag" -ErrorAction SilentlyContinue }
             Write-Log "Revert: AMD Anti-Lag key removed (driver default)"
         }
     }
@@ -2614,9 +2662,7 @@ $RevertActions = @{
 # TWEAK STATUS CHECK FUNCTIONS
 # Returns $true = aktiv, $false = nicht aktiv, $null = unbekannt
 # -----------------------------------------
-function Get-RegVal($Path, $Name) {
-    try { (Get-ItemProperty $Path -Name $Name -ErrorAction Stop).$Name } catch { $null }
-}
+# (Get-RegVal is defined at the top -- hardware detection needs it at startup)
 
 # State of a scheduled task via the Task Scheduler COM API (read-only): 'Disabled',
 # 'Ready' (= enabled) or $null if the task doesn't exist. Get-ScheduledTask returns
@@ -2718,7 +2764,7 @@ $CheckFunctions = @{
     "Disable Transparency Effects"       = { (Get-RegVal "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" "EnableTransparency") -eq 0 }
 
     # GAMING IN-GAME
-    "Enable Game Mode"                   = { (Get-RegVal "HKCU:\Software\Microsoft\GameBar" "AutoGameModeEnabled") -eq 1 }
+    "Enable Game Mode"                   = { (Get-RegVal "HKCU:\Software\Microsoft\GameBar" "AutoGameModeEnabled") -ne 0 }   # no value = Windows default = on
     "Disable Xbox Game Bar"              = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR" "AppCaptureEnabled") -eq 0 }
     "CPU Priority for Games (Win32Priority)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation") -eq 26 }
     "MMCSS Gaming Profile (High Priority)" = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" "Scheduling Category") -eq "High" }
@@ -2729,7 +2775,7 @@ $CheckFunctions = @{
     # GAMING GPU
     "NVIDIA Low Latency Mode (Reflex)"   = { if (-not $IsNVIDIA) { return $null }; (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" "NVLatency") -eq 1 }
     "Enable MSI Mode (Message Signaled Interrupts)" = {
-        $g = Get-WmiObject Win32_VideoController | Where-Object { $_.Name -notmatch "Microsoft" } | Select-Object -First 1
+        $g = $Script:GpuObj
         if (-not $g) { return $null }
         (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Enum\$($g.PNPDeviceID)\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties" "MSISupported") -eq 1
     }
@@ -2798,9 +2844,11 @@ $CheckFunctions = @{
         (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Enum\$($d.PNPDeviceID)\Device Parameters\StorPort" "QueueDepth") -eq 32
     }
     "Disable Write-Cache Buffer Flushing" = {
-        $d = Get-WmiObject -Query "SELECT * FROM Win32_DiskDrive" -EA SilentlyContinue | Where-Object { $null -eq $_.MediaType -or $_.MediaType -eq 3 -or $_.MediaType -eq 4 -or $_.MediaType -eq 'Fixed hard disk media' } | Select-Object -First 1
-        if (-not $d) { return $null }
-        (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Enum\$($d.PNPDeviceID)\Device Parameters\Disk" "UserWriteCacheSetting") -eq 1
+        # The Apply writes to every fixed disk -- active only if every one has it
+        $d = @(Get-WmiObject -Query "SELECT * FROM Win32_DiskDrive" -EA SilentlyContinue | Where-Object { $null -eq $_.MediaType -or $_.MediaType -eq 3 -or $_.MediaType -eq 4 -or $_.MediaType -eq 'Fixed hard disk media' })
+        if (-not $d.Count) { return $null }
+        $on = @($d | Where-Object { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Enum\$($_.PNPDeviceID)\Device Parameters\Disk" "CacheIsPowerProtected") -eq 1 })
+        $on.Count -eq $d.Count
     }
     "Disable Hibernation"                = { -not (Test-Path "$env:SystemDrive\hiberfil.sys") }
     "Clean Temp Files"                   = { $null }
@@ -2826,10 +2874,11 @@ $CheckFunctions = @{
     "Disable Audio Enhancements"         = {
         $rp = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
         if (-not (Test-Path $rp)) { return $null }
-        $dev = Get-ChildItem $rp -EA SilentlyContinue | Select-Object -First 1
-        if (-not $dev) { return $null }
-        $fx = Join-Path $dev.PSPath "FxProperties"
-        (($fp=Get-ItemProperty $fx -Name "{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5" -EA SilentlyContinue) -and $fp."{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5" -eq 1)
+        # The Apply writes to every playback device -- active only if every one has it
+        $devs = @(Get-ChildItem $rp -EA SilentlyContinue)
+        if (-not $devs.Count) { return $null }
+        $off = @($devs | Where-Object { (Get-RegVal (Join-Path $_.PSPath "FxProperties") "{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5") -eq 1 })
+        $off.Count -eq $devs.Count
     }
     "Optimize MMCSS Audio Profile"       = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Audio" "Latency Sensitive") -eq "True" }
     "Set Audio Service High Priority"    = { (Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "SR_AudioPriority") -eq 1 }
@@ -2865,26 +2914,21 @@ $CheckFunctions = @{
     # GPU AMD
     "AMD: Disable ULPS (Ultra Low Power State)" = {
         if (-not $IsAMD) { return $null }
-        $ac = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
-        if (-not (Test-Path $ac)) { return $null }
-        # Check EVERY card that actually has an EnableULPS value (the Apply writes to all
-        # AMD cards). On multi-GPU systems (iGPU + dGPU) checking only the first card would
+        # Check EVERY AMD card that has an EnableULPS value (the Apply writes to all of
+        # them). On multi-GPU systems (iGPU + dGPU) checking only the first card would
         # show a false green if another card still has ULPS enabled.
-        $vals = @(Get-ChildItem $ac -EA SilentlyContinue | ForEach-Object {
-            $p = Get-ItemProperty $_.PSPath -Name "EnableULPS" -EA SilentlyContinue
-            if ($null -ne $p) { $p.EnableULPS }
-        })
+        $vals = @(Get-AmdGpuKeys | ForEach-Object { Get-RegVal $_.PSPath "EnableULPS" } | Where-Object { $null -ne $_ })
         if ($vals.Count -eq 0) { return $null }
         -not ($vals | Where-Object { $_ -ne 0 })
     }
     "AMD: Shader Cache (Unlimited)"      = { if (-not $IsAMD) { return $null }; (Get-RegVal "HKLM:\SOFTWARE\ATI Technologies\CBT" "ShaderCacheSizePC") -ne $null }
     "AMD: Anti-Lag (Low Latency Mode)"   = {
         if (-not $IsAMD) { return $null }
-        $ac = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
-        if (-not (Test-Path $ac)) { return $null }
-        $first = Get-ChildItem $ac -EA SilentlyContinue | Select-Object -First 1
-        if (-not $first) { return $null }
-        (($p=Get-ItemProperty $first.PSPath -Name "EnableAntiLag" -EA SilentlyContinue) -and $p.EnableAntiLag -eq 1)
+        # The Apply writes to every AMD card -- active only if every one has it
+        $keys = @(Get-AmdGpuKeys)
+        if (-not $keys.Count) { return $null }
+        $on = @($keys | Where-Object { (Get-RegVal $_.PSPath "EnableAntiLag") -eq 1 })
+        $on.Count -eq $keys.Count
     }
 
     # POWER PLAN
@@ -3041,7 +3085,7 @@ $TweakDescEN = @{
     "Disable Click to Do & Settings Agent (AI)"   = "Turns off 'Click to Do' (AI that takes a screenshot on demand and analyzes what's on screen) and the AI agent in the Settings search (new in 26H2). Official Microsoft policies. Both only run on Copilot+ PCs with an NPU -- harmless on other PCs. Note: Click to Do is turned off on every edition; according to Microsoft, Windows only honours the Settings-agent policy on Enterprise/Education - on Home/Pro the agent stays on."
     "Disable AI in Paint & Notepad"               = "Disables the AI features in Paint (Cocreator, Image Creator, Generative Fill) and in Notepad (Copilot rewrite/summarize) via Microsoft's official policies. Both apps keep working normally."
     "Disable Location Tracking"                   = "Disables the Windows location service system-wide. Apps can no longer request your location."
-    "Block Telemetry Hosts (hosts file)"          = "Adds Microsoft telemetry servers to the Windows hosts file, blocking them even if telemetry services are still running."
+    "Block Telemetry Hosts (hosts file)"          = "Adds Microsoft telemetry servers to the Windows hosts file, blocking them even if telemetry services are still running. Note: Microsoft Defender reports such entries as 'HostsFileHijack' and may remove them again - the status shows it if that happens."
     "Disable Scheduled Telemetry Tasks"           = "Disables all scheduled Windows tasks that collect and send telemetry data (e.g. Compatibility Appraiser, CEIP)."
     "Disable Windows Settings Backup (Cloud)"     = "Windows regularly backs up your settings to your Microsoft account (on by default since 26H2). Sets the official 'Enable Windows Backup' policy to off: no more settings are backed up to the cloud. Files, OneDrive and local restore points are not affected."
     "Ultimate Performance Plan"                   = "Activates the 'Ultimate Performance' power plan and sets it to always-on: Windows stops throttling CPU cores AND the PC no longer sleeps -- display, disks and system stay on (no timeout). Maximum performance at all times. Increases power consumption."
@@ -3075,7 +3119,7 @@ $TweakDescEN = @{
     "Disable TCP Auto-Tuning"                     = "Disables automatic TCP receive window sizing. Can reduce latency spikes on some systems. May slightly reduce throughput on gigabit+ connections."
     "Optimize TCP Settings (ECN/SACK/Timestamps)" = "Optimizes advanced TCP settings: disables ECN, enables SACK, disables TCP Timestamps. Reduces overhead and improves stability in online games."
     "Disable QoS Packet Scheduler Limit"          = "Removes the default 20% bandwidth limit that Windows reserves for QoS. Gives you the full available bandwidth."
-    "Disable Network Adapter Power Saving"        = "Disables 'Allow the computer to turn off this device to save power' for all network adapters. Prevents dropped connections and latency spikes caused by adapter power management."
+    "Disable Network Adapter Power Saving"        = "Disables 'Allow the computer to turn off this device to save power' for all physical network adapters (Ethernet, Wi-Fi). Prevents dropped connections and latency spikes caused by adapter power management."
     "Disable Delivery Optimization (P2P Windows Update)" = "Disables Windows Delivery Optimization. Windows only downloads updates directly from Microsoft instead of sharing bandwidth with other PCs on your network/the internet (P2P). Prevents unexpected bandwidth usage while gaming."
     "Optimize PageFile (System Managed)"          = "Sets the pagefile to system managed. Windows dynamically adjusts it to RAM needs  --  prevents both too-small and too-large pagefiles."
     "Clear PageFile on Shutdown"                  = "Clears the pagefile on every shutdown. Prevents sensitive data from remaining on disk after reboot. Good for privacy."
@@ -3083,7 +3127,7 @@ $TweakDescEN = @{
     "Enable SSD TRIM"                             = "Enables TRIM for all connected SSDs. Informs the SSD about unused blocks  --  maintains SSD performance long-term and extends lifespan."
     "Disable Scheduled Defragmentation"           = "Disables automatic scheduled defragmentation. Absolutely not recommended for SSDs  --  this tweak ensures it's turned off."
     "Optimize NVMe Queue Depth"                   = "Optimizes queue depth for NVMe drives. More parallel I/O operations noticeably improve NVMe SSD read/write performance."
-    "Disable Write-Cache Buffer Flushing"         = "Disables forced write-cache buffer flushing for SSDs. Noticeably improves write speed. Desktop PCs with stable power supply only."
+    "Disable Write-Cache Buffer Flushing"         = "Disables forced write-cache buffer flushing for SSDs. Noticeably improves write speed (same as the checkbox in Device Manager). If the power fails, data not yet written can be lost - desktop PCs with stable power or a UPS only."
     "Disable Hibernation"                         = "Disables hibernate mode and removes hiberfil.sys. Frees several GB of disk space (equals your RAM amount). Recommended for desktop PCs."
     "Clean Temp Files"                            = "Deletes all files in %TEMP%, Windows\Temp and Prefetch folders. Frees disk space and can slightly speed up boot."
     "Clean Browser Caches"                        = "Clears the caches of Chrome, Edge and Firefox (cache only -- no passwords/history/bookmarks). Often frees several hundred MB. Browsers should be closed."
@@ -3575,6 +3619,7 @@ try {
     foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] XAML geladen, Fenster erstellt" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
     Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML geladen, Fenster erstellt" -ForegroundColor DarkGray
 } catch {
+    Close-Splash
     foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] XAML FEHLER: $_" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
     Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML FEHLER: $_" -ForegroundColor DarkGray
     [System.Windows.Forms.MessageBox]::Show(
@@ -4556,10 +4601,21 @@ function Get-BiosDetection {
     try {
         $m = Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop | Sort-Object ConfiguredClockSpeed -Descending | Select-Object -First 1
         $speed = [int]$m.ConfiguredClockSpeed; $mtype = [int]$m.SMBIOSMemoryType
-        $jedec = @{ 24 = @(1600, 'DDR3'); 26 = @(3200, 'DDR4'); 34 = @(5600, 'DDR5') }
-        $j = if ($jedec.ContainsKey($mtype)) { $jedec[$mtype] } elseif ($speed -gt 4000) { @(5600, 'DDR5') } else { @(3200, 'DDR4') }
-        if ($speed -gt $j[0]) { $r['expo_xmp'] = @{ Active = $true; Note = "RAM runs at $($j[1])-$speed -- above the JEDEC base clock, the profile is active" } }
-        elseif ($speed -gt 0 -and $speed -lt $j[0]) { $r['expo_xmp'] = @{ Active = $false; Note = "RAM only runs at $($j[1])-$speed (base clock) -- enable the profile in the BIOS" } }
+        $ddr = if ($mtype -eq 34) { 'DDR5' } elseif ($mtype -eq 26) { 'DDR4' } elseif ($mtype -eq 24) { 'DDR3' } elseif ($speed -gt 4000) { 'DDR5' } else { 'DDR4' }
+        # Some older SMBIOS tables give the clock (MHz) instead of the data rate (MT/s),
+        # e.g. 1600 for DDR4-3200. Below the lowest real rate of the type it can only be that.
+        if ($speed -gt 0 -and (($ddr -eq 'DDR5' -and $speed -lt 3200) -or ($ddr -eq 'DDR4' -and $speed -le 1600) -or ($ddr -eq 'DDR3' -and $speed -le 800))) { $speed *= 2 }
+        # JEDEC rates = no profile, up to the highest one desktop CPUs run without EXPO/XMP.
+        # Above that, or at a rate JEDEC doesn't define (DDR4-3000, -2800 ...), only a
+        # profile sets the RAM there. AT the top rate (DDR4-3200, DDR5-5600) both are
+        # possible -- that stays "not detectable" instead of a guess. +-2: boards report
+        # 2667 for 2666 and the like.
+        $jedec = @{ DDR3 = @(800, 1066, 1333, 1600); DDR4 = @(1600, 1866, 2133, 2400, 2666, 2933, 3200); DDR5 = @(3200, 3600, 4000, 4400, 4800, 5200, 5600) }[$ddr]
+        $top = $jedec[-1]
+        $isJedec = @($jedec | Where-Object { [math]::Abs($_ - $speed) -le 2 }).Count -gt 0
+        if ($speed -gt $top + 2) { $r['expo_xmp'] = @{ Active = $true; Note = "RAM runs at $ddr-$speed -- above the JEDEC base clock, the profile is active" } }
+        elseif ($speed -gt 0 -and -not $isJedec) { $r['expo_xmp'] = @{ Active = $true; Note = "RAM runs at $ddr-$speed -- not a JEDEC base clock, so the profile is active" } }
+        elseif ($speed -gt 0 -and $speed -lt $top - 2) { $r['expo_xmp'] = @{ Active = $false; Note = "RAM only runs at $ddr-$speed (base clock) -- enable the profile in the BIOS" } }
     } catch { }
     $fw = "$env:firmware_type".ToLower()
     $sb = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecureBoot\State' -Name UEFISecureBootEnabled -ErrorAction SilentlyContinue).UEFISecureBootEnabled
@@ -4833,10 +4889,10 @@ function Build-DashboardPage {
 
     # ---- hardware cards ----
     $cpuO = $Script:CpuObj                                   # read once at startup
-    $gpuO = $Script:VideoCtrls | Where-Object { $_.Name -notmatch 'Microsoft' } | Select-Object -First 1
+    $gpuO = $Script:GpuObj                                   # the gaming GPU, not the iGPU (Select-PrimaryGpu)
     $memO = @(Get-WmiObject Win32_PhysicalMemory -ErrorAction SilentlyContinue)
     $vram = 0
-    try { $vram = [math]::Round(((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0*' -ErrorAction SilentlyContinue | Where-Object { $_.'HardwareInformation.qwMemorySize' } | Select-Object -First 1).'HardwareInformation.qwMemorySize') / 1GB) } catch { }
+    try { $vram = [math]::Round([int64]$gpuO.VramBytes / 1GB) } catch { }
     $ddr = switch ([int]($memO | Select-Object -First 1).SMBIOSMemoryType) { 34 { 'DDR5' } 26 { 'DDR4' } 24 { 'DDR3' } default { '' } }
     $hw = New-Object Windows.Controls.Grid; $hw.Margin = Th 0, 0, -12, 0
     foreach ($i in 0..3) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $hw.ColumnDefinitions.Add($cd) }
@@ -4859,7 +4915,8 @@ function Build-DashboardPage {
     $mon = New-VStack @() @(0, 12, 0, 0)
     $mi = 1
     foreach ($m in @($Script:VideoCtrls | Where-Object { $_.CurrentRefreshRate })) {
-        $atMax = [int]$m.CurrentRefreshRate -ge [int]$m.MaxRefreshRate
+        # WMI reports fractional modes rounded down (143.98 Hz -> 143, max 144)
+        $atMax = ([int]$m.CurrentRefreshRate + 1) -ge [int]$m.MaxRefreshRate
         $adv = if ($atMax) { "  $($Script:EmDash.Trim()) maximum, nothing to do" } else { "  $($Script:EmDash.Trim()) can do $($m.MaxRefreshRate) Hz! Set it in Windows: Display settings > Advanced display > Refresh rate" }
         $mon.Children.Add((New-HStack @((New-Icon 0xE7F4 13 $U.CYAN @(0, 0, 10, 0)), (New-Text "Monitor $mi$(if ($mi -eq 1) { ' (primary)' })" 12.5 $U.TEXT 'SemiBold'),
             (New-Text "   $($m.CurrentHorizontalResolution) x $($m.CurrentVerticalResolution) @ $($m.CurrentRefreshRate) Hz" 12.5 $U.TEXT2),
@@ -6486,6 +6543,7 @@ $Window.Add_ContentRendered({ Close-Splash })   # main window is on screen -> sp
 try {
     $drifted = Get-DriftedTweaks -Known $Script:CheckRaw
     if ($drifted.Count -gt 0) {
+        Close-Splash
         $list = ($drifted | ForEach-Object { " - $_" }) -join "`n"
         $r = [System.Windows.MessageBox]::Show(
             "$($drifted.Count) tweak(s) you applied earlier are no longer active -- a Windows update most likely reset them:`n`n$list`n`nRe-apply them now? (A registry backup is created first.)`n`nNo = keep the current settings -- you won't be asked about these again.",
