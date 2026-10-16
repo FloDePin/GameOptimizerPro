@@ -10,7 +10,7 @@
 [![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-5391FE?style=flat-square&logo=powershell&logoColor=white)](#-voraussetzungen)
 [![Lizenz: MIT](https://img.shields.io/badge/Lizenz-MIT-2ea043?style=flat-square)](LICENSE)
 
-🇬🇧 [English](README.md) · 🇩🇪 **Deutsch**
+[English](README.md) · **Deutsch**
 
 <img src="docs/screenshots/dashboard.png" alt="GameOptimizerPro Dashboard: Hardware, Optimierungs-Score, Live-Monitor" width="900">
 
@@ -45,7 +45,7 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 - 🔄 **Merkt, wenn Windows Tweaks zurücksetzt** — Updates stellen gern Dinge zurück. Beim Start vergleicht das Tool mit deinem letzten Apply und bietet an, Zurückgesetztes neu anzuwenden.
 - 🛟 **Sicherheitsnetz vor jeder Änderung** — ein Systemwiederherstellungspunkt plus ein `.reg`-Backup aller betroffenen Schlüssel, vor jedem Apply und Revert.
 - 🧾 **Ehrliche Beschreibungen** — jeder Tweak sagt, was er tut, was er kostet und wo Windows ihn ignoriert (z. B. Richtlinien, die nur auf Enterprise / Education wirken).
-- 🇬🇧 🇩🇪 **Englisch & Deutsch** — alle Tweak-Beschreibungen und der komplette BIOS Guide, live umschaltbar.
+- 🌍 **Englisch & Deutsch** — alle Tweak-Beschreibungen und der komplette BIOS Guide, live umschaltbar.
 
 ## 📸 Screenshots
 
