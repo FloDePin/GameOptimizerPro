@@ -1,375 +1,205 @@
-# ⚡ GameOptimizerPro v1.0
+<div align="center">
 
-> **Windows & Gaming Optimizer** — by FloDePin
+# ⚡ GameOptimizerPro
 
-![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue?logo=powershell)
-![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows)
-![License](https://img.shields.io/badge/License-MIT-green)
-![Version](https://img.shields.io/badge/Version-1.0-red)
+**Windows & gaming optimizer in a single PowerShell script.**<br>
+111 tweaks — every one can be undone, and you can see which ones are active.
 
-🇬🇧 **English** | 🇩🇪 [Deutsch](README.de.md)
+[![Release](https://img.shields.io/github/v/release/FloDePin/GameOptimizerPro?style=flat-square&color=e53935&label=release)](https://github.com/FloDePin/GameOptimizerPro/releases/latest)
+[![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?style=flat-square&logo=windows)](#-requirements)
+[![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-5391FE?style=flat-square&logo=powershell&logoColor=white)](#-requirements)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2ea043?style=flat-square)](LICENSE)
 
----
+🇬🇧 **English** · 🇩🇪 [Deutsch](README.de.md)
 
-## 🚀 Quick Start (One-Liner)
+<img src="docs/screenshots/dashboard.png" alt="GameOptimizerPro dashboard: hardware, optimization score, live monitor" width="900">
 
-Open **PowerShell as Administrator** and run:
+</div>
+
+## 🚀 Quick start
+
+Open **PowerShell** and paste:
 
 ```powershell
 irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1 | iex
 ```
 
----
+The installer downloads the script, checks its SHA256 against [CHECKSUMS.txt](CHECKSUMS.txt) and starts it with administrator rights (Windows asks once). **Nothing changes until you click _Apply selected_** — and before that, a restore point and a registry backup are created.
 
+<details>
+<summary><b>Rather read the script before running it?</b></summary>
 
+```powershell
+irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/GameOptimizerPro.ps1 -OutFile GameOptimizerPro.ps1
+Get-FileHash .\GameOptimizerPro.ps1 -Algorithm SHA256    # must match CHECKSUMS.txt
+# then, in a PowerShell opened as administrator:
+powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
+```
 
-## 📸 Visual Preview
+</details>
 
-### GUI Overview
-The interface follows the design of GameOptimizerPro v2.1:
-- 🎨 **Dark-Mode UI** — WPF/XAML with a sidebar: Dashboard · Tweaks · Presets · BIOS Guide · Startup Manager · Services · Backups & Log
-- 📊 **Dashboard** — hardware cards, optimization score, live monitor, ping test, snapshot & compare
-- 🗂️ **Tweak list** — 8 category tabs, search across all tweaks, status dot + badges per tweak, description shown right under each tweak (DE/EN)
-- 🎚️ **Presets page** — preview of each preset (green = already active), status per category
-- 🔧 **BIOS Guide** — 16 platforms (AM5 / AM4 / Intel) with the menu path for ASUS, MSI, Gigabyte and ASRock; your platform is detected and pre-selected
+## ✨ Why GameOptimizerPro
 
----
+- ↩️ **Every tweak can be undone** — each of the 111 tweaks has its own revert that goes back to the Windows default.
+- 🟢 **You see what is active** — 101 tweaks have a live status check read straight from Windows (registry, services, power plan), not from a list of what you once clicked.
+- 🔄 **Notices when Windows resets your tweaks** — updates like to switch things back. At start the app compares with your last Apply and offers to re-apply what was reverted.
+- 🛟 **Safety net before every change** — a System Restore point plus a `.reg` backup of every affected key, before every Apply and Revert.
+- 🧾 **Honest descriptions** — every tweak says what it does, what it costs and where Windows ignores it (e.g. policies that only work on Enterprise / Education).
+- 🇬🇧 🇩🇪 **English & German** — all tweak descriptions and the whole BIOS Guide, switchable live.
 
-## ✨ Features
+## 📸 Screenshots
 
-| Tab | Features | Description |
-|-----|----------|-------------|
-| 🎚️ Presets | 3 levels | One-click **Minimal / Balanced / Aggressive** tweak selection (cumulative, safe-by-default) |
-| 🪟 Windows | 46 Tweaks | Debloat, privacy, performance tweaks + CTT Essentials + Quality of Life |
-| 🎮 Gaming | 12 Tweaks | Game Mode, Game Bar, MMCSS, CPU priority, fullscreen optimizations, MSI mode, HAGS |
-| 🌐 Network | 11 Tweaks | Nagle, LSO, DNS, TCP tuning, QoS, adapter power saving, delivery optimization |
-| 💾 RAM & Storage | 15 Tweaks | Page file, memory compression, hibernation, SSD/NVMe tweaks, temp cleanup + Deep Clean (6 tools, shows MB freed) |
-| 🪟 Windows 11 | 7 Tweaks | Classic right-click menu, left taskbar, widgets, chat icon, Start recommendations, End Task, Snap hover menu |
-| 🔊 Audio | 6 Tweaks | Audio enhancements, MMCSS audio profile, service priority, sound scheme, spatial sound, device power |
-| 🎮 GPU Tweaks | 7 Tweaks | 4 NVIDIA + 3 AMD tweaks, GPU detection, brand grey-out |
-| ⚡ Power Plan | 7 Tweaks | USB, PCI-E, HDD, display, sleep, CPU min/max |
-| 📊 **Dashboard** | ✅ | Hardware cards, optimization score + monitor check (resolution/Hz), live monitor (CPU/RAM/disk/network), ping test (latency, packet loss, jitter), snapshot & compare, safety-net status |
-| 🔧 **BIOS Guide** | 16 platforms | AM5 / AM4 / Intel LGA1851 / 1700 / 1200 / 1151 + generic, menu paths for ASUS / MSI / Gigabyte / ASRock, live check of EXPO/XMP, Resizable BAR, CSM and Secure Boot |
-| 🚀 Startup Manager | ✅ | Own window, HKCU/HKLM/Run32 + startup folders, disable/enable/refresh |
-| 🗄️ Backups & Log | ✅ | Registry backups, log, System Restore, Revert all and drift check in one place |
-| 🌍 Language DE/EN | ✅ | 111 tweak descriptions + the whole BIOS Guide in German and English, switches live |
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/tweaks.png" alt="Tweak list"><br><sub><b>Tweaks</b> — status dot, badges and a description for every tweak; search across all categories</sub></td>
+<td width="50%"><img src="docs/screenshots/presets.png" alt="Presets"><br><sub><b>Presets</b> — Minimal, Balanced, Aggressive with a preview of what is already active</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/bios.png" alt="BIOS Guide"><br><sub><b>BIOS Guide</b> — your platform pre-selected, menu path for your board maker, live check of EXPO/XMP, ReBAR, CSM, Secure Boot</sub></td>
+<td width="50%"><img src="docs/screenshots/backups.png" alt="Backups and log"><br><sub><b>Backups & Log</b> — registry backups, System Restore, Revert all and the log in one place</sub></td>
+</tr>
+</table>
 
----
+## 🧰 What's inside
 
-## 🪟 Windows Tab - 46 Tweaks
+| Category | Tweaks | Examples |
+|---|:---:|---|
+| 🪟 Windows | 46 | Debloat (Copilot, Recall, OneDrive, auto-installed suggested apps), telemetry & privacy, the Windows AI switches, Ultimate Performance, HPET / timer, quality of life |
+| 🎮 Gaming | 12 | Game Mode, MMCSS, CPU priority, fullscreen optimizations, MSI mode, HAGS, NVIDIA Reflex, GPU timeout (TDR) |
+| 🌐 Network | 11 | Nagle, LSO, network throttling, DNS (Cloudflare / Google), TCP, QoS, adapter power saving |
+| 💾 RAM & Storage | 15 | Page file, memory compression, TRIM, NVMe, write cache, hibernation + **Deep Clean** (6 cleanups, each shows the MB it freed) |
+| 🪟 Windows 11 | 7 | Classic right-click menu, left taskbar, widgets, Start recommendations, End Task |
+| 🔊 Audio | 6 | Audio enhancements, MMCSS audio, spatial sound, sound scheme, device power saving |
+| 🖥️ GPU | 7 | 4 NVIDIA + 3 AMD driver tweaks — only offered for the GPU you actually have |
+| ⚡ Power | 7 | USB / PCIe power saving, disk and system sleep, display timeout, CPU min / max state |
 
-### 🧹 Debloat & System Cleanup
-- **Remove Cortana** — Completely removes Windows' voice assistant
-- **Remove Xbox Apps** — Disables Xbox and gaming-related apps
-- **Remove Microsoft Teams (Personal)** — Removes the personal Teams installation
-- **Remove Copilot** — Disables Windows Copilot
-- **Remove OneDrive** — Removes the OneDrive integration
-- **Remove Windows Recall** — Disables and removes Windows Recall (official policy; existing snapshots are deleted)
-- **Remove Other Bloatware** — Removes additional pre-installed bloatware
-- **Stop Auto-Installed Suggested Apps** — Windows no longer silently installs suggested apps and games (works on Home and Pro too)
-- **Disable Get Started & Copilot Sign-in Screens** — New 26H2 policies: no automatic Get Started app, no Microsoft 365 Copilot promotion at sign-in
+<details>
+<summary><b>Show all 111 tweaks</b></summary>
 
-### 🔐 Privacy Settings
-- **Disable Telemetry & Data Collection** — Disables data collection
-- **Disable Activity History** — Disables activity history storage
-- **Disable Click to Do & Settings Agent (AI)** — Turns off AI screen analysis and the AI agent in Settings search (Copilot+ PCs)
-- **Disable AI in Paint & Notepad** — Official policies for Cocreator, Image Creator, Generative Fill and Notepad AI
-- **Disable Windows Settings Backup (Cloud)** — Stops the settings backup to your Microsoft account that 26H2 turns on by default
+**🪟 Windows (46)**
 
-### 📦 Windows 11 & 10 Optimization
-- **OS Scan** — Scans the operating system for optimization potential
-- **Win11 Tweaks** — Specialized optimizations for Windows 11
-- **Win10 Grey-out + Banner** — Optimized display for Windows 10 compatibility
+- *Bloatware:* Remove Cortana · Remove Xbox Apps · Remove Microsoft Teams (Personal) · Remove Copilot · Remove OneDrive · Remove Windows Recall · Remove Other Bloatware · Stop Auto-Installed Suggested Apps · Disable Get Started & Copilot Sign-in Screens
+- *Privacy:* Disable Telemetry & Data Collection · Disable Activity History · Disable Advertising ID · Disable Text & Image Generation (AI) · Disable Click to Do & Settings Agent (AI) · Disable AI in Paint & Notepad · Disable Location Tracking · Block Telemetry Hosts (hosts file) · Disable Scheduled Telemetry Tasks · Disable Windows Settings Backup (Cloud)
+- *Performance:* Ultimate Performance Plan · Disable HPET (High Precision Event Timer) · Set 0.5ms Timer Resolution · Disable Prefetch & Superfetch · Optimize Visual Effects (Performance Mode) · Disable Windows Search Indexing · Disable Power Throttling · Disable Bing in Windows Search · Process Count Reduction (Svchost)
+- *CTT Essentials:* Prevent Device Companion Apps · Disable Consumer Features · Disable Windows Platform Binary Table (WPBT) · Disable Store Recommended Search Results · Enable Start Menu Previous Layout · Disable File Explorer Automatic Folder Discovery · Run Disk Cleanup
+- *Quality of Life:* Show File Extensions · Show Hidden Files · Disable Reserved Storage · Disable Storage Sense · Num Lock on Startup · Disable Lock Screen · Enable Long Paths
+- *Mouse & UI:* Disable Mouse Acceleration · Disable Sticky Keys · Enable Dark Mode · Disable Transparency Effects
 
-### ⚡ Performance Tweaks
-- **Disable Power Throttling** — Prevents Windows from throttling gaming processes via EcoQoS
-- **Disable Bing in Windows Search** — Start menu searches only locally, no data exchange with Microsoft
-- **Process Count Reduction (Svchost)** — Fewer background processes via an increased split threshold
+**🎮 Gaming (12)**
 
-### 🎯 CTT Essentials
-Registry keys sourced **1:1 from Chris Titus Tech WinUtil** for guaranteed accuracy:
-- **Prevent Device Companion Apps** — Blocks device metadata downloads + auto-suggested companion apps
-- **Disable Consumer Features** — Official policy against suggested apps/games; Microsoft only honours it on Enterprise/Education (on Home/Pro, 'Stop Auto-Installed Suggested Apps' does the job)
-- **Disable Windows Platform Binary Table (WPBT)** — Blocks OEM firmware from injecting programs at boot (Security hardening)
-- **Disable Store Recommended Search Results** — Removes sponsored results in the Microsoft Store
-- **Enable Start Menu Previous Layout** — Classic Start layout on supported Win11 builds
-- **Disable File Explorer Automatic Folder Discovery** — Opens large folders faster
-- **Run Disk Cleanup** — Automated cleanmgr + DISM component cleanup
+- *In-Game Boosts:* Enable Game Mode · Disable Xbox Game Bar · CPU Priority for Games (Win32Priority) · MMCSS Gaming Profile (High Priority) · Disable Fullscreen Optimizations · Disable Windows Update during Gaming · Disable Background App Throttling
+- *GPU & Driver:* NVIDIA Low Latency Mode (Reflex) · Enable MSI Mode (Message Signaled Interrupts) · Enable Hardware-Accelerated GPU Scheduling (HAGS) · Clear Shader Cache · Increase GPU Timeout Tolerance (TDR)
 
-**All 7 tweaks include:** Full Apply/Revert functionality + EN/DE descriptions; 6 of them have a live status check ("Run Disk Cleanup" is a one-time action)
+**🌐 Network (11)**
 
----
+- *Latency:* Disable Nagle's Algorithm (TCPNoDelay) · Disable Large Send Offload (LSO) · Disable Network Throttling Index
+- *DNS:* Set DNS to Cloudflare (1.1.1.1) · Set DNS to Google (8.8.8.8) · Flush DNS Cache
+- *TCP:* Disable TCP Auto-Tuning · Optimize TCP Settings (ECN/SACK/Timestamps)
+- *QoS:* Disable QoS Packet Scheduler Limit
+- *Adapter:* Disable Network Adapter Power Saving · Disable Delivery Optimization (P2P Windows Update)
 
-## 🔊 Audio Tab - 6 Tweaks
+**💾 RAM & Storage (15)**
 
-### 🎵 Audio Optimizations
-- **6 Audio Tweaks** — Professional audio optimizations in their own tab
-- Improved latency and playback quality
-- Dedicated window for audio settings
+- *Page File:* Optimize PageFile (System Managed) · Clear PageFile on Shutdown
+- *Memory:* Disable Memory Compression
+- *SSD & NVMe:* Enable SSD TRIM · Disable Scheduled Defragmentation · Optimize NVMe Queue Depth · Disable Write-Cache Buffer Flushing
+- *Maintenance:* Disable Hibernation · Clean Temp Files
+- *Deep Clean:* Clean Browser Caches · Clean Windows Update Cache · Clean Thumbnail Cache · Empty Recycle Bin · Clean Prefetch Data · Clean System Logs & Crash Dumps
 
----
+**🪟 Windows 11 (7)**
 
-## 🎮 GPU Tweaks Tab - 7 Tweaks
+- *Taskbar & Shell:* Restore Classic Right-Click Menu · Left-Align Taskbar · Disable Widgets · Remove Chat Icon from Taskbar · Enable End Task in Taskbar
+- *Start Menu:* Disable Recommended in Start Menu
+- *Window Management:* Disable Snap Layout Hover Menu
 
-### NVIDIA Optimizations (4 Tweaks)
-- **NVIDIA GPU Detection** — Automatic GPU detection
-- **NVIDIA-Specific Tweaks** — 4 optimizations for NVIDIA graphics cards
+**🔊 Audio (6)**
 
-### AMD Optimizations (3 Tweaks)
-- **AMD-Specific Tweaks** — 3 optimizations for AMD graphics cards
-- **Automatic GPU Detection** — Greys out incompatible tweaks
+- *Latency & Quality:* Disable Audio Enhancements · Optimize MMCSS Audio Profile · Set Audio Service High Priority · Disable Spatial Sound (Windows Sonic)
+- *System Sounds:* Disable Windows Sound Scheme
+- *Power:* Disable Audio Device Power Save
 
-### Additional GPU Features
-- **Brand Grey-out** — Only compatible GPU tweaks are shown
+**🖥️ GPU (7)**
 
----
+- *NVIDIA:* NVIDIA: Disable Threaded Optimization · NVIDIA: Max Pre-Rendered Frames = 1 · NVIDIA: Shader Cache Size (Unlimited) · NVIDIA: Power Management = Max Performance
+- *AMD:* AMD: Disable ULPS (Ultra Low Power State) · AMD: Shader Cache (Unlimited) · AMD: Anti-Lag (Low Latency Mode)
 
-## ⚡ Power Plan Tab - 7 Tweaks
+**⚡ Power (7)**
 
-### 🔋 System Power Optimizations
-- **USB Power Management** — Optimizes USB power management
-- **PCI-E Optimizations** — Reduces PCIe latency
-- **HDD/SSD Tweaks** — Disk power management
-- **Display Power Tweaks** — Monitor power saving
-- **Sleep Mode Optimizations** — Improved sleep behavior
-- **CPU Min/Max Settings** — CPU frequency management
-- **Comprehensive Power Plan Configuration** — 7 dedicated tweaks
+- *USB & PCI:* Disable USB Selective Suspend · Disable PCI-E Link State Power Management
+- *Storage:* Disable Hard Disk Sleep
+- *Display:* Set Display Sleep = 15 Minutes
+- *Sleep:* Disable Sleep (System)
+- *CPU:* CPU Minimum Processor State = 100% · CPU Maximum Processor State = 100%
 
----
+</details>
 
-## 🚀 Startup Manager
+### 🎚️ Presets
 
-### 🖥️ Manage Startup Programs
-- **Own Window** — Dedicated UI for startup management
-- **Registry Integration** — HKCU/HKLM/Run32 entries + both startup folders
-- **3-State Management** — Disable/enable/refresh functionality
-- **Quick Control** — Start/stop auto-start programs
+| Preset | Tweaks | For whom |
+|---|:---:|---|
+| 🟢 **Minimal** | 19 | Safe basics: privacy, gaming priority, network latency. No app removal — the ideal first run. |
+| 🟠 **Balanced** | 82 | Minimal + Ultimate Performance, timer, GPU and audio tweaks, light debloat (Copilot, Recall, Xbox) and the Windows AI switches. The recommended all-round setup. |
+| 🔴 **Aggressive** | 97 | Everything, incl. Cortana / OneDrive / Teams removal, no hibernation, no memory compression. For experienced users. |
 
----
+A preset only ticks the boxes — you review the list and click **Apply selected** yourself.
 
-## 🔧 BIOS Guide
+### 🛠️ Tools
 
-### 🎯 Every Common Platform, Not Just One Setup
-The BIOS Guide covers **16 platforms**. Your CPU and board maker are detected and pre-selected, and you can open any other platform as a reference:
+- 📊 **Dashboard** — hardware overview, optimization score, monitor refresh-rate check, live CPU / RAM / disk / network monitor, ping test (latency, packet loss, jitter), snapshot & compare
+- 🔧 **BIOS Guide** — 16 platforms (AM5, AM4, Intel LGA1851 / 1700 / 1200 / 1151), menu paths for ASUS, MSI, Gigabyte and ASRock, live check of EXPO/XMP, Resizable BAR, CSM and Secure Boot. Read-only: you change the BIOS yourself
+- 🚀 **Startup Manager** — Run keys and startup folders, disable / enable the same way Task Manager does — nothing is deleted
+- ⚙️ **Services** — asks before touching critical services like Windows Update, BITS or the print spooler
+- 🗄️ **Backups & Log** — registry backups, System Restore, Revert all, log file
 
-| Platform | Profiles |
-|----------|----------|
-| **AMD AM5** | Ryzen 9000X3D · Ryzen 9000 · Ryzen 7000X3D · Ryzen 7000 · Ryzen 8000G / 8000F |
-| **AMD AM4** | Ryzen 5000X3D · Ryzen 5000 · Ryzen 5000G–2000G (APU) · Ryzen 3000 · Ryzen 1000 / 2000 |
-| **Intel** | Core Ultra 200S (LGA1851) · Core 13th / 14th gen · Core 12th gen (LGA1700) · Core 10th / 11th gen (LGA1200) · Core 8th / 9th gen (LGA1151) |
-| **Other** | Generic profile for laptops, Threadripper and unknown CPUs |
+## 🛡️ Safety
 
-### 📋 What Every Setting Card Shows
-- **Default vs. recommended value** — e.g. "Default: Off → Recommended: Profile 1 (DDR5-6000 CL30)"
-- **Menu path for your board maker** — ASUS, MSI, Gigabyte, ASRock (switchable; a generic path for other boards)
-- **Impact + risk badge** — high / medium / low impact, safe / moderate
-- **Explanation in German or English** — what the setting does and what to do if the PC doesn't boot afterwards
-- **Platform-specific settings** — EXPO/XMP/DOCP, Resizable BAR, CSM, Secure Boot, BIOS update (incl. the 13th/14th gen Vmin Shift fix), PBO, Curve Optimizer, FCLK, Memory Context Restore, C-States, core scheduling on dual-CCD X3D, iGPU, Intel Default Settings power limits, MCE, E-cores, 200S Boost, board-maker auto-install, PCIe slot speed
-- **Filters** — Memory / CPU / GPU / Power / Boot & security, plus "only what's left to do"
-
-### 🔍 Live Check From Windows
-Four settings are read directly from Windows (no admin rights needed): **EXPO/XMP** (RAM speed vs. JEDEC base clock), **Resizable BAR** (NVIDIA), **CSM / UEFI** and **Secure Boot**. A green dot means already set, red means still to do.
-
-### 📖 Read-Only Guide
-- No automatic changes — the BIOS Guide never writes anything
-- You make the BIOS changes yourself, with the menu path right on the card
-
----
-
-## 🌍 Language Toggle - DE/EN
-
-### 🗣️ Bilingual Tweak Descriptions (DE/EN)
-- **111 tweak descriptions in German & English** — shown right under each tweak (full text as tooltip)
-- **BIOS Guide in German & English** — all explanations and notes
-- **Toggle Button** — "Info: DE / EN" in the sidebar switches everything live, no restart
-- **Interface labels stay English** — the toggle affects the tweak descriptions, not the UI chrome
-
----
+- **Restore point + registry backup** before every Apply and Revert — the `.reg` files are kept in `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`
+- **Removed apps** (Cortana, OneDrive, …) are the one thing a revert can't reinstall — they come back via System Restore. Those tweaks are marked *removes app*
+- **SHA256 chain** — `install.ps1` only runs a script whose hash matches [CHECKSUMS.txt](CHECKSUMS.txt)
+- **No background process, no telemetry** — the check for reverted tweaks runs only when you start the app
+- **Open source** — one readable PowerShell file; every action is logged to `%TEMP%\GameOptimizerPro_*.log`
 
 ## 📋 Requirements
 
-- **Windows 10 / 11**
-- **PowerShell 5.1+**
-- **Run as Administrator** (required!)
-- **Internet Connection** — For download (first launch only)
+- **Windows 11** or **Windows 10 22H2** (Windows-11-only tweaks are greyed out on Windows 10)
+- **Windows PowerShell 5.1** — built into Windows
+- **Administrator rights** — the installer asks for them
+- GPU tab: **NVIDIA** or **AMD** graphics card (with Intel Arc all other tweaks work)
 
----
+## ❓ FAQ
 
-## ✅ Compatibility
+<details>
+<summary><b>How do I undo everything?</b></summary>
 
-### Tested Windows Versions
-- ✅ **Windows 11 21H2+** — Fully tested
-- ✅ **Windows 11 22H2+** — Fully tested
-- ✅ **Windows 10 20H2** — Fully compatible
-- ✅ **Windows 10 21H2** — Fully compatible
+**Backups & Log → Revert all** sets every tweak back to the Windows default. Alternatively use the restore point *GameOptimizerPro Backup* in Windows System Restore.
+</details>
 
-### GPU Compatibility
-- ✅ **NVIDIA** — GeForce RTX series (all modern GPUs)
-- ✅ **AMD** — Radeon RX series (all modern GPUs)
-- ⚠️ **Intel Arc** — All general tweaks work; the NVIDIA/AMD-specific GPU tweaks are greyed out
+<details>
+<summary><b>Some tweaks have a grey dot instead of a green or empty one.</b></summary>
 
-### CPU Compatibility (BIOS Guide)
-- ✅ **AMD AM5** — Ryzen 7000 / 7000X3D / 8000G / 9000 / 9000X3D
-- ✅ **AMD AM4** — Ryzen 1000 / 2000 / 3000 / 5000 / 5000X3D and the G-series APUs
-- ✅ **Intel** — Core 8th–14th gen and Core Ultra 200S (desktop)
-- ⚠️ **Laptops, Threadripper, other CPUs** — BIOS Guide shows the generic profile
+Grey means there is nothing lasting to check (one-time cleanups) or Windows can't report the status right now — for example while it is installing updates. **Verify status** checks again.
+</details>
 
----
+<details>
+<summary><b>Microsoft Defender reports "HostsFileHijack".</b></summary>
 
-## 🛡️ Safety & Security
+That comes from *Block Telemetry Hosts*: Defender flags hosts entries that block Microsoft servers. Allow it in Defender, or revert the tweak — the other telemetry tweaks work without it.
+</details>
 
-✅ **System Restore Point** — Automatically created before any tweaks are applied  
-✅ **Registry Backup** — Before every Apply/Revert, all affected registry keys are additionally exported as `.reg` files to `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups\` (independent of the System Restore Point limit)  
-✅ **Detailed Logging** — All actions are logged to `%TEMP%\GameOptimizerPro_*.log`  
-✅ **Hardware Detection** — GPU-specific tweaks are filtered automatically  
-✅ **BIOS Guide Read-Only** — No automatic system changes from the BIOS Guide  
-✅ **Fully Reversible** — All tweaks can be undone via System Restore or the registry backup  
-✅ **Checksum Verification** — `install.ps1` checks the download against the SHA256 hash published in [CHECKSUMS.txt](CHECKSUMS.txt) before running the script with Admin rights  
-✅ **No Malware** — Open source, fully auditable
+<details>
+<summary><b>"Running scripts is disabled on this system".</b></summary>
 
----
+Only happens when you start the `.ps1` file directly. Use `powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1` — the one-liner above isn't affected.
+</details>
 
-## 🎨 GUI Features
+## 🧩 Also by FloDePin
 
-- **Modern Dark-Mode UI** — Built on WPF/XAML, design tokens from GameOptimizerPro v2.1
-- **Sidebar Navigation** — Dashboard | Tweaks | Presets | BIOS Guide | Startup Manager | Services | Backups & Log
-- **8 Category Tabs + Search** — the search finds tweaks across all categories
-- **Status at a Glance** — green dot = active, ring = inactive, grey = one-time action; badges for "removes app", "restart", "NVIDIA only", "Windows 11 only"
-- **Descriptions Inline** — every tweak explains itself right under its name; a click on the text ticks the box
-- **Bulk Selection** — All / None buttons, presets with preview
-- **Live Logging** — Log file and registry backups one click away in the status bar
-- **Hardware Info** — GPU, CPU, RAM, board, OS and monitor on the dashboard
+[**GameOptimizerPro v2**](https://github.com/FloDePin/GameOptimizerPro-v2) — a separate desktop app (Python) with a GPU auto-tuner for overclocking and undervolting via MSI Afterburner.
 
----
+## 🤝 Feedback
 
-
-## 🆘 Troubleshooting
-
-### Problem: "Execution of scripts is disabled"
-**Solution:**
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
-
-### Problem: Script doesn't start
-**Solution:**
-- Make sure you have **Administrator rights**
-- Try: `powershell -ExecutionPolicy Bypass -File GameOptimizerPro.ps1`
-
-### Problem: GPU tweaks don't work
-**Solution:**
-- Make sure your GPU drivers are up to date
-- A restart is required after GPU tweaks!
-- Check the log file: `%TEMP%\GameOptimizerPro_*.log`
-
-### Problem: BIOS Guide shows the wrong platform
-**Solution:**
-- Pick your platform in the list on the left and your board maker at the top — every profile is available manually
-- Laptops, Threadripper and unknown CPUs get the generic profile on purpose
-- "Check system state" re-reads EXPO/XMP, Resizable BAR, CSM and Secure Boot
-
-### Problem: Tweaks weren't applied
-**Solution:**
-- A restart is required for many tweaks
-- Check whether you actually enabled the tweaks
-- Check the log file for error details
-
-### Problem: System runs slower after tweaks
-**Solution:**
-- Use System Restore to undo all changes
-- Start with fewer tweaks and test incrementally
-
----
-
-## 📜 Changelog
-
-### v1.0 — Initial public release
-A complete, hardened Windows & gaming optimizer. Every tweak ships with **Apply + Revert**, and 101 of the 111 also with a **live status check** (the other 10 are one-time cleanups with nothing lasting to check), and each Apply first creates a **System Restore Point** and a **`.reg` registry backup** (stored in `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`, safe from temp cleanup).
-
-**Tweak library (111 tweaks, each with a revert; removed apps come back via System Restore):**
-- 🪟 **Windows** — debloat, privacy, performance, CTT-Essentials & Quality-of-Life tweaks, including disabling on-device generative AI (Text & Image Generation), Click to Do, the Settings AI agent and AI in Paint & Notepad
-- 🎮 **Gaming & GPU** — MSI mode, HAGS, NVIDIA/AMD driver tweaks, GPU timeout (TDR) tolerance, shader-cache tools
-- 🌐 **Network** — latency (Nagle/LSO/throttling), DNS (Cloudflare/Google), TCP tuning, QoS, adapter power
-- 🔊 **Audio** — MMCSS/audio-priority, spatial sound, sound-scheme & device-power tweaks
-- 💾 **RAM & Storage** — page file, write-cache, plus a **Deep Clean** section (6 cleanup tools, each reports the MB it freed)
-- ⚡ **Power Plan** — Ultimate Performance, HPET, 0.5 ms timer resolution
-
-**Tools & UX:**
-- ⚡ **Fast start** — the window is ready in about half the time (~9 s → ~4.5 s on a test PC), with a loading screen from the first moment
-- 🎨 **New interface in the style of GameOptimizerPro v2.1** — sidebar navigation, dashboard with optimization score, tweak list with search, status dots, badges and inline DE/EN descriptions
-- 🎚️ **Presets** — Minimal / Balanced / Aggressive (cumulative; destructive actions are never auto-selected), with a preview of every preset
-- 📊 **Dashboard** with a **Live Resource Monitor** (CPU/RAM/disk/network on a background runspace, no UI stutter)
-- 📶 **Ping Test** across 3 targets — average latency, packet loss % and jitter
-- 🧰 **BIOS Guide** — 16 platforms (AM5 / AM4 / Intel), menu paths for ASUS / MSI / Gigabyte / ASRock, live check of EXPO/XMP, Resizable BAR, CSM and Secure Boot; read-only
-- 🚀 **Startup Manager** — covers both the Run keys and the Startup folders
-
-**Safety & robustness:**
-- 🛡️ Startup **sanity check** guards against a status-check ever being confused with a revert action
-- 🌍 **Locale-independent** throughout (SIDs, fixed GUIDs, CIM perf counters) — works on non-English Windows
-- 🔒 **SHA256 integrity chain** — `install.ps1` pins the published hash and verifies it against `CHECKSUMS.txt` before running anything with Admin rights
-- ✅ Verified: **111/111** tweaks have Apply + Revert, **101** of them a live status check (the other 10 are one-time cleanups), no collisions
-
-
----
-
-## ⚠️ Disclaimer
-
-**Use at your own risk.** Please review the script before running it.  
-A System Restore Point is automatically created before any changes.  
-The author is not liable for system damage caused by improper use.
-
----
-
-## 💡 Tips for Maximum Performance
-
-1. **Start with Safety** — Test a few tweaks first, then add more
-2. **Enable Debloat** — Remove unnecessary pre-installed apps for a faster system
-3. **Use Performance Tweaks** — Especially Power Throttling & Bing disable
-4. **Enable GPU Tweaks** — Automatic detection of your GPU for the best results
-5. **BIOS Guide Before Hardware Tuning** — Read the recommendations before making BIOS changes
-6. **Optimize Power Plan** — Adjust the settings to your needs
-7. **Audio Tweaks for Gaming** — Reduce audio latency
-8. **Use Startup Manager** — Speed up boot time via startup optimization
-9. **Keep NVIDIA/AMD Drivers Updated** — Matters more than most tweaks
-10. **Restart After GPU Tweaks** — GPU optimizations need a reboot
-11. **Check the Logs** — Review the log file for error details if something goes wrong
-12. **Use System Restore** — All tweaks can be undone at any time
-
----
-
-## 🤝 Contributing & Feedback
-
-### Report Bugs
-If you find a bug, please open an [Issue](https://github.com/FloDePin/GameOptimizerPro/issues)
-
-### Feature Requests
-Have an idea for a new feature? [Share it with us!](https://github.com/FloDePin/GameOptimizerPro/issues)
-
-### Support
-- 📧 Email: flodepin@googlemail.com
-- 🐛 GitHub Issues: [Issues](https://github.com/FloDePin/GameOptimizerPro/issues)
-
----
-
-## 📋 Planned Features for Future Versions
-
-- 🎮 **Gaming Boost Profile** — Predefined optimization profiles for popular games
-- 💾 **Disk Cleanup** — Automatic disk cleanup
-- 🌙 **Auto-Scheduler** — Time-based optimizations
-
----
+Found a bug or have an idea? Open an [issue](https://github.com/FloDePin/GameOptimizerPro/issues) — for bugs please add your Windows build and the log file (`%TEMP%\GameOptimizerPro_*.log`). What changed in each version: [Releases](https://github.com/FloDePin/GameOptimizerPro/releases). Security issue? Please report it privately — see [SECURITY.md](SECURITY.md).
 
 ## 📄 License
 
-This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
-
----
-
-## 👨‍💻 About the Author
-
-**FloDePin** — Windows & Gaming Enthusiast  
-Passionate about system optimization and performance tuning
-
----
-
-*Made with ❤️ by FloDePin*
+[MIT](LICENSE) © FloDePin — use at your own risk. Read the descriptions before applying tweaks; a restore point is created automatically.

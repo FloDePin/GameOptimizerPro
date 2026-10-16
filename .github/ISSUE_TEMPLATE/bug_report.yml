@@ -1,0 +1,39 @@
+name: Bug report
+description: Something doesn't work as described
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! The log file helps most: `%TEMP%\GameOptimizerPro_*.log` (paste the path into Explorer's address bar).
+  - type: input
+    id: where
+    attributes:
+      label: Which tweak or page?
+      placeholder: e.g. "Disable Network Adapter Power Saving" or "BIOS Guide"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: Press Win + R and run `winver`
+      placeholder: e.g. Windows 11 25H2, build 26200
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: GPU and CPU
+      placeholder: e.g. RTX 4070 / Ryzen 7 7800X3D
+  - type: textarea
+    id: log
+    attributes:
+      label: Log file
+      description: Drag the newest `GameOptimizerPro_*.log` from `%TEMP%` into this box, or paste the relevant lines.
