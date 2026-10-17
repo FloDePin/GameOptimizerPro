@@ -3,7 +3,7 @@
 # ⚡ GameOptimizerPro
 
 **Windows & gaming optimizer in a single PowerShell script.**<br>
-111 tweaks — every one can be undone, and you can see which ones are active.
+113 tweaks — every one can be undone, and you can see which ones are active.
 
 [![Release](https://img.shields.io/github/v/release/FloDePin/GameOptimizerPro?style=flat-square&color=e53935&label=release)](https://github.com/FloDePin/GameOptimizerPro/releases/latest)
 [![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?style=flat-square&logo=windows)](#-requirements)
@@ -40,8 +40,8 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 ## ✨ Why GameOptimizerPro
 
-- ↩️ **Every tweak can be undone** — each of the 111 tweaks has its own revert that goes back to the Windows default.
-- 🟢 **You see what is active** — 101 tweaks have a live status check read straight from Windows (registry, services, power plan), not from a list of what you once clicked.
+- ↩️ **Every tweak can be undone** — each of the 113 tweaks has its own revert that goes back to the Windows default.
+- 🟢 **You see what is active** — 103 tweaks have a live status check read straight from Windows (registry, services, power plan), not from a list of what you once clicked.
 - 🔄 **Notices when Windows resets your tweaks** — updates like to switch things back. At start the app compares with your last Apply and offers to re-apply what was reverted.
 - 🛟 **Safety net before every change** — a System Restore point plus a `.reg` backup of every affected key, before every Apply and Revert.
 - 🧾 **Honest descriptions** — every tweak says what it does, what it costs and where Windows ignores it (e.g. policies that only work on Enterprise / Education).
@@ -66,7 +66,7 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 |---|:---:|---|
 | 🪟 Windows | 46 | Debloat (Copilot, Recall, OneDrive, auto-installed suggested apps), telemetry & privacy, the Windows AI switches, Ultimate Performance, HPET / timer, quality of life |
 | 🎮 Gaming | 12 | Game Mode, MMCSS, CPU priority, fullscreen optimizations, MSI mode, HAGS, NVIDIA Reflex, GPU timeout (TDR) |
-| 🌐 Network | 11 | Nagle, LSO, network throttling, DNS (Cloudflare / Google), TCP, QoS, adapter power saving |
+| 🌐 Network | 13 | Nagle, LSO, network throttling, DNS (Cloudflare / Google), TCP, QoS, Energy-Efficient Ethernet, interrupt moderation, adapter power saving |
 | 💾 RAM & Storage | 15 | Page file, memory compression, TRIM, NVMe, write cache, hibernation + **Deep Clean** (6 cleanups, each shows the MB it freed) |
 | 🪟 Windows 11 | 7 | Classic right-click menu, left taskbar, widgets, Start recommendations, End Task |
 | 🔊 Audio | 6 | Audio enhancements, MMCSS audio, spatial sound, sound scheme, device power saving |
@@ -74,13 +74,13 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 | ⚡ Power | 7 | USB / PCIe power saving, disk and system sleep, display timeout, CPU min / max state |
 
 <details>
-<summary><b>Show all 111 tweaks</b></summary>
+<summary><b>Show all 113 tweaks</b></summary>
 
 **🪟 Windows (46)**
 
 - *Bloatware:* Remove Cortana · Remove Xbox Apps · Remove Microsoft Teams (Personal) · Remove Copilot · Remove OneDrive · Remove Windows Recall · Remove Other Bloatware · Stop Auto-Installed Suggested Apps · Disable Get Started & Copilot Sign-in Screens
 - *Privacy:* Disable Telemetry & Data Collection · Disable Activity History · Disable Advertising ID · Disable Text & Image Generation (AI) · Disable Click to Do & Settings Agent (AI) · Disable AI in Paint & Notepad · Disable Location Tracking · Block Telemetry Hosts (hosts file) · Disable Scheduled Telemetry Tasks · Disable Windows Settings Backup (Cloud)
-- *Performance:* Ultimate Performance Plan · Disable HPET (High Precision Event Timer) · Set 0.5ms Timer Resolution · Disable Prefetch & Superfetch · Optimize Visual Effects (Performance Mode) · Disable Windows Search Indexing · Disable Power Throttling · Disable Bing in Windows Search · Process Count Reduction (Svchost)
+- *Performance:* Ultimate Performance Plan · Disable HPET (High Precision Event Timer) · Allow Global Timer Resolution (Windows 11) · Disable Prefetch & Superfetch · Optimize Visual Effects (Performance Mode) · Disable Windows Search Indexing · Disable Power Throttling · Disable Bing in Windows Search · Process Count Reduction (Svchost)
 - *CTT Essentials:* Prevent Device Companion Apps · Disable Consumer Features · Disable Windows Platform Binary Table (WPBT) · Disable Store Recommended Search Results · Enable Start Menu Previous Layout · Disable File Explorer Automatic Folder Discovery · Run Disk Cleanup
 - *Quality of Life:* Show File Extensions · Show Hidden Files · Disable Reserved Storage · Disable Storage Sense · Num Lock on Startup · Disable Lock Screen · Enable Long Paths
 - *Mouse & UI:* Disable Mouse Acceleration · Disable Sticky Keys · Enable Dark Mode · Disable Transparency Effects
@@ -90,13 +90,13 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 - *In-Game Boosts:* Enable Game Mode · Disable Xbox Game Bar · CPU Priority for Games (Win32Priority) · MMCSS Gaming Profile (High Priority) · Disable Fullscreen Optimizations · Disable Windows Update during Gaming · Disable Background App Throttling
 - *GPU & Driver:* NVIDIA Low Latency Mode (Reflex) · Enable MSI Mode (Message Signaled Interrupts) · Enable Hardware-Accelerated GPU Scheduling (HAGS) · Clear Shader Cache · Increase GPU Timeout Tolerance (TDR)
 
-**🌐 Network (11)**
+**🌐 Network (13)**
 
 - *Latency:* Disable Nagle's Algorithm (TCPNoDelay) · Disable Large Send Offload (LSO) · Disable Network Throttling Index
 - *DNS:* Set DNS to Cloudflare (1.1.1.1) · Set DNS to Google (8.8.8.8) · Flush DNS Cache
 - *TCP:* Disable TCP Auto-Tuning · Optimize TCP Settings (ECN/SACK/Timestamps)
 - *QoS:* Disable QoS Packet Scheduler Limit
-- *Adapter:* Disable Network Adapter Power Saving · Disable Delivery Optimization (P2P Windows Update)
+- *Adapter:* Disable Network Adapter Power Saving · Disable Delivery Optimization (P2P Windows Update) · Disable Energy-Efficient Ethernet · Disable Interrupt Moderation
 
 **💾 RAM & Storage (15)**
 
@@ -138,8 +138,8 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 | Preset | Tweaks | For whom |
 |---|:---:|---|
 | 🟢 **Minimal** | 19 | Safe basics: privacy, gaming priority, network latency. No app removal — the ideal first run. |
-| 🟠 **Balanced** | 82 | Minimal + Ultimate Performance, timer, GPU and audio tweaks, light debloat (Copilot, Recall, Xbox) and the Windows AI switches. The recommended all-round setup. |
-| 🔴 **Aggressive** | 97 | Everything, incl. Cortana / OneDrive / Teams removal, no hibernation, no memory compression. For experienced users. |
+| 🟠 **Balanced** | 83 | Minimal + Ultimate Performance, timer, GPU and audio tweaks, light debloat (Copilot, Recall, Xbox) and the Windows AI switches. The recommended all-round setup. |
+| 🔴 **Aggressive** | 99 | Everything, incl. Cortana / OneDrive / Teams removal, no hibernation, no memory compression. For experienced users. |
 
 A preset only ticks the boxes — you review the list and click **Apply selected** yourself.
 

@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.0
+    1.1
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.0"
+$Script:AppVersion = "1.1"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -116,7 +116,9 @@ try {
 # HARDWARE DETECTION
 # -----------------------------------------
 function Get-RegVal($Path, $Name) {
-    try { (Get-ItemProperty $Path -Name $Name -ErrorAction Stop).$Name } catch { $null }
+    # -LiteralPath: driver keys like Ndi\params\*EEE contain a '*' -- as a normal path that
+    # is a wildcard, matches *EEE, AdvancedEEE, ... and returns a list instead of the value
+    try { (Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop).$Name } catch { $null }
 }
 
 # The gaming GPU. On AM5 / Intel desktops the iGPU often stays enabled next to the
@@ -150,6 +152,27 @@ function Select-PrimaryGpu($Ctrls) {
 function Get-AmdGpuKeys {
     Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}" -ErrorAction SilentlyContinue |
         Where-Object { $_.PSChildName -match '^\d{4}$' -and "$(Get-RegVal $_.PSPath 'ProviderName') $(Get-RegVal $_.PSPath 'DriverDesc')" -match 'Advanced Micro Devices|ATI Tech|\bAMD\b|Radeon' }
+}
+
+# Advanced driver settings of the physical network adapters, read from each driver's
+# own parameter list (Ndi\params). Vendors name the same setting differently (EEE:
+# *EEE, EEELinkAdvertisement, EnableGreenEthernet ...), so only keywords a driver
+# declares are returned, and only if it lists "0" (= off) as a valid choice.
+function Get-NicParams([string]$Setting) {
+    $keywords = switch ($Setting) {
+        'EEE'                 { '*EEE', 'EEE', 'EEELinkAdvertisement', 'AdvancedEEE', 'EnableGreenEthernet', 'GreenEthernet' }
+        'InterruptModeration' { '*InterruptModeration' }
+    }
+    $netClass = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}"
+    foreach ($a in @(Get-ChildItem $netClass -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' })) {
+        if (-not (Get-RegVal $a.PSPath 'NetCfgInstanceId') -or -not (([int64](Get-RegVal $a.PSPath 'Characteristics')) -band 0x4)) { continue }   # physical adapters only
+        foreach ($kw in $keywords) {
+            $np = Join-Path $a.PSPath "Ndi\params\$kw"
+            if ($null -eq (Get-RegVal (Join-Path $np 'enum') '0')) { continue }
+            $def = Get-RegVal $np 'default'; $cur = Get-RegVal $a.PSPath $kw
+            [pscustomobject]@{ Path = $a.PSPath; Keyword = $kw; Default = $def; Current = $(if ($null -ne $cur) { "$cur" } else { "$def" }) }
+        }
+    }
 }
 
 # The WMI results are kept in $Script:VideoCtrls / $Script:GpuObj / $Script:CpuObj and
@@ -751,13 +774,13 @@ $AllTweaks = @(
         }
     },
     [PSCustomObject]@{
-        Name     = "Set 0.5ms Timer Resolution"
-        Desc     = "Setzt die Windows Timer-Aufloesung auf 0.5ms (statt Standard 15.6ms). Verbessert die Praezision von Frame-Timing und reduziert Input-Lag in Spielen spuerbar."
+        Name     = "Allow Global Timer Resolution (Windows 11)"
+        Desc     = "Seit Windows 10 2004 gilt eine erhoehte Timer-Aufloesung nur noch fuer das Programm, das sie anfordert - unter Windows 11 nicht einmal, solange es minimiert ist. Das stellt das alte, systemweite Verhalten wieder her. Voraussetzung fuer Timer-Tools wie TimerResolution oder ISLC; stellt selbst KEINE Aufloesung ein - Spiele fordern ihre ca. 1 ms ohnehin selbst an. Neustart noetig."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
             reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" /v GlobalTimerResolutionRequests /t REG_DWORD /d 1 /f | Out-Null
-            Write-Log "Timer resolution set to 0.5ms"
+            Write-Log "Global timer resolution requests allowed (takes effect after a restart)"
         }
     },
     [PSCustomObject]@{
@@ -1358,6 +1381,28 @@ $AllTweaks = @(
         Action   = {
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization" /v DODownloadMode /t REG_DWORD /d 0 /f | Out-Null
             Write-Log "Delivery Optimization (P2P updates) disabled"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Energy-Efficient Ethernet"
+        Desc     = "Schaltet Energy-Efficient Ethernet (EEE, 'Green Ethernet') an allen LAN-Adaptern ab, die es anbieten. Mit EEE geht die Leitung in Sendepausen in einen Stromsparzustand und muss fuer das naechste Paket erst aufwachen - das kann kleine Latenzspitzen geben. Kostet am Desktop praktisch nichts. Geaendert wird nur, was der Treiber selbst als Einstellung anbietet. Wirkt nach einem Neustart."
+        Category = "Network"
+        Group    = "Adapter"
+        Action   = {
+            $ps = @(Get-NicParams 'EEE')
+            foreach ($n in $ps) { Set-ItemProperty -Path $n.Path -Name $n.Keyword -Value "0" -Type String -ErrorAction Stop }
+            Write-Log $(if ($ps.Count) { "Energy-Efficient Ethernet disabled ($($ps.Count) driver setting(s): $(@($ps | ForEach-Object { $_.Keyword } | Select-Object -Unique) -join ', '))" } else { "Energy-Efficient Ethernet: no adapter offers it -- nothing changed" })
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Interrupt Moderation"
+        Desc     = "Der Netzwerkadapter meldet jedes Paket sofort, statt mehrere zu sammeln und gebuendelt zu melden. Senkt die Netzwerk-Latenz um Bruchteile einer Millisekunde, erzeugt aber bei hohen Download-Raten deutlich mehr CPU-Last. Gedacht fuer Online-Spiele - wer oft grosse Downloads hat oder streamt, laesst es besser an. Geaendert wird nur, was der Treiber selbst anbietet. Wirkt nach einem Neustart."
+        Category = "Network"
+        Group    = "Adapter"
+        Action   = {
+            $ps = @(Get-NicParams 'InterruptModeration')
+            foreach ($n in $ps) { Set-ItemProperty -Path $n.Path -Name $n.Keyword -Value "0" -Type String -ErrorAction Stop }
+            Write-Log $(if ($ps.Count) { "Interrupt Moderation disabled on $($ps.Count) adapter(s)" } else { "Interrupt Moderation: no adapter offers it -- nothing changed" })
         }
     },
 
@@ -2184,7 +2229,7 @@ $RevertActions = @{
         bcdedit /deletevalue disabledynamictick 2>$null | Out-Null
         Write-Log "Revert: HPET/timer BCD entries removed (Windows default restored)"
     }
-    "Set 0.5ms Timer Resolution" = {
+    "Allow Global Timer Resolution (Windows 11)" = {
         reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" /v GlobalTimerResolutionRequests /f 2>$null
         Write-Log "Revert: Timer resolution key removed (Windows default restored)"
     }
@@ -2394,6 +2439,15 @@ $RevertActions = @{
     "Disable Delivery Optimization (P2P Windows Update)" = {
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization" /v DODownloadMode /f 2>$null
         Write-Log "Revert: Delivery Optimization (P2P updates) restored to Windows default"
+    }
+    # Back to each driver's own default (the 'default' in its Ndi\params)
+    "Disable Energy-Efficient Ethernet" = {
+        foreach ($n in @(Get-NicParams 'EEE')) { if ($null -ne $n.Default) { Set-ItemProperty -Path $n.Path -Name $n.Keyword -Value "$($n.Default)" -Type String -ErrorAction Stop } }
+        Write-Log "Revert: Energy-Efficient Ethernet back to the driver default"
+    }
+    "Disable Interrupt Moderation" = {
+        foreach ($n in @(Get-NicParams 'InterruptModeration')) { if ($null -ne $n.Default) { Set-ItemProperty -Path $n.Path -Name $n.Keyword -Value "$($n.Default)" -Type String -ErrorAction Stop } }
+        Write-Log "Revert: Interrupt Moderation back to the driver default"
     }
 
     # == RAM & STORAGE ====================================================
@@ -2752,7 +2806,7 @@ $CheckFunctions = @{
         if (-not $b) { return $null }
         ($b -match 'useplatformtick\s+Yes') -and ($b -match 'disabledynamictick\s+Yes')
     }
-    "Set 0.5ms Timer Resolution"         = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" "GlobalTimerResolutionRequests") -eq 1 }
+    "Allow Global Timer Resolution (Windows 11)"         = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" "GlobalTimerResolutionRequests") -eq 1 }
     "Disable Prefetch & Superfetch"      = { (($s=Get-Service SysMain -EA SilentlyContinue) -and ($s.StartType -eq "Disabled" -or $s.Status -eq "Stopped")) }
     "Optimize Visual Effects (Performance Mode)" = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" "VisualFXSetting") -eq 2 }
     "Disable Windows Search Indexing"    = { (($s=Get-Service WSearch -EA SilentlyContinue) -and $s.StartType -eq "Disabled") }
@@ -2823,6 +2877,9 @@ $CheckFunctions = @{
         $off.Count -eq $adapters.Count
     }
     "Disable Delivery Optimization (P2P Windows Update)" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization" "DODownloadMode") -eq 0 }
+    # No adapter offers the setting -> unknown (grey), not "inactive"
+    "Disable Energy-Efficient Ethernet"  = { $ps = @(Get-NicParams 'EEE'); if (-not $ps.Count) { return $null }; @($ps | Where-Object { $_.Current -ne '0' }).Count -eq 0 }
+    "Disable Interrupt Moderation"       = { $ps = @(Get-NicParams 'InterruptModeration'); if (-not $ps.Count) { return $null }; @($ps | Where-Object { $_.Current -ne '0' }).Count -eq 0 }
 
     # RAM & STORAGE
     "Optimize PageFile (System Managed)" = { (($cs=Get-WmiObject Win32_ComputerSystem -EA SilentlyContinue) -and $cs.AutomaticManagedPagefile -eq $true) }
@@ -3090,7 +3147,7 @@ $TweakDescEN = @{
     "Disable Windows Settings Backup (Cloud)"     = "Windows regularly backs up your settings to your Microsoft account (on by default since 26H2). Sets the official 'Enable Windows Backup' policy to off: no more settings are backed up to the cloud. Files, OneDrive and local restore points are not affected."
     "Ultimate Performance Plan"                   = "Activates the 'Ultimate Performance' power plan and sets it to always-on: Windows stops throttling CPU cores AND the PC no longer sleeps -- display, disks and system stay on (no timeout). Maximum performance at all times. Increases power consumption."
     "Disable HPET (High Precision Event Timer)"   = "Disables the High Precision Event Timer. Can reduce system latency and improve gaming performance on some systems with lower frame times."
-    "Set 0.5ms Timer Resolution"                  = "Sets Windows timer resolution to 0.5ms (default 15.6ms). Improves frame timing precision and noticeably reduces input lag in games."
+    "Allow Global Timer Resolution (Windows 11)"                  = "Since Windows 10 2004 a raised timer resolution only applies to the program that requests it - on Windows 11 not even while that program is minimized. This restores the old system-wide behavior. It is the prerequisite for timer tools such as TimerResolution or ISLC; it does NOT set a resolution by itself - games request their ~1 ms anyway. Restart required."
     "Disable Prefetch & Superfetch"               = "Disables Prefetch and SysMain (Superfetch). Recommended for SSDs  --  not for HDDs. Reduces background disk writes and RAM usage."
     "Optimize Visual Effects (Performance Mode)"  = "Turns off all Windows animations and visual effects. Windows responds noticeably faster, especially useful for gaming on weaker systems."
     "Disable Windows Search Indexing"             = "Disables the Windows Search Indexer (WSearch). Reduces constant background disk activity. Search still works but slower without index."
@@ -3120,6 +3177,8 @@ $TweakDescEN = @{
     "Optimize TCP Settings (ECN/SACK/Timestamps)" = "Optimizes advanced TCP settings: disables ECN, enables SACK, disables TCP Timestamps. Reduces overhead and improves stability in online games."
     "Disable QoS Packet Scheduler Limit"          = "Removes the default 20% bandwidth limit that Windows reserves for QoS. Gives you the full available bandwidth."
     "Disable Network Adapter Power Saving"        = "Disables 'Allow the computer to turn off this device to save power' for all physical network adapters (Ethernet, Wi-Fi). Prevents dropped connections and latency spikes caused by adapter power management."
+    "Disable Energy-Efficient Ethernet"           = "Turns off Energy-Efficient Ethernet (EEE, 'Green Ethernet') on every wired adapter that offers it. With EEE the link drops into a power-saving state during pauses and has to wake up for the next packet, which can cause small latency spikes. Costs practically nothing on a desktop. Only settings the driver itself offers are changed. Takes effect after a restart."
+    "Disable Interrupt Moderation"                = "The network adapter reports every packet right away instead of collecting several and reporting them together. Lowers network latency by a fraction of a millisecond, but causes noticeably more CPU load at high download rates. Meant for online games - if you often download big files or stream, better leave it on. Only settings the driver itself offers are changed. Takes effect after a restart."
     "Disable Delivery Optimization (P2P Windows Update)" = "Disables Windows Delivery Optimization. Windows only downloads updates directly from Microsoft instead of sharing bandwidth with other PCs on your network/the internet (P2P). Prevents unexpected bandwidth usage while gaming."
     "Optimize PageFile (System Managed)"          = "Sets the pagefile to system managed. Windows dynamically adjusts it to RAM needs  --  prevents both too-small and too-large pagefiles."
     "Clear PageFile on Shutdown"                  = "Clears the pagefile on every shutdown. Prevents sensitive data from remaining on disk after reboot. Good for privacy."
@@ -3876,9 +3935,10 @@ $Script:TweakRows    = @{}   # Name -> @{ Card; Desc; Tweak }
 $Script:GroupHeaders = @()   # @{ Root; Names; Cat }
 $Script:CatNotices   = @()   # banners hidden while searching
 $Script:OneTimeNames = @($CheckFunctions.Keys | Where-Object { $CheckFunctions[$_].ToString().Trim() -eq '$null' })
-$Script:RestartTweaks = @("Remove Windows Recall", "Disable HPET (High Precision Event Timer)", "Set 0.5ms Timer Resolution",
+$Script:RestartTweaks = @("Remove Windows Recall", "Disable HPET (High Precision Event Timer)", "Allow Global Timer Resolution (Windows 11)",
     "Process Count Reduction (Svchost)", "Enable MSI Mode (Message Signaled Interrupts)", "Enable Hardware-Accelerated GPU Scheduling (HAGS)",
-    "Disable Write-Cache Buffer Flushing", "Optimize NVMe Queue Depth", "Disable Windows Platform Binary Table (WPBT)", "Disable Memory Compression")
+    "Disable Write-Cache Buffer Flushing", "Optimize NVMe Queue Depth", "Disable Windows Platform Binary Table (WPBT)", "Disable Memory Compression",
+    "Disable Energy-Efficient Ethernet", "Disable Interrupt Moderation")
 $Script:AppRemovals = @("Remove Cortana", "Remove Xbox Apps", "Remove Microsoft Teams (Personal)", "Remove Copilot", "Remove OneDrive", "Remove Other Bloatware")
 
 function Get-TweakDesc($Tweak) {
@@ -5300,7 +5360,7 @@ $Script:PresetBalanced = $Script:PresetMinimal + @(
     "Stop Auto-Installed Suggested Apps","Disable Get Started & Copilot Sign-in Screens",
     "Disable Click to Do & Settings Agent (AI)","Disable AI in Paint & Notepad",
     "Block Telemetry Hosts (hosts file)",
-    "Ultimate Performance Plan","Disable HPET (High Precision Event Timer)","Set 0.5ms Timer Resolution",
+    "Ultimate Performance Plan","Disable HPET (High Precision Event Timer)","Allow Global Timer Resolution (Windows 11)",
     "Disable Prefetch & Superfetch","Optimize Visual Effects (Performance Mode)","Disable Bing in Windows Search",
     "Disable Store Recommended Search Results","Disable File Explorer Automatic Folder Discovery",
     "Disable Xbox Game Bar","Disable Windows Update during Gaming","Disable Background App Throttling",
@@ -5308,7 +5368,7 @@ $Script:PresetBalanced = $Script:PresetMinimal + @(
     "NVIDIA: Disable Threaded Optimization","NVIDIA: Max Pre-Rendered Frames = 1","NVIDIA: Shader Cache Size (Unlimited)","NVIDIA: Power Management = Max Performance",
     "AMD: Disable ULPS (Ultra Low Power State)","AMD: Shader Cache (Unlimited)","AMD: Anti-Lag (Low Latency Mode)",
     "Disable Audio Enhancements","Optimize MMCSS Audio Profile","Set Audio Service High Priority","Disable Windows Sound Scheme","Disable Spatial Sound (Windows Sonic)","Disable Audio Device Power Save",
-    "Disable Large Send Offload (LSO)","Optimize TCP Settings (ECN/SACK/Timestamps)","Disable TCP Auto-Tuning","Disable Network Adapter Power Saving",
+    "Disable Large Send Offload (LSO)","Optimize TCP Settings (ECN/SACK/Timestamps)","Disable TCP Auto-Tuning","Disable Network Adapter Power Saving","Disable Energy-Efficient Ethernet",
     "Disable Sticky Keys","Enable Dark Mode","Disable Transparency Effects",
     "Restore Classic Right-Click Menu","Left-Align Taskbar","Disable Widgets","Remove Chat Icon from Taskbar","Disable Recommended in Start Menu","Enable End Task in Taskbar","Disable Snap Layout Hover Menu",
     "Show Hidden Files","Num Lock on Startup","Enable Long Paths",
@@ -5318,7 +5378,7 @@ $Script:PresetBalanced = $Script:PresetMinimal + @(
 $Script:PresetAggressive = $Script:PresetBalanced + @(
     "Remove Cortana","Remove Microsoft Teams (Personal)","Remove OneDrive",
     "Disable Windows Settings Backup (Cloud)",
-    "Disable Windows Search Indexing","Process Count Reduction (Svchost)",
+    "Disable Windows Search Indexing","Process Count Reduction (Svchost)","Disable Interrupt Moderation",
     "Disable Memory Compression","Disable Write-Cache Buffer Flushing","Disable Hibernation","Clear PageFile on Shutdown",
     "Disable Reserved Storage","Disable Storage Sense","Disable Lock Screen","Enable Start Menu Previous Layout",
     "Disable Sleep (System)"
