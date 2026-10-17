@@ -179,7 +179,7 @@ Ein Preset setzt nur die Haken — du prüfst die Liste und klickst selbst auf *
 <details>
 <summary><b>Manche Tweaks haben einen grauen Punkt statt eines grünen oder leeren.</b></summary>
 
-Grau heißt: Es gibt nichts Bleibendes zu prüfen (einmalige Bereinigungen) oder Windows kann den Status gerade nicht melden — zum Beispiel während Updates installiert werden. **Verify status** prüft erneut.
+Grau heißt: Es gibt nichts Bleibendes zu prüfen (einmalige Bereinigungen), der Tweak passt nicht zu diesem PC (AMD-Tweaks bei einer NVIDIA-Karte, keine NVMe-SSD, ein Netzwerkadapter ohne diese Einstellung) oder Windows kann den Status gerade nicht melden — zum Beispiel während Updates installiert werden. Die Zähler führen einmalige Aktionen und „n/a“ getrennt auf. **Verify status** prüft erneut.
 </details>
 
 <details>

@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.1
+    1.2
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.1"
+$Script:AppVersion = "1.2"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -67,6 +67,15 @@ try {
 # ADMIN CHECK
 # -----------------------------------------
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    # Started directly (right-click > Run with PowerShell): ask for elevation once and
+    # start again as administrator. The message only appears if that is declined, or if
+    # the script was not started from a file (irm ... | iex has no path to restart).
+    if ($PSCommandPath) {
+        try {
+            Start-Process powershell.exe -ArgumentList "-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs -WindowStyle Hidden -ErrorAction Stop
+            exit
+        } catch { }
+    }
     [System.Windows.MessageBox]::Show("Please run this script as Administrator!", "GameOptimizerPro - Admin Required", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     exit
 }
@@ -175,6 +184,15 @@ function Get-NicParams([string]$Setting) {
     }
 }
 
+# Connected adapters the network status checks look at. Physical ones only when there
+# are any: Hyper-V / WSL (vEthernet), VPN and other virtual adapters can be listed
+# first and would otherwise decide the status. Falls back to every connected adapter.
+function Get-UpAdapters {
+    $up = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" })
+    $phys = @($up | Where-Object { $_.HardwareInterface })
+    if ($phys.Count) { $phys } else { $up }
+}
+
 # The WMI results are kept in $Script:VideoCtrls / $Script:GpuObj / $Script:CpuObj and
 # reused by the dashboard, so every class is queried only once per start.
 try {
@@ -270,7 +288,9 @@ $LogFile = "$env:TEMP\GameOptimizerPro_$(Get-Date -Format 'yyyyMMdd_HHmmss').log
 function Write-Log {
     param([string]$Message)
     $entry = "[$(Get-Date -Format 'HH:mm:ss')] $Message"
-    Add-Content -Path $LogFile -Value $entry
+    # A log line must never break a tweak: if the file is briefly locked (antivirus,
+    # an editor holding it open), the line is dropped instead.
+    try { Add-Content -Path $LogFile -Value $entry -ErrorAction Stop } catch { }
 }
 
 # -----------------------------------------
@@ -1804,7 +1824,8 @@ $AllTweaks = @(
             reg add "HKLM\SYSTEM\CurrentControlSet\Services\usbaudio" /v DisableSelectiveSuspend /t REG_DWORD /d 1 /f 2>$null | Out-Null
             $audioClass = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e96c-e325-11ce-bfc1-08002be10318}"
             if (Test-Path $audioClass) {
-                Get-ChildItem $audioClass -ErrorAction SilentlyContinue | ForEach-Object {
+                # device instances only (0000, 0001, ...), not Properties / Configuration
+                Get-ChildItem $audioClass -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' } | ForEach-Object {
                     Set-ItemProperty -Path $_.PSPath -Name "PowerThrottlingOff" -Value 1 -Type DWord -ErrorAction SilentlyContinue
                 }
             }
@@ -2621,7 +2642,7 @@ $RevertActions = @{
         reg delete "HKLM\SYSTEM\CurrentControlSet\Services\usbaudio" /v DisableSelectiveSuspend /f 2>$null
         $audioClass = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e96c-e325-11ce-bfc1-08002be10318}"
         if (Test-Path $audioClass) {
-            Get-ChildItem $audioClass -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-ChildItem $audioClass -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' } | ForEach-Object {
                 Remove-ItemProperty -Path $_.PSPath -Name "PowerThrottlingOff" -ErrorAction SilentlyContinue
             }
         }
@@ -2782,11 +2803,14 @@ $CheckFunctions = @{
     "Disable Lock Screen"                = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization" "NoLockScreen") -eq 1 }
     "Enable Long Paths"                  = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" "LongPathsEnabled") -eq 1 }
 
-    "Disable Telemetry & Data Collection" = { (($s=Get-Service DiagTrack -EA SilentlyContinue) -and $s.StartType -eq "Disabled") -or ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection" "AllowTelemetry") -eq 0) }
+    # Both halves of the Apply: Home/Pro treat AllowTelemetry=0 like 1 (0 is Enterprise
+    # only), so the stopped DiagTrack service is what really counts there -- an update
+    # that turns it back on must show as drift even while the policy value is still set.
+    "Disable Telemetry & Data Collection" = { $s = Get-Service DiagTrack -EA SilentlyContinue; ((-not $s) -or $s.StartType -eq "Disabled") -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection" "AllowTelemetry") -eq 0) }
     "Disable Activity History"           = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" "EnableActivityFeed") -eq 0 }
     "Disable Advertising ID"             = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" "Enabled") -eq 0 }
     "Disable Text & Image Generation (AI)" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" "LetAppsAccessSystemAIModels") -eq 2 }
-    "Disable Click to Do & Settings Agent (AI)" = { ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableClickToDo") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableSettingsAgent") -eq 1) }
+    "Disable Click to Do & Settings Agent (AI)" = { ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableClickToDo") -eq 1) -and ((Get-RegVal "HKCU:\Software\Policies\Microsoft\Windows\WindowsAI" "DisableClickToDo") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableSettingsAgent") -eq 1) }
     "Disable AI in Paint & Notepad"      = { $p = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Paint"; ((Get-RegVal $p "DisableCocreator") -eq 1) -and ((Get-RegVal $p "DisableImageCreator") -eq 1) -and ((Get-RegVal $p "DisableGenerativeFill") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\WindowsNotepad" "DisableAIFeatures") -eq 1) }
     "Disable Location Tracking"          = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location" "Value") -eq "Deny" }
     # -match on an ARRAY returns the matching lines, not a bool -- the dot logic only
@@ -2842,24 +2866,20 @@ $CheckFunctions = @{
         $ifaces = Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\*" -EA SilentlyContinue
         ($ifaces | Where-Object { $_.TCPNoDelay -eq 1 } | Select-Object -First 1) -ne $null
     }
+    # Network checks: every connected physical adapter (Get-UpAdapters), like the Apply
     "Disable Large Send Offload (LSO)"   = {
-        $a = Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
-        if (-not $a) { return $null }
-        $lso = Get-NetAdapterLso -Name $a.Name -EA SilentlyContinue
-        $lso -and -not $lso.IPv4Enabled -and -not $lso.IPv6Enabled
+        $lso = @(Get-UpAdapters | ForEach-Object { Get-NetAdapterLso -Name $_.Name -EA SilentlyContinue } | Where-Object { $_ })
+        if (-not $lso.Count) { return $null }   # no connected adapter offers LSO
+        @($lso | Where-Object { $_.IPv4Enabled -or $_.IPv6Enabled }).Count -eq 0
     }
     "Disable Network Throttling Index"   = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "NetworkThrottlingIndex") -eq 4294967295 }
     "Set DNS to Cloudflare (1.1.1.1)"   = {
-        $a = Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
-        if (-not $a) { return $null }
-        $dnsObj = Get-DnsClientServerAddress -InterfaceIndex $a.InterfaceIndex -AddressFamily IPv4 -EA SilentlyContinue
-        $dnsObj -and $dnsObj.ServerAddresses -contains "1.1.1.1"
+        $ad = @(Get-UpAdapters); if (-not $ad.Count) { return $null }
+        @($ad | Where-Object { -not ((Get-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4 -EA SilentlyContinue).ServerAddresses -contains "1.1.1.1") }).Count -eq 0
     }
     "Set DNS to Google (8.8.8.8)"        = {
-        $a = Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
-        if (-not $a) { return $null }
-        $dnsObj = Get-DnsClientServerAddress -InterfaceIndex $a.InterfaceIndex -AddressFamily IPv4 -EA SilentlyContinue
-        $dnsObj -and $dnsObj.ServerAddresses -contains "8.8.8.8"
+        $ad = @(Get-UpAdapters); if (-not $ad.Count) { return $null }
+        @($ad | Where-Object { -not ((Get-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4 -EA SilentlyContinue).ServerAddresses -contains "8.8.8.8") }).Count -eq 0
     }
     "Flush DNS Cache"                    = { $null }
     "Disable TCP Auto-Tuning"            = { (Get-NetTCPSetting -SettingName Internet -EA SilentlyContinue).AutoTuningLevelLocal -eq "Disabled" }
@@ -2897,8 +2917,8 @@ $CheckFunctions = @{
     "Disable Scheduled Defragmentation"  = { (Get-TaskState "\Microsoft\Windows\Defrag" "ScheduledDefrag") -eq "Disabled" }
     "Optimize NVMe Queue Depth"          = {
         if (-not $HasNVMe) { return $null }
-        $d = $NVMeDisks | Select-Object -First 1
-        (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Enum\$($d.PNPDeviceID)\Device Parameters\StorPort" "QueueDepth") -eq 32
+        # The Apply writes to every NVMe drive -- active only if every one has it
+        @($NVMeDisks | Where-Object { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Enum\$($_.PNPDeviceID)\Device Parameters\StorPort" "QueueDepth") -ne 32 }).Count -eq 0
     }
     "Disable Write-Cache Buffer Flushing" = {
         # The Apply writes to every fixed disk -- active only if every one has it
@@ -3572,7 +3592,7 @@ Set-Splash "Building the interface ..." 22
                                 <Ellipse Width="7" Height="7" Stroke="#4f5a69" StrokeThickness="1.4" Margin="0,0,5,0"/>
                                 <TextBlock Text="inactive" FontSize="11.5" Foreground="#7d8896" Margin="0,0,16,0"/>
                                 <Ellipse Width="7" Height="7" Fill="#4f5a69" Margin="0,0,5,0"/>
-                                <TextBlock Text="one-time action" FontSize="11.5" Foreground="#7d8896"/>
+                                <TextBlock Text="one-time / n/a" FontSize="11.5" Foreground="#7d8896" ToolTip="Grey: one-time actions (nothing lasting to check) and tweaks that don't apply to this PC, e.g. AMD tweaks on an NVIDIA card"/>
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                                 <TextBlock Name="CountsText" FontSize="11.5" Foreground="#b3bdcb" Margin="0,0,16,0" VerticalAlignment="Center"/>
@@ -4083,11 +4103,24 @@ function Apply-TweakFilter {
     $StatusText.Text = "$hits tweak(s) match '$q' (all categories)"
 }
 
+# Grey dots are two different things: one-time actions (nothing lasting to check) and
+# checks without an answer on this PC (AMD tweaks on an NVIDIA card, no NVMe drive,
+# no adapter offering EEE ...). Counted separately so neither is called the other.
+function Get-StateCounts {
+    $c = @{ Active = 0; Inactive = 0; OneTime = 0; NA = 0 }
+    foreach ($k in @($Script:TweakState.Keys)) {
+        switch ($Script:TweakState[$k]) {
+            'active'   { $c.Active++ }
+            'inactive' { $c.Inactive++ }
+            default    { if ($Script:OneTimeNames -contains $k) { $c.OneTime++ } else { $c.NA++ } }
+        }
+    }
+    $c
+}
+
 function Update-Counts {
-    $a = @($Script:TweakState.Values | Where-Object { $_ -eq 'active' }).Count
-    $i = @($Script:TweakState.Values | Where-Object { $_ -eq 'inactive' }).Count
-    $u = @($Script:TweakState.Values | Where-Object { $_ -eq 'unknown' }).Count
-    $CountsText.Text = "$a active$($Script:Mid)$i inactive$($Script:Mid)$u one-time"
+    $c = Get-StateCounts
+    $CountsText.Text = "$($c.Active) active$($Script:Mid)$($c.Inactive) inactive$($Script:Mid)$($c.OneTime) one-time" + $(if ($c.NA) { "$($Script:Mid)$($c.NA) n/a" } else { "" })
     foreach ($h in $Script:GroupHeaders) {
         $on = @($h.Names | Where-Object { $Script:TweakState[$_] -eq 'active' }).Count
         $h.Root.Tag.Text = "$($h.Names.Count) tweaks$($Script:Mid)$on active"
@@ -4122,7 +4155,8 @@ function Invoke-Verify {
     }
     Update-Counts
     $checkable = $active + $inactive
-    $StatusText.Text = "Verify complete: $active of $checkable checkable tweaks active (ticked)$($Script:Mid)$unknown one-time actions$($Script:Mid)verified $(Get-Date -Format 'HH:mm')"
+    $c = Get-StateCounts
+    $StatusText.Text = "Verify complete: $active of $checkable checkable tweaks active (ticked)$($Script:Mid)$($c.OneTime) one-time actions" + $(if ($c.NA) { "$($Script:Mid)$($c.NA) not applicable here" } else { "" }) + "$($Script:Mid)verified $(Get-Date -Format 'HH:mm')"
     } finally { Set-Busy $false }
 }
 
@@ -5167,15 +5201,14 @@ function Build-DashboardPage {
 
 function Update-ScoreCard {
     $D = $Script:Dash; if (-not $D.ScorePct) { return }
-    $a = @($Script:TweakState.Values | Where-Object { $_ -eq 'active' }).Count
-    $i = @($Script:TweakState.Values | Where-Object { $_ -eq 'inactive' }).Count
-    $u = @($Script:TweakState.Values | Where-Object { $_ -eq 'unknown' }).Count
+    $sc = Get-StateCounts
+    $a = $sc.Active; $i = $sc.Inactive
     $c = $a + $i
     $score = if ($c) { [math]::Round($a / $c * 100) } else { 0 }
     $col = if ($score -ge 80) { $Script:UI.GREEN } elseif ($score -ge 50) { $Script:UI.AMBER } else { $Script:UI.ERR }
     $D.ScorePct.Text = "$score %"; $D.ScorePct.Foreground = Brush $col
     $D.ScoreLine.Text = "$a of $c checkable tweaks are active on this PC"
-    $D.ScoreSub.Text = "$u one-time actions are not counted$($Script:Mid)drift check at every start"
+    $D.ScoreSub.Text = "$($sc.OneTime) one-time actions" + $(if ($sc.NA) { " and $($sc.NA) tweaks not applicable here" } else { "" }) + " are not counted$($Script:Mid)drift check at every start"
     Set-Bar $D.ScoreBar $score $col
     $bk = Get-BackupSummary
     $D.SafeBackup.Text = $bk.Last

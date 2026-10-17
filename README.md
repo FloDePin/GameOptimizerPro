@@ -177,7 +177,7 @@ A preset only ticks the boxes — you review the list and click **Apply selected
 <details>
 <summary><b>Some tweaks have a grey dot instead of a green or empty one.</b></summary>
 
-Grey means there is nothing lasting to check (one-time cleanups) or Windows can't report the status right now — for example while it is installing updates. **Verify status** checks again.
+Grey means there is nothing lasting to check (one-time cleanups), the tweak doesn't apply to this PC (AMD tweaks on an NVIDIA card, no NVMe drive, a network adapter without that setting) or Windows can't report the status right now — for example while it is installing updates. The counters list one-time actions and “n/a” separately. **Verify status** checks again.
 </details>
 
 <details>
