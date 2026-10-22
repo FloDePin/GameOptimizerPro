@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.2
+    1.3
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.2"
+$Script:AppVersion = "1.3"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -193,6 +193,12 @@ function Get-UpAdapters {
     if ($phys.Count) { $phys } else { $up }
 }
 
+# Some official policies are only read by Enterprise / Education (and their IoT / LTSC /
+# multi-session variants); Home and Pro ignore them.
+function Test-EnterpriseEdition {
+    (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" "EditionID") -match '^(Enterprise|Education|IoTEnterprise|ServerRdsh)'
+}
+
 # The WMI results are kept in $Script:VideoCtrls / $Script:GpuObj / $Script:CpuObj and
 # reused by the dashboard, so every class is queried only once per start.
 try {
@@ -356,6 +362,7 @@ $Script:RegistryBackupKeys = @(
     "HKLM\SOFTWARE\Microsoft\Dfrg\BootOptimizeFunction",
     "HKLM\SOFTWARE\Microsoft\DirectX",
     "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia",
+    "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore",
     "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore",
     "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications",
     "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved",
@@ -375,6 +382,39 @@ $Script:RegistryBackupKeys = @(
     "HKLM\SYSTEM\CurrentControlSet\Services\usbaudio2",
     "HKU\.DEFAULT\Control Panel\Keyboard"
 )
+
+# Values written by tweaks that were removed in v1.3 because Windows or the driver never
+# read them (five NVIDIA registry values, Spatial Sound, Audio Device Power Save, the
+# organisation-only Windows Backup policy), plus the restore-point frequency override
+# older versions left at 0. Harmless, but Revert All promises a clean state -- so it
+# removes them. Returns how many values were removed.
+function Remove-RetiredTweakValues {
+    $nv = "HKLM:\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak"
+    $targets = @(
+        @($nv, 'NVLatency'), @($nv, 'ThreadedOptimization'), @($nv, 'PrerenderedFrames'),
+        @($nv, 'PowerMizerEnable'), @($nv, 'PowerMizerLevel'), @($nv, 'PowerMizerLevelAC'),
+        @("HKCU:\SOFTWARE\NVIDIA Corporation\Global\NVTweak", 'NvCplCacheShaderMaxSize'),
+        @("HKLM:\SYSTEM\CurrentControlSet\Services\usbaudio", 'DisableSelectiveSuspend'),
+        @("HKLM:\SYSTEM\CurrentControlSet\Services\usbaudio2", 'DisableSelectiveSuspend'),
+        @("HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync", 'EnableWindowsBackup'),
+        @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore", 'SystemRestorePointCreationFrequency')
+    )
+    foreach ($k in @(Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render" -ErrorAction SilentlyContinue)) { $targets += , @($k.PSPath, 'SpatialAudioMode') }
+    foreach ($k in @(Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e96c-e325-11ce-bfc1-08002be10318}" -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' })) { $targets += , @($k.PSPath, 'PowerThrottlingOff') }
+    # These two only when they hold exactly what the old code wrote -- an organisation's
+    # Windows Backup policy (1) or a deliberately chosen frequency stays untouched.
+    $onlyIf = @{ 'EnableWindowsBackup' = 0; 'SystemRestorePointCreationFrequency' = 0 }
+    $n = 0
+    foreach ($tg in $targets) {
+        $v = Get-RegVal $tg[0] $tg[1]
+        if ($null -eq $v) { continue }
+        if ($onlyIf.ContainsKey($tg[1]) -and $v -ne $onlyIf[$tg[1]]) { continue }
+        Remove-ItemProperty -Path $tg[0] -Name $tg[1] -ErrorAction SilentlyContinue
+        if ($null -eq (Get-RegVal $tg[0] $tg[1])) { $n++ }
+    }
+    if ($n) { Write-Log "Revert All: removed $n value(s) left behind by retired tweaks" }
+    $n
+}
 
 function Backup-Registry {
     param([string]$Label = "Backup")
@@ -570,10 +610,11 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Get Started & Copilot Sign-in Screens"
-        Desc     = "Offizielle Richtlinien aus Windows 11 26H2: Die 'Get Started'-App startet nicht mehr automatisch (ihre Hintergrundaufgaben laufen nicht mehr), und die Einrichtungs-Werbung fuer Microsoft 365 Copilot bei der Anmeldung entfaellt. Copilot selbst bleibt nutzbar. Aeltere Windows-Versionen ignorieren die Werte einfach."
+        Desc     = "Nur Windows Enterprise / Education: Die 'Get Started'-App startet nicht mehr automatisch, und die Einrichtungs-Werbung fuer Microsoft 365 Copilot bei der Anmeldung entfaellt (diese zweite Richtlinie gibt es bisher nur in Insider-Builds). Home und Pro werten beide Richtlinien laut Microsoft nicht aus -- dort aendert der Tweak nichts und der Status bleibt grau. Copilot selbst bleibt nutzbar."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
+            if (-not (Test-EnterpriseEdition)) { Write-Log "Get Started / Copilot sign-in screens skipped: these policies only work on Enterprise / Education"; return }
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableGetStarted /t REG_DWORD /d 1 /f | Out-Null
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableCopilotPinScreen /t REG_DWORD /d 1 /f | Out-Null
             Write-Log "Get Started and Microsoft 365 Copilot sign-in screens disabled (CloudContent policies)"
@@ -718,16 +759,6 @@ $AllTweaks = @(
             )
             foreach ($task in $tasks) { schtasks /Change /TN $task /Disable 2>$null }
             Write-Log "Telemetry tasks disabled"
-        }
-    },
-    [PSCustomObject]@{
-        Name     = "Disable Windows Settings Backup (Cloud)"
-        Desc     = "Windows sichert Einstellungen regelmaessig in dein Microsoft-Konto (seit 26H2 standardmaessig an). Offizielle Richtlinie 'Enable Windows Backup' = aus: es werden keine Einstellungen mehr in die Cloud gesichert. Dateien, OneDrive und lokale Wiederherstellungspunkte sind nicht betroffen."
-        Category = "Windows"
-        Group    = "Privacy"
-        Action   = {
-            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\SettingSync" /v EnableWindowsBackup /t REG_DWORD /d 0 /f | Out-Null
-            Write-Log "Windows settings backup to the cloud disabled (EnableWindowsBackup=0)"
         }
     },
 
@@ -1163,21 +1194,6 @@ $AllTweaks = @(
     },
 
     # == GAMING / GPU & DRIVER ============================================
-    [PSCustomObject]@{
-        Name     = "NVIDIA Low Latency Mode (Reflex)"
-        Desc     = "Aktiviert NVIDIA Ultra Low Latency Mode via Registry. Reduziert den Render-Queue auf 1 Frame - weniger Input-Lag. Nur wirksam auf NVIDIA GPUs. Wird automatisch uebersprungen wenn keine NVIDIA GPU erkannt."
-        Category = "Gaming"
-        Group    = "GPU & Driver"
-        Action   = {
-            if ($IsNVIDIA) {
-                $nvPath = "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak"
-                reg add $nvPath /v NVLatency /t REG_DWORD /d 1 /f | Out-Null
-                Write-Log "NVIDIA Low Latency Mode enabled"
-            } else {
-                Write-Log "NVIDIA Low Latency skipped (no NVIDIA GPU detected: $GPU)"
-            }
-        }
-    },
     [PSCustomObject]@{
         Name     = "Enable MSI Mode (Message Signaled Interrupts)"
         Desc     = "Aktiviert MSI-Modus (Message Signaled Interrupts) fuer die primaere GPU. Reduziert Interrupt-Latenz erheblich. Standard-Windows nutzt Line-Based Interrupts - MSI ist moderner und schneller. Reboot empfohlen."
@@ -1799,91 +1815,6 @@ $AllTweaks = @(
             Write-Log "Windows Sound Scheme disabled (.None, $n event sounds silenced)"
         }
     },
-    [PSCustomObject]@{
-        Name     = "Disable Spatial Sound (Windows Sonic)"
-        Desc     = "Deaktiviert Windows Sonic / Dolby Atmos Spatial Sound fuer alle Wiedergabegeraete. Spatial Sound erzeugt CPU-Overhead und kann bei stereo-only Headsets die Qualitaet verschlechtern."
-        Category = "Audio"
-        Group    = "Latency & Quality"
-        Action   = {
-            $renderPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
-            if (Test-Path $renderPath) {
-                Get-ChildItem $renderPath | ForEach-Object {
-                    Set-ItemProperty -Path $_.PSPath -Name "SpatialAudioMode" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-                }
-            }
-            Write-Log "Spatial Sound disabled for all render devices"
-        }
-    },
-    [PSCustomObject]@{
-        Name     = "Disable Audio Device Power Save"
-        Desc     = "Verhindert dass Windows Audio-Geraete (USB-Headset, Soundkarte) in den Energiesparmodus versetzt. Eliminiert das Knacken und kurze Aussetzen nach laengerer Stille wenn das Geraet wieder aufwacht."
-        Category = "Audio"
-        Group    = "Power"
-        Action   = {
-            reg add "HKLM\SYSTEM\CurrentControlSet\Services\usbaudio2" /v DisableSelectiveSuspend /t REG_DWORD /d 1 /f 2>$null | Out-Null
-            reg add "HKLM\SYSTEM\CurrentControlSet\Services\usbaudio" /v DisableSelectiveSuspend /t REG_DWORD /d 1 /f 2>$null | Out-Null
-            $audioClass = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e96c-e325-11ce-bfc1-08002be10318}"
-            if (Test-Path $audioClass) {
-                # device instances only (0000, 0001, ...), not Properties / Configuration
-                Get-ChildItem $audioClass -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' } | ForEach-Object {
-                    Set-ItemProperty -Path $_.PSPath -Name "PowerThrottlingOff" -Value 1 -Type DWord -ErrorAction SilentlyContinue
-                }
-            }
-            Write-Log "Audio Device Power Save disabled (USB + class registry)"
-        }
-    },
-
-    # == GPU TWEAKS (NVIDIA) ==============================================
-    [PSCustomObject]@{
-        Name     = "NVIDIA: Disable Threaded Optimization"
-        Desc     = "NVIDIA only: Deaktiviert Threaded Optimization (nvcpl). In manchen Spielen verursacht TO Mikroruckler weil der Treiber Drawcalls auf extra Threads verteilt. Deaktivieren kann Frametimes stabiler machen."
-        Category = "GPU Tweaks"
-        Group    = "NVIDIA"
-        Action   = {
-            if ($IsNVIDIA) {
-                reg add "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" /v ThreadedOptimization /t REG_DWORD /d 0 /f | Out-Null
-                Write-Log "NVIDIA: Threaded Optimization disabled"
-            } else { Write-Log "GPU Tweak skipped: no NVIDIA GPU detected ($GPU)" }
-        }
-    },
-    [PSCustomObject]@{
-        Name     = "NVIDIA: Max Pre-Rendered Frames = 1"
-        Desc     = "NVIDIA only: Setzt die maximale Anzahl vorberechneter Frames auf 1. Reduziert Input-Lag spuerbar. Standard ist 3  --  mit 1 Frame wartet die GPU weniger auf die CPU, Input-Reaktion wird direkter."
-        Category = "GPU Tweaks"
-        Group    = "NVIDIA"
-        Action   = {
-            if ($IsNVIDIA) {
-                reg add "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" /v PrerenderedFrames /t REG_DWORD /d 1 /f | Out-Null
-                Write-Log "NVIDIA: Max Pre-Rendered Frames set to 1"
-            } else { Write-Log "GPU Tweak skipped: no NVIDIA GPU detected ($GPU)" }
-        }
-    },
-    [PSCustomObject]@{
-        Name     = "NVIDIA: Shader Cache Size (Unlimited)"
-        Desc     = "NVIDIA only: Setzt die NVIDIA Shader Cache Groesse auf unbegrenzt (0xffffffff). Verhindert dass Shader neu kompiliert werden muessen  --  weniger Stutter beim ersten Spielen einer Map/Szene."
-        Category = "GPU Tweaks"
-        Group    = "NVIDIA"
-        Action   = {
-            if ($IsNVIDIA) {
-                reg add "HKCU\SOFTWARE\NVIDIA Corporation\Global\NVTweak" /v NvCplCacheShaderMaxSize /t REG_DWORD /d 0xffffffff /f | Out-Null
-                Write-Log "NVIDIA: Shader Cache set to unlimited"
-            } else { Write-Log "GPU Tweak skipped: no NVIDIA GPU detected ($GPU)" }
-        }
-    },
-    [PSCustomObject]@{
-        Name     = "NVIDIA: Power Management = Max Performance"
-        Desc     = "NVIDIA only: Setzt NVIDIA Energieverwaltung auf 'Maximale Leistung bevorzugen'. Verhindert GPU-Downclocking unter Last. Erhoehter Stromverbrauch  --  empfohlen fuer Desktop-Systeme."
-        Category = "GPU Tweaks"
-        Group    = "NVIDIA"
-        Action   = {
-            if ($IsNVIDIA) {
-                reg add "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" /v PowerMizerEnable /t REG_DWORD /d 1 /f | Out-Null
-                reg add "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" /v PowerMizerLevel /t REG_DWORD /d 1 /f | Out-Null
-                reg add "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" /v PowerMizerLevelAC /t REG_DWORD /d 1 /f | Out-Null
-                Write-Log "NVIDIA: Power Management set to Max Performance"
-            } else { Write-Log "GPU Tweak skipped: no NVIDIA GPU detected ($GPU)" }
-        }
-    },
 
     # == GPU TWEAKS (AMD) =================================================
     [PSCustomObject]@{
@@ -2209,10 +2140,6 @@ $RevertActions = @{
         foreach ($task in $tasks) { schtasks /Change /TN $task /Enable 2>$null }
         Write-Log "Revert: Telemetry scheduled tasks re-enabled"
     }
-    "Disable Windows Settings Backup (Cloud)" = {
-        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\SettingSync" /v EnableWindowsBackup /f 2>$null
-        Write-Log "Revert: Windows settings backup back to the Windows default (policy removed)"
-    }
 
     # == PERFORMANCE ======================================================
     "Ultimate Performance Plan" = {
@@ -2341,14 +2268,6 @@ $RevertActions = @{
     }
 
     # == GAMING  --  GPU & DRIVER ============================================
-    "NVIDIA Low Latency Mode (Reflex)" = {
-        if ($IsNVIDIA) {
-            reg delete "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" /v NVLatency /f 2>$null
-            Write-Log "Revert: NVIDIA Low Latency key removed (driver default)"
-        } else {
-            Write-Log "Revert: NVIDIA Low Latency skipped (no NVIDIA GPU)"
-        }
-    }
     "Enable MSI Mode (Message Signaled Interrupts)" = {
         $gpuDev = $Script:GpuObj
         if ($gpuDev) {
@@ -2625,57 +2544,6 @@ $RevertActions = @{
             }
         Write-Log "Revert: Sound Scheme set back to Windows Default ($n event sounds restored)"
     }
-    "Disable Spatial Sound (Windows Sonic)" = {
-        # The Apply writes SpatialAudioMode=0 on every render device, so Revert All
-        # has to remove it again -- otherwise the value stays behind and "restore
-        # Windows defaults" is not true for this tweak.
-        $renderPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
-        if (Test-Path $renderPath) {
-            Get-ChildItem $renderPath -ErrorAction SilentlyContinue | ForEach-Object {
-                Remove-ItemProperty -Path $_.PSPath -Name "SpatialAudioMode" -ErrorAction SilentlyContinue
-            }
-        }
-        Write-Log "Revert: Spatial Sound key removed (per-device default restored)"
-    }
-    "Disable Audio Device Power Save" = {
-        reg delete "HKLM\SYSTEM\CurrentControlSet\Services\usbaudio2" /v DisableSelectiveSuspend /f 2>$null
-        reg delete "HKLM\SYSTEM\CurrentControlSet\Services\usbaudio" /v DisableSelectiveSuspend /f 2>$null
-        $audioClass = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e96c-e325-11ce-bfc1-08002be10318}"
-        if (Test-Path $audioClass) {
-            Get-ChildItem $audioClass -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' } | ForEach-Object {
-                Remove-ItemProperty -Path $_.PSPath -Name "PowerThrottlingOff" -ErrorAction SilentlyContinue
-            }
-        }
-        Write-Log "Revert: Audio Device Power Save re-enabled"
-    }
-
-    # == GPU TWEAKS (NVIDIA) ==============================================
-    "NVIDIA: Disable Threaded Optimization" = {
-        if ($IsNVIDIA) {
-            reg delete "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" /v ThreadedOptimization /f 2>$null
-            Write-Log "Revert: NVIDIA Threaded Optimization key removed (driver default)"
-        }
-    }
-    "NVIDIA: Max Pre-Rendered Frames = 1" = {
-        if ($IsNVIDIA) {
-            reg delete "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" /v PrerenderedFrames /f 2>$null
-            Write-Log "Revert: NVIDIA Pre-Rendered Frames key removed (driver default)"
-        }
-    }
-    "NVIDIA: Shader Cache Size (Unlimited)" = {
-        if ($IsNVIDIA) {
-            reg delete "HKCU\SOFTWARE\NVIDIA Corporation\Global\NVTweak" /v NvCplCacheShaderMaxSize /f 2>$null
-            Write-Log "Revert: NVIDIA Shader Cache size key removed (driver default)"
-        }
-    }
-    "NVIDIA: Power Management = Max Performance" = {
-        if ($IsNVIDIA) {
-            reg delete "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" /v PowerMizerEnable /f 2>$null
-            reg delete "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" /v PowerMizerLevel /f 2>$null
-            reg delete "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" /v PowerMizerLevelAC /f 2>$null
-            Write-Log "Revert: NVIDIA Power Management keys removed (driver default)"
-        }
-    }
 
     # == GPU TWEAKS (AMD) =================================================
     "AMD: Disable ULPS (Ultra Low Power State)" = {
@@ -2768,7 +2636,7 @@ $CheckFunctions = @{
         $cdm = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
         ((Get-RegVal $cdm "SilentInstalledAppsEnabled") -eq 0) -and ((Get-RegVal $cdm "OemPreInstalledAppsEnabled") -eq 0) -and ((Get-RegVal $cdm "PreInstalledAppsEnabled") -eq 0)
     }
-    "Disable Get Started & Copilot Sign-in Screens" = { ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableGetStarted") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableCopilotPinScreen") -eq 1) }
+    "Disable Get Started & Copilot Sign-in Screens" = { if (-not (Test-EnterpriseEdition)) { return $null }; ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableGetStarted") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableCopilotPinScreen") -eq 1) }
 
     # PRIVACY
     "Disable Power Throttling" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling" "PowerThrottlingOff") -eq 1 }
@@ -2818,7 +2686,6 @@ $CheckFunctions = @{
     # anchor the pattern so a commented-out line doesn't count.
     "Block Telemetry Hosts (hosts file)" = { $h = Get-Content "$env:SystemRoot\System32\drivers\etc\hosts" -EA SilentlyContinue; if ($null -eq $h) { $null } else { [bool](@($h) -match '^\s*0\.0\.0\.0\s+telemetry\.microsoft\.com\s*$') } }
     "Disable Scheduled Telemetry Tasks"  = { (Get-TaskState "\Microsoft\Windows\Application Experience" "Microsoft Compatibility Appraiser") -eq "Disabled" }
-    "Disable Windows Settings Backup (Cloud)" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync" "EnableWindowsBackup") -eq 0 }
 
     # PERFORMANCE
     "Ultimate Performance Plan"          = { $g = Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "UltimatePerfGuid"; $a = (powercfg /getactivescheme 2>$null) -join " "; ($g -and $a -match [regex]::Escape($g)) -or ($a -match "Ultimate Performance|Ultimative Leistung") }
@@ -2851,7 +2718,6 @@ $CheckFunctions = @{
     "Disable Background App Throttling"  = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" "GlobalUserDisabled") -eq 1 }
 
     # GAMING GPU
-    "NVIDIA Low Latency Mode (Reflex)"   = { if (-not $IsNVIDIA) { return $null }; (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" "NVLatency") -eq 1 }
     "Enable MSI Mode (Message Signaled Interrupts)" = {
         $g = $Script:GpuObj
         if (-not $g) { return $null }
@@ -2970,23 +2836,6 @@ $CheckFunctions = @{
             $null -eq $loud
         } catch { $null }
     }
-    "Disable Spatial Sound (Windows Sonic)" = {
-        # Apply writes SpatialAudioMode=0 on every render device -- active only if
-        # every device has it (a device without the value is not covered yet)
-        $renderPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
-        if (-not (Test-Path $renderPath)) { return $null }
-        $devs = @(Get-ChildItem $renderPath -ErrorAction SilentlyContinue)
-        if (-not $devs.Count) { return $null }
-        $off = @($devs | Where-Object { (Get-RegVal $_.PSPath "SpatialAudioMode") -eq 0 })
-        $off.Count -eq $devs.Count
-    }
-    "Disable Audio Device Power Save"    = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Services\usbaudio2" "DisableSelectiveSuspend") -eq 1 }
-
-    # GPU NVIDIA
-    "NVIDIA: Disable Threaded Optimization" = { if (-not $IsNVIDIA) { return $null }; (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" "ThreadedOptimization") -eq 0 }
-    "NVIDIA: Max Pre-Rendered Frames = 1"   = { if (-not $IsNVIDIA) { return $null }; (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" "PrerenderedFrames") -eq 1 }
-    "NVIDIA: Shader Cache Size (Unlimited)" = { if (-not $IsNVIDIA) { return $null }; (Get-RegVal "HKCU:\SOFTWARE\NVIDIA Corporation\Global\NVTweak" "NvCplCacheShaderMaxSize") -ne $null }
-    "NVIDIA: Power Management = Max Performance" = { if (-not $IsNVIDIA) { return $null }; (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak" "PowerMizerLevel") -eq 1 }
 
     # GPU AMD
     "AMD: Disable ULPS (Ultra Low Power State)" = {
@@ -3106,7 +2955,7 @@ $Script:UIStrings = @{
                              DE = "Dienste gefunden  |  Gruen = sicher deaktivierbar  |  Rot = Systemdienst (Vorsicht)" }
     "svc_none_sel"      = @{ EN = "No services selected.";  DE = "Keine Dienste ausgewaehlt." }
     "svc_disabled_msg"  = @{ EN = "service(s) disabled. Full effect after restart.";  DE = "Dienst(e) deaktiviert. Wirkt nach Neustart vollstaendig." }
-    "svc_enabled_msg"   = @{ EN = "service(s) set to Manual. Service starts on demand.";  DE = "Dienst(e) auf Manual gesetzt. Dienst startet bei Bedarf." }
+    "svc_enabled_msg"   = @{ EN = "service(s) back to the start type they had before (Manual if unknown).";  DE = "Dienst(e) auf die vorherige Starteinstellung zurueckgesetzt (Manuell, wenn unbekannt)." }
 
     # Status words (managers)
     "word_enabled"      = @{ EN = "Enabled";      DE = "Aktiviert" }
@@ -3154,7 +3003,7 @@ $TweakDescEN = @{
     "Remove Windows Recall"                       = "Disables AND removes Windows Recall  --  the AI feature that takes screenshots of your activity. Uses Microsoft's official policies: snapshots off + Recall component removed from the system (existing snapshots are deleted). Restart required."
     "Remove Other Bloatware"                      = "Removes pre-installed apps: Candy Crush, TikTok, Disney+, Facebook, Solitaire, Clipchamp, ToDo, Paint3D and more."
     "Stop Auto-Installed Suggested Apps"          = "Stops Windows from silently installing suggested apps and games (e.g. Candy Crush, TikTok), including the ones planned by the PC maker and Microsoft. Works on every edition including Home and Pro. Apps already installed stay -- use 'Remove Other Bloatware' for those."
-    "Disable Get Started & Copilot Sign-in Screens" = "Official Windows 11 26H2 policies: the 'Get Started' app no longer launches automatically (its background tasks stop too), and the Microsoft 365 Copilot setup promotion at sign-in is gone. Copilot itself stays usable. Older Windows versions simply ignore the values."
+    "Disable Get Started & Copilot Sign-in Screens" = "Enterprise / Education only: the 'Get Started' app no longer launches automatically, and the Microsoft 365 Copilot setup promotion at sign-in is gone (that second policy only exists in Insider builds so far). According to Microsoft, Home and Pro ignore both policies -- there the tweak changes nothing and its status stays grey. Copilot itself stays usable."
     "Disable Telemetry & Data Collection"         = "Disables all Windows telemetry services (DiagTrack, dmwappushservice). Windows stops sending usage data to Microsoft."
     "Disable Activity History"                    = "Disables Windows Timeline/Activity History. Windows stops tracking which apps and files you open."
     "Disable Advertising ID"                      = "Disables the advertising ID Windows assigns each user. Apps can no longer track you across devices for targeted ads."
@@ -3164,7 +3013,6 @@ $TweakDescEN = @{
     "Disable Location Tracking"                   = "Disables the Windows location service system-wide. Apps can no longer request your location."
     "Block Telemetry Hosts (hosts file)"          = "Adds Microsoft telemetry servers to the Windows hosts file, blocking them even if telemetry services are still running. Note: Microsoft Defender reports such entries as 'HostsFileHijack' and may remove them again - the status shows it if that happens."
     "Disable Scheduled Telemetry Tasks"           = "Disables all scheduled Windows tasks that collect and send telemetry data (e.g. Compatibility Appraiser, CEIP)."
-    "Disable Windows Settings Backup (Cloud)"     = "Windows regularly backs up your settings to your Microsoft account (on by default since 26H2). Sets the official 'Enable Windows Backup' policy to off: no more settings are backed up to the cloud. Files, OneDrive and local restore points are not affected."
     "Ultimate Performance Plan"                   = "Activates the 'Ultimate Performance' power plan and sets it to always-on: Windows stops throttling CPU cores AND the PC no longer sleeps -- display, disks and system stay on (no timeout). Maximum performance at all times. Increases power consumption."
     "Disable HPET (High Precision Event Timer)"   = "Disables the High Precision Event Timer. Can reduce system latency and improve gaming performance on some systems with lower frame times."
     "Allow Global Timer Resolution (Windows 11)"                  = "Since Windows 10 2004 a raised timer resolution only applies to the program that requests it - on Windows 11 not even while that program is minimized. This restores the old system-wide behavior. It is the prerequisite for timer tools such as TimerResolution or ISLC; it does NOT set a resolution by itself - games request their ~1 ms anyway. Restart required."
@@ -3182,7 +3030,6 @@ $TweakDescEN = @{
     "Disable Fullscreen Optimizations"            = "Disables Windows Fullscreen Optimizations globally. Forces true exclusive fullscreen for lower input lag in games."
     "Disable Windows Update during Gaming"        = "Permanently disables Windows Update auto-download via registry. Windows Update won't interrupt or background-load during gaming."
     "Disable Background App Throttling"           = "Disables Windows CPU throttling for background processes. Prevents Windows from secretly reducing game CPU time when background tasks are active."
-    "NVIDIA Low Latency Mode (Reflex)"            = "NVIDIA only: Enables Ultra Low Latency Mode via registry. Reduces render queue to 1 frame for lower input lag. Skipped on AMD/Intel."
     "Enable MSI Mode (Message Signaled Interrupts)" = "Enables MSI mode for the primary GPU. Significantly reduces interrupt latency compared to Line-Based Interrupts. Reboot recommended."
     "Enable Hardware-Accelerated GPU Scheduling (HAGS)" = "Enables HAGS  --  Windows hands GPU scheduling directly to hardware instead of software. Reduces CPU overhead and slightly lowers input lag."
     "Clear Shader Cache"                          = "Clears the NVIDIA/AMD shader cache on disk. Forces fresh shader compilation on next game launch. Useful after driver updates or graphical glitches."
@@ -3226,12 +3073,6 @@ $TweakDescEN = @{
     "Optimize MMCSS Audio Profile"                = "Optimizes Multimedia Class Scheduler profile for audio. Sets Latency Sensitive with High scheduling priority. Reduces audio stuttering under CPU load."
     "Set Audio Service High Priority"             = "Increases system priority for audio processing. Sets SystemResponsiveness to 0. Prevents audio dropouts when other processes load the CPU."
     "Disable Windows Sound Scheme"                = "Disables all Windows system sounds (startup, errors, notifications). No unexpected sound interruptions during gaming or streaming."
-    "Disable Spatial Sound (Windows Sonic)"       = "Disables Windows Sonic and Dolby Atmos Spatial Sound for all playback devices. Spatial Sound adds CPU overhead and can degrade quality for stereo headsets."
-    "Disable Audio Device Power Save"             = "Prevents Windows from putting audio devices (USB headset, sound card) into power saving mode. Eliminates crackling and dropouts when the device wakes from sleep."
-    "NVIDIA: Disable Threaded Optimization"       = "NVIDIA only: Disables Threaded Optimization. Can reduce micro-stutters in games where driver thread distribution causes frame time issues."
-    "NVIDIA: Max Pre-Rendered Frames = 1"         = "NVIDIA only: Sets maximum pre-rendered frames to 1. Noticeably reduces input lag. Default is 3  --  with 1 frame the GPU waits less on the CPU."
-    "NVIDIA: Shader Cache Size (Unlimited)"       = "NVIDIA only: Sets NVIDIA Shader Cache to unlimited. Prevents shaders from being recompiled  --  less stutter on first visit to a map or scene."
-    "NVIDIA: Power Management = Max Performance"  = "NVIDIA only: Sets NVIDIA power management to 'Prefer Maximum Performance'. Prevents GPU downclocking under load. Increases power consumption."
     "AMD: Disable ULPS (Ultra Low Power State)"   = "AMD only: Disables Ultra Low Power State. ULPS puts inactive GPUs into extreme power saving and can cause stuttering on wake. Also useful for single GPU."
     "AMD: Shader Cache (Unlimited)"               = "AMD only: Maximizes AMD Shader Cache size. Prevents cache eviction and reduces shader recompilation. Reduces stutter in OpenGL/Vulkan titles."
     "AMD: Anti-Lag (Low Latency Mode)"            = "AMD only: Enables AMD Anti-Lag via registry. Reduces the gap between CPU input and GPU output  --  similar to NVIDIA Reflex. Effective on AMD RX 5000+."
@@ -4217,9 +4058,11 @@ foreach ($c in $Script:Cats) {
         $panel.Children.Add($n) | Out-Null; $Script:CatNotices += $n
     }
     if ($c.Key -eq 'GPU Tweaks') {
-        $n = if ($IsNVIDIA) { New-Banner "$GPU detected -- NVIDIA tweaks are available, AMD tweaks are greyed out." $Script:UI.NV 0xE7F4 }
-             elseif ($IsAMD) { New-Banner "$GPU detected -- AMD tweaks are available, NVIDIA tweaks are greyed out." $Script:UI.RED 0xE7F4 }
-             else { New-Banner "$GPU detected -- no brand-specific GPU tweaks for this card." $Script:UI.AMBER 0xE7F4 }
+        # NVIDIA keeps its driver settings in its own profile database (NVIDIA app / Control
+        # Panel), not in registry values a script could set -- so this tab is AMD only.
+        $n = if ($IsAMD) { New-Banner "$GPU detected -- the AMD driver tweaks below are available." $Script:UI.RED 0xE7F4 }
+             elseif ($IsNVIDIA) { New-Banner "$GPU detected -- these tweaks are for AMD cards only. NVIDIA keeps its driver settings in the NVIDIA app, not in the registry." $Script:UI.NV 0xE7F4 }
+             else { New-Banner "$GPU detected -- these tweaks are for AMD cards only." $Script:UI.AMBER 0xE7F4 }
         $panel.Children.Add($n) | Out-Null; $Script:CatNotices += $n
     }
     if ($c.Key -eq 'Network') {
@@ -4259,6 +4102,56 @@ $SearchBox.Add_TextChanged({ Apply-TweakFilter })
 # Stored as plain text, one tweak name per line (tweak names never contain
 # newlines) -- avoids PowerShell 5.1's ConvertTo-Json single/nested-array quirks.
 $Script:BaselineFile = "$env:LOCALAPPDATA\GameOptimizerPro\baseline.txt"
+
+# Services Manager: the start type a service had before "Disable" here, so "Enable" brings
+# back exactly that instead of always "Manual" (Print Spooler & co. start automatically by
+# default). One line per service: name=auto|delayed-auto|demand
+$Script:SvcOriginalFile = "$env:LOCALAPPDATA\GameOptimizerPro\services_original.txt"
+
+# Snapshot & compare is kept on disk, so a comparison survives a restart -- e.g. a snapshot
+# before a Windows update, compared after it. Line 1 = time, then one name=T|F|N per tweak.
+$Script:SnapshotFile = "$env:LOCALAPPDATA\GameOptimizerPro\snapshot.txt"
+function Save-Snapshot($Snap) {
+    try {
+        New-Item -ItemType Directory -Path (Split-Path $Script:SnapshotFile) -Force -ErrorAction Stop | Out-Null
+        $lines = @("# " + $Snap.Time.ToString('yyyy-MM-dd HH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)) +
+                 @($Snap.States.Keys | Sort-Object | ForEach-Object { $v = $Snap.States[$_]; "$_=" + $(if ($v -eq $true) { 'T' } elseif ($v -eq $false) { 'F' } else { 'N' }) })
+        $lines | Set-Content $Script:SnapshotFile -Encoding UTF8 -ErrorAction Stop
+        $true
+    } catch { Write-Log "Snapshot could not be saved: $_"; $false }
+}
+function Read-Snapshot {
+    try {
+        $lines = @(Get-Content $Script:SnapshotFile -ErrorAction Stop)
+        if (-not $lines.Count -or $lines[0] -notmatch '^# (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)$') { return $null }
+        $time = [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd HH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)
+        $states = @{}
+        foreach ($l in ($lines | Select-Object -Skip 1)) {
+            if ($l -match '^(.+)=([TFN])$') { $states[$Matches[1]] = $(if ($Matches[2] -eq 'T') { $true } elseif ($Matches[2] -eq 'F') { $false } else { $null }) }
+        }
+        @{ Time = $time; States = $states }
+    } catch { $null }
+}
+function Get-SvcStartMode([string]$Name) {
+    $k = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
+    switch ("$(Get-RegVal $k 'Start')") {
+        '2'   { if ((Get-RegVal $k 'DelayedAutostart') -eq 1) { 'delayed-auto' } else { 'auto' } }
+        '3'   { 'demand' }
+        '4'   { 'disabled' }
+        default { $null }
+    }
+}
+function Read-SvcOriginal {
+    $m = @{}
+    try { foreach ($l in @(Get-Content $Script:SvcOriginalFile -ErrorAction Stop)) { if ($l -match '^([^=]+)=(auto|delayed-auto|demand)$') { $m[$Matches[1]] = $Matches[2] } } } catch { }
+    $m
+}
+function Save-SvcOriginal($Map) {
+    try {
+        New-Item -ItemType Directory -Path (Split-Path $Script:SvcOriginalFile) -Force -ErrorAction Stop | Out-Null
+        @($Map.Keys | Sort-Object | ForEach-Object { "$_=$($Map[$_])" }) | Set-Content $Script:SvcOriginalFile -Encoding ASCII -ErrorAction Stop
+    } catch { Write-Log "Services Manager: original start types could not be saved -- $_" }
+}
 
 function Save-Baseline {
     # -FromState: take the results that were just read for every tweak
@@ -4836,7 +4729,7 @@ function Render-BiosPage {
     $filt.Children.Add((New-Text 'Show:' 12 $U.DIM 'Normal' -Margin 0, 0, 8, 0)) | Out-Null
     foreach ($c in $Script:BiosCats) {
         $ck = $c.Key
-        $filt.Children.Add((New-ToggleChip $c.Label $c.Color $B.Filters[$ck] { $Script:Bios.Filters[$ck] = -not $Script:Bios.Filters[$ck]; Render-BiosPage }.GetNewClosure())) | Out-Null
+        $filt.Children.Add((New-ToggleChip $c.Label $c.Color $B.Filters[$ck] { $B.Filters[$ck] = -not $B.Filters[$ck]; Render-BiosPage }.GetNewClosure())) | Out-Null
     }
     $sep = New-Object Windows.Controls.Border; $sep.Width = 1; $sep.Height = 18; $sep.Background = Brush $U.BORDER; $sep.Margin = Th 4, 0, 10, 0
     $filt.Children.Add($sep) | Out-Null
@@ -5104,7 +4997,7 @@ function Build-DashboardPage {
     $btnCompare  = New-Btn 'Compare' $U.CARD2 $U.TEXT
     $resultPanel = New-VStack @() @(0, 10, 0, 0)
     $snapBody = New-VStack @((New-CardTitle 'Snapshot & compare' $U.VIOLET),
-        (New-Text 'Take a snapshot, apply or revert tweaks, then compare: every tweak whose status changed is listed.' 12.5 $U.DIM 'Normal' -Wrap -Margin 0, 0, 0, 12),
+        (New-Text 'Take a snapshot, apply or revert tweaks (or install a Windows update), then compare: every tweak whose status changed is listed. The snapshot is kept after a restart.' 12.5 $U.DIM 'Normal' -Wrap -Margin 0, 0, 0, 12),
         (New-HStack @($btnSnapshot, $btnCompare)), $resultPanel)
     $snapCard = New-Card $snapBody @(0, 0, 7, 14); $row2.Children.Add($snapCard) | Out-Null
 
@@ -5117,24 +5010,27 @@ function Build-DashboardPage {
         $gr
     }
     $safeBody = New-VStack @((New-CardTitle 'Safety net' $U.GREEN),
-        (& $safeRow 0xEA18 $U.GREEN 'Restore point before every Apply' (New-Text 'on' 12.5 $U.TEXT 'SemiBold')),
+        (& $safeRow 0xEA18 $U.GREEN 'Restore point before app removals' (New-Text 'on' 12.5 $U.TEXT 'SemiBold')),
         (& $safeRow 0xE81C $U.VIOLET 'Last registry backup' $D.SafeBackup),
         (& $safeRow 0xE895 $U.CYAN 'Drift baseline' $D.SafeBase))
     $safeCard = New-Card $safeBody @(7, 0, 0, 14); [Windows.Controls.Grid]::SetColumn($safeCard, 1); $row2.Children.Add($safeCard) | Out-Null
     $DashboardPanel.Children.Add($row2) | Out-Null
 
-    $snapState = @{ Snap = $null }
+    $snapState = @{ Snap = (Read-Snapshot) }
+    if ($snapState.Snap) { $resultPanel.Children.Add((New-Text "Saved snapshot from $($snapState.Snap.Time.ToString('dd.MM.yyyy HH:mm')) -- click Compare." 12 $U.DIM)) | Out-Null }
     $btnSnapshot.Add_Click({
         $states = @{}
         foreach ($tweak in $AllTweaks) { if ($CheckFunctions.ContainsKey($tweak.Name)) { try { $states[$tweak.Name] = & $CheckFunctions[$tweak.Name] } catch { $states[$tweak.Name] = $null } } }
         $snapState.Snap = @{ Time = Get-Date; States = $states }
+        $kept = Save-Snapshot $snapState.Snap
         $resultPanel.Children.Clear()
-        $resultPanel.Children.Add((New-Text "Snapshot taken at $((Get-Date).ToString('HH:mm:ss')) -- $($states.Count) tweaks recorded." 12 $Script:UI.GREEN)) | Out-Null
+        $resultPanel.Children.Add((New-Text ("Snapshot taken at $((Get-Date).ToString('HH:mm:ss')) -- $($states.Count) tweaks recorded" + $(if ($kept) { ", kept after a restart." } else { " (could not be saved -- only until the app closes)." })) 12 $U.GREEN -Wrap)) | Out-Null
     }.GetNewClosure())
     $btnCompare.Add_Click({
         $resultPanel.Children.Clear()
-        if (-not $snapState.Snap) { $resultPanel.Children.Add((New-Text "No snapshot yet -- click 'Take snapshot' first." 12 $Script:UI.AMBER)) | Out-Null; return }
-        $resultPanel.Children.Add((New-Text "Changes since $($snapState.Snap.Time.ToString('HH:mm:ss')):" 12 $Script:UI.TEXT 'SemiBold' -Margin 0, 0, 0, 4)) | Out-Null
+        if (-not $snapState.Snap) { $resultPanel.Children.Add((New-Text "No snapshot yet -- click 'Take snapshot' first." 12 $U.AMBER)) | Out-Null; return }
+        $since = if ($snapState.Snap.Time.Date -eq (Get-Date).Date) { $snapState.Snap.Time.ToString('HH:mm:ss') } else { $snapState.Snap.Time.ToString('dd.MM.yyyy HH:mm') }
+        $resultPanel.Children.Add((New-Text "Changes since $($since):" 12 $U.TEXT 'SemiBold' -Margin 0, 0, 0, 4)) | Out-Null
         $changeCount = 0
         foreach ($tweak in $AllTweaks) {
             if (-not $CheckFunctions.ContainsKey($tweak.Name) -or -not $snapState.Snap.States.ContainsKey($tweak.Name)) { continue }
@@ -5145,10 +5041,10 @@ function Build-DashboardPage {
                 # No hashtable lookup with a $null key here (illegal in a PowerShell hash literal)
                 $lblBefore = if ($null -eq $before) { "unknown" } elseif ($before -eq $true) { "active" } else { "inactive" }
                 $lblAfter  = if ($null -eq $after)  { "unknown" } elseif ($after  -eq $true) { "active" } else { "inactive" }
-                $resultPanel.Children.Add((New-Text "$($tweak.Name): $lblBefore -> $lblAfter" 12 $Script:UI.TEXT2 -Margin 0, 1, 0, 1)) | Out-Null
+                $resultPanel.Children.Add((New-Text "$($tweak.Name): $lblBefore -> $lblAfter" 12 $U.TEXT2 -Margin 0, 1, 0, 1)) | Out-Null
             }
         }
-        if ($changeCount -eq 0) { $resultPanel.Children.Add((New-Text "No changes detected since the snapshot." 12 $Script:UI.DIM)) | Out-Null }
+        if ($changeCount -eq 0) { $resultPanel.Children.Add((New-Text "No changes detected since the snapshot." 12 $U.DIM)) | Out-Null }
     }.GetNewClosure())
 
     # ---- live monitor sampler: CIM perf classes on a BACKGROUND runspace; the UI timer only reads ----
@@ -5230,7 +5126,7 @@ function Build-PresetsPage {
     $PresetsPanel.Children.Clear()
     $vb = New-Btn 'Verify status' $U.CARD2 $U.TEXT 0xE72C -Margin 0, 0, 0, 0
     $vb.Add_Click({ Invoke-Verify })
-    $PresetsPanel.Children.Add((New-PageHeader 'Presets' 'One click ticks a set of tweaks -- nothing changes until you press Apply selected (a restore point and a registry backup come first).' $U.AMBER @($vb))) | Out-Null
+    $PresetsPanel.Children.Add((New-PageHeader 'Presets' 'One click ticks a set of tweaks -- nothing changes until you press Apply selected (a registry backup comes first, plus a restore point if apps are removed).' $U.AMBER @($vb))) | Out-Null
 
     $defs = @(
         @{ Name = 'Minimal';    Color = $U.GREEN; Fg = '#ffffff'; Desc = 'Safe basics only: privacy, gaming priority, network latency. No app removal, nothing you would miss. Ideal first run.' }
@@ -5355,7 +5251,7 @@ function Build-BackupsPage {
         (New-Text $LogFile 11.5 $U.MUTED 'Normal' -Wrap -Mono -Margin 0, 8, 0, 0)) $b2)
     $b3 = New-Btn 'Open System Restore' $U.CARD2 $U.TEXT 0xE7A7
     $b3.Add_Click({ try { Start-Process "rstrui.exe" } catch { [System.Windows.MessageBox]::Show("Could not open System Restore (rstrui.exe). Run it manually: Start -> type rstrui", "Error") | Out-Null } })
-    Add-Grid2 $grid (& $mk 'System Restore' $U.GREEN 'A restore point is created before every Apply (the tool lifts the 24-hour limit Windows normally applies). System Restore is also the only way to bring back removed apps.' @() $b3)
+    Add-Grid2 $grid (& $mk 'System Restore' $U.GREEN 'A restore point is created before every Apply that removes apps -- System Restore is the only way to bring them back. Everything else has its own revert and is in the registry backup.' @() $b3)
     $b4 = New-Btn 'Revert all ...' $U.AMBER '#1a1205' 0xE7A7 -Bold
     $b4.Add_Click({ $BtnRevertAll.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Button]::ClickEvent))) })
     Add-Grid2 $grid (& $mk 'Revert all' $U.AMBER 'Sets every registry, service and network change back to the Windows defaults -- no reboot needed. Removed apps need System Restore.' @() $b4)
@@ -5397,10 +5293,9 @@ $Script:PresetBalanced = $Script:PresetMinimal + @(
     "Disable Prefetch & Superfetch","Optimize Visual Effects (Performance Mode)","Disable Bing in Windows Search",
     "Disable Store Recommended Search Results","Disable File Explorer Automatic Folder Discovery",
     "Disable Xbox Game Bar","Disable Windows Update during Gaming","Disable Background App Throttling",
-    "NVIDIA Low Latency Mode (Reflex)","Enable MSI Mode (Message Signaled Interrupts)","Enable Hardware-Accelerated GPU Scheduling (HAGS)","Increase GPU Timeout Tolerance (TDR)",
-    "NVIDIA: Disable Threaded Optimization","NVIDIA: Max Pre-Rendered Frames = 1","NVIDIA: Shader Cache Size (Unlimited)","NVIDIA: Power Management = Max Performance",
+    "Enable MSI Mode (Message Signaled Interrupts)","Enable Hardware-Accelerated GPU Scheduling (HAGS)","Increase GPU Timeout Tolerance (TDR)",
     "AMD: Disable ULPS (Ultra Low Power State)","AMD: Shader Cache (Unlimited)","AMD: Anti-Lag (Low Latency Mode)",
-    "Disable Audio Enhancements","Optimize MMCSS Audio Profile","Set Audio Service High Priority","Disable Windows Sound Scheme","Disable Spatial Sound (Windows Sonic)","Disable Audio Device Power Save",
+    "Disable Audio Enhancements","Optimize MMCSS Audio Profile","Set Audio Service High Priority","Disable Windows Sound Scheme",
     "Disable Large Send Offload (LSO)","Optimize TCP Settings (ECN/SACK/Timestamps)","Disable TCP Auto-Tuning","Disable Network Adapter Power Saving","Disable Energy-Efficient Ethernet",
     "Disable Sticky Keys","Enable Dark Mode","Disable Transparency Effects",
     "Restore Classic Right-Click Menu","Left-Align Taskbar","Disable Widgets","Remove Chat Icon from Taskbar","Disable Recommended in Start Menu","Enable End Task in Taskbar","Disable Snap Layout Hover Menu",
@@ -5410,7 +5305,6 @@ $Script:PresetBalanced = $Script:PresetMinimal + @(
 )
 $Script:PresetAggressive = $Script:PresetBalanced + @(
     "Remove Cortana","Remove Microsoft Teams (Personal)","Remove OneDrive",
-    "Disable Windows Settings Backup (Cloud)",
     "Disable Windows Search Indexing","Process Count Reduction (Svchost)","Disable Interrupt Moderation",
     "Disable Memory Compression","Disable Write-Cache Buffer Flushing","Disable Hibernation","Clear PageFile on Shutdown",
     "Disable Reserved Storage","Disable Storage Sense","Disable Lock Screen","Enable Start Menu Previous Layout",
@@ -5471,6 +5365,12 @@ function Set-Busy([bool]$On) {
 # runspace while the window keeps repainting, so Windows never marks the app as
 # "Not responding". Throws, like Checkpoint-Computer, if no point could be created.
 function New-RestorePoint([string]$Description) {
+    # Windows creates at most one point per 24 h. Lift that limit for this one call and
+    # put the old setting back afterwards; 0 is what older versions left behind for good,
+    # so it is treated like "not set".
+    $srKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore"
+    $oldFreq = Get-RegVal $srKey "SystemRestorePointCreationFrequency"
+    Set-ItemProperty -Path $srKey -Name "SystemRestorePointCreationFrequency" -Value 0 -Type DWord -ErrorAction SilentlyContinue
     $ps = [powershell]::Create()
     try {
         [void]$ps.AddScript({ param($d) Checkpoint-Computer -Description $d -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop }).AddArgument($Description)
@@ -5482,7 +5382,11 @@ function New-RestorePoint([string]$Description) {
         }
         $null = $ps.EndInvoke($handle)
         if ($ps.Streams.Error.Count) { throw $ps.Streams.Error[0] }
-    } finally { $ps.Dispose() }
+    } finally {
+        $ps.Dispose()
+        if ($null -eq $oldFreq -or $oldFreq -eq 0) { Remove-ItemProperty -Path $srKey -Name "SystemRestorePointCreationFrequency" -ErrorAction SilentlyContinue }
+        else { Set-ItemProperty -Path $srKey -Name "SystemRestorePointCreationFrequency" -Value $oldFreq -Type DWord -ErrorAction SilentlyContinue }
+    }
 }
 # Re-reads every tweak's status (dots, counts, $Script:CheckRaw) with a visible progress
 function Update-AllDots([string]$Label) {
@@ -5564,8 +5468,13 @@ $BtnApply.Add_Click({
         if ($pwrWarn -ne [System.Windows.MessageBoxResult]::Yes) { return }
     }
 
+    # A restore point only when apps are removed: they come back through System Restore
+    # alone. Everything else has its own revert plus the registry backup, and
+    # Checkpoint-Computer costs 10-60 s on every Apply.
+    $removals = @($selected | Where-Object { $Script:AppRemovals -contains $_.Name })
+    $safetyNote = if ($removals.Count) { "A registry backup and a system restore point are created first ($($removals.Count) app removal(s) selected -- removed apps only come back through System Restore)." } else { "A registry backup is saved first." }
     $confirm = [System.Windows.MessageBox]::Show(
-        "Apply $($selected.Count) selected tweak(s)?`n`nA system restore point will be created first.",
+        "Apply $($selected.Count) selected tweak(s)?`n`n$safetyNote",
         "GameOptimizerPro -- Confirm",
         [System.Windows.MessageBoxButton]::YesNo,
         [System.Windows.MessageBoxImage]::Question
@@ -5574,18 +5483,19 @@ $BtnApply.Add_Click({
 
     Set-Busy $true
     try {
-    # Create Restore Point
-    Set-Status "Creating restore point..."
-    # Lift the default 24h creation-frequency limit so the point isn't silently
-    # skipped when the user runs the tool twice on the same day.
-    reg add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v SystemRestorePointCreationFrequency /t REG_DWORD /d 0 /f 2>$null | Out-Null
-    try {
-        New-RestorePoint "GameOptimizerPro Backup"
-        Write-Log "Restore point created"
-        Set-Status "Restore point created. Backing up registry..."
-    } catch {
-        Write-Log "Restore point skipped (VSS error or System Protection disabled): $_"
-        Set-Status "Restore point skipped. Backing up registry..."
+    if ($removals.Count) {
+        Set-Status "Creating restore point..."
+        try {
+            New-RestorePoint "GameOptimizerPro Backup"
+            Write-Log "Restore point created (app removals selected)"
+            Set-Status "Restore point created. Backing up registry..."
+        } catch {
+            Write-Log "Restore point skipped (VSS error or System Protection disabled): $_"
+            Set-Status "Restore point skipped. Backing up registry..."
+        }
+    } else {
+        Write-Log "No app removals selected -- registry backup only, no restore point"
+        Set-Status "Backing up registry..."
     }
 
     # Registry backup (independent of restore-point success -- always runs)
@@ -5646,14 +5556,14 @@ $BtnRevertAll.Add_Click({
     $choice = [System.Windows.MessageBox]::Show(
         "REVERT ALL  --  Undo GameOptimizerPro Changes`n`n" +
         "Choose how to revert:`n`n" +
-        "  YES  ->  System Restore (Recommended)`n" +
-        "           - Restores EVERYTHING including removed apps`n" +
-        "           - Opens the Windows System Restore wizard`n" +
-        "           - Your PC will reboot (~5-10 min)`n`n" +
-        "  NO   ->  Quick Registry Reset`n" +
-        "           - Resets all registry & service changes`n" +
+        "  YES  ->  System Restore`n" +
+        "           - Only needed to bring back removed apps`n" +
+        "           - Point 'GameOptimizerPro Backup' (made before app removals)`n" +
+        "           - Opens the Windows wizard, your PC reboots (~5-10 min)`n`n" +
+        "  NO   ->  Quick Reset (Recommended)`n" +
+        "           - Every tweak back to the Windows default`n" +
         "           - No reboot required`n" +
-        "           - Removed apps (OneDrive, Cortana etc.) need System Restore`n`n" +
+        "           - Removed apps (OneDrive, Cortana etc.) stay removed`n`n" +
         "  CANCEL  ->  Do nothing",
         "GameOptimizerPro  --  Revert All",
         [System.Windows.MessageBoxButton]::YesNoCancel,
@@ -5692,7 +5602,7 @@ $BtnRevertAll.Add_Click({
         "to Windows defaults.`n`n" +
         "NOTE: Removed apps (Cortana, Xbox, Teams, OneDrive, Bloatware)`n" +
         "cannot be restored this way  --  use System Restore for those.`n`n" +
-        "A new restore point will be created first. Continue?",
+        "A registry backup is saved first. Continue?",
         "GameOptimizerPro  --  Confirm Quick Reset",
         [System.Windows.MessageBoxButton]::YesNo,
         [System.Windows.MessageBoxImage]::Question
@@ -5701,19 +5611,9 @@ $BtnRevertAll.Add_Click({
 
     Set-Busy $true
     try {
-    # Restore point before reverting
-    Set-Status "Creating safety restore point..."
-    reg add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v SystemRestorePointCreationFrequency /t REG_DWORD /d 0 /f 2>$null | Out-Null
-    try {
-        New-RestorePoint "GameOptimizerPro Pre-Revert Backup"
-        Write-Log "Revert restore point created"
-        Set-Status "Safety restore point created. Backing up registry..."
-    } catch {
-        Write-Log "Revert restore point skipped (VSS error or System Protection disabled): $_"
-        Set-Status "Restore point skipped. Backing up registry..."
-    }
-
-    # Registry backup (independent of restore-point success -- always runs)
+    # No restore point here: reverting removes nothing, and every value it touches is in
+    # the registry backup below.
+    Set-Status "Backing up registry..."
     $Script:LastBackupDir = Backup-Registry -Label "PreRevert"
     Set-Status "Registry backup saved. Starting revert..."
 
@@ -5738,6 +5638,7 @@ $BtnRevertAll.Add_Click({
             $appWarnings++
         }
     }
+    try { $null = Remove-RetiredTweakValues } catch { Write-Log "Retired tweak values could not be removed: $_" }
 
     # Drop the baseline snapshot. It lists the tweaks that were active at the last
     # Apply; keeping it after a deliberate Revert All would make the drift check on
@@ -6569,12 +6470,16 @@ $BtnServices.Add_Click({
                 [System.Windows.MessageBoxImage]::Warning)
             if ($r -ne [System.Windows.MessageBoxResult]::Yes) { return }
         }
+        $orig = Read-SvcOriginal
         $count = 0
         foreach ($entry in $sel) {
             $name = $entry.Key
+            $mode = Get-SvcStartMode $name
             try {
                 Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
                 Set-Service  -Name $name -StartupType Disabled -ErrorAction Stop
+                # the first Disable wins -- disabling again must not record "disabled"
+                if ($mode -and $mode -ne 'disabled' -and -not $orig.ContainsKey($name)) { $orig[$name] = $mode }
                 $entry.Value.StatusTb.Text       = Get-UIString "word_stopped"
                 $entry.Value.StatusTb.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(130,130,130))
                 $entry.Value.StartTb.Text        = Get-UIString "word_disabled"
@@ -6586,26 +6491,37 @@ $BtnServices.Add_Click({
                 Write-Log "Services Manager: Failed to disable '$name' -- $_"
             }
         }
+        Save-SvcOriginal $orig
         $svcStatus.Text = "$count " + (Get-UIString "svc_disabled_msg")
     })
 
     $svcEnable.Add_Click({
         $sel = $svcCbMap.GetEnumerator() | Where-Object { $_.Value.Cb.IsChecked -eq $true }
         if (-not $sel) { $svcStatus.Text = Get-UIString "svc_none_sel"; return }
+        $orig = Read-SvcOriginal
         $count = 0
         foreach ($entry in $sel) {
             $name = $entry.Key
+            # back to the start type it had before "Disable" here -- Manual if unknown
+            $mode = if ($orig.ContainsKey($name)) { $orig[$name] } else { 'demand' }
             try {
-                Set-Service -Name $name -StartupType Manual -ErrorAction Stop
-                $entry.Value.StartTb.Text        = Get-UIString "word_manual"
+                $out = sc.exe config $name start= $mode 2>&1
+                if ($LASTEXITCODE -ne 0) { throw "sc.exe config: $($out -join ' ')" }
+                $orig.Remove($name)
+                if ($mode -ne 'demand') {
+                    Start-Service -Name $name -ErrorAction SilentlyContinue
+                    if ((Get-Service -Name $name -ErrorAction SilentlyContinue).Status -eq 'Running') { $entry.Value.StatusTb.Text = Get-UIString "word_running" }
+                }
+                $entry.Value.StartTb.Text        = Get-UIString $(if ($mode -eq 'demand') { "word_manual" } else { "word_automatic" })
                 $entry.Value.StartTb.Foreground  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(170,170,170))
                 $entry.Value.Cb.IsChecked        = $false
-                Write-Log "Services Manager: Enabled '$name' (set to Manual)"
+                Write-Log "Services Manager: Enabled '$name' (start type: $mode)"
                 $count++
             } catch {
                 Write-Log "Services Manager: Failed to enable '$name' -- $_"
             }
         }
+        Save-SvcOriginal $orig
         $svcStatus.Text = "$count " + (Get-UIString "svc_enabled_msg")
     })
 
