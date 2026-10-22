@@ -4,6 +4,31 @@ All notable changes to GameOptimizerPro (the PowerShell edition), newest first. 
 
 ---
 
+## [1.4] — 2026-10-22
+
+Two more external reviews, checked against the code — what holds is fixed.
+
+- **"All" ticks only what you see and can use** — the open tab (or the search hits), never greyed-out tweaks (Windows 11 only, AMD only, Enterprise only). *Apply* never runs a greyed-out tweak, and the two DNS tweaks are never ticked together.
+- **Apply says what didn't take** — failed tweaks and tweaks Windows still reports as not in effect (a policy, antivirus or a driver without that option) are listed in the result and the log, instead of "applied successfully". The HPET tweak notices when bcdedit is refused (Secure Boot / BitLocker policy).
+- **Revert all leaves your own DNS alone** — only adapters that use Cloudflare / Google go back to automatic; a Pi-hole, router or company DNS stays. Windows 11 reverts no longer run on Windows 10, and *Disable Bing* reverts to "not set" instead of writing 1.
+- **Remove Other Bloatware** — the status checks the whole list it removes (Windows 11 ships no Candy Crush, so an untouched PC used to show green).
+- **Disable Location Tracking** also stops the running service, and the status check covers it.
+- **Get Started & Copilot sign-in screens** — greyed out on Home / Pro (*Enterprise only*), so presets skip it there.
+- **Remove Windows Recall** counts as a removal: a restore point first, the *removes app* badge. The confirm dialog names every removal.
+- The log retries a locked file before dropping a line; registry backup files can't overwrite each other.
+
+<details>
+<summary><b>Development log — 1.4</b></summary>
+
+- **Two reviews** — the first with nine general points, the second fact-checked it and added eight findings. Confirmed and fixed: exit codes of external tools not checked, "All" ticking greyed-out tweaks, the DNS revert, Windows 11 reverts on Windows 10, the Bing revert, the bloatware check, the location service, Get Started selectable on Home / Pro, Recall without a restore point, leftover NVIDIA code.
+- **Not changed, with reasons** — powercfg output is read by its hex values, not its labels (labels are translated, label parsing would break on every non-English Windows), and `/SETACTIVE SCHEME_CURRENT` is what makes a change take effect without a restart; `Get-WmiObject` works in Windows PowerShell 5.1, which the tool is built for; the retired-value cleanup is meant to remove exactly what older versions wrote; the installer already stops with an error message when the launch fails; *Revert all* sets personal settings such as dark mode back to the Windows default by design — its dialog now says so.
+- **Found while testing** — a merged line in the test harness had switched off restoring the environment variables after a synthetic run.
+- **Tests** — six new scenarios (Pi-hole DNS kept, bcdedit refused, bloatware on Windows 11, location service, Bing revert) and "All" in the real window; the real system unchanged.
+
+</details>
+
+---
+
 ## [1.3] — 2026-10-22
 
 An honesty pass: tweaks that never did anything are gone, the safety net is lighter, and two dashboard tools work properly again.

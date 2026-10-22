@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.3
+    1.4
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.3"
+$Script:AppVersion = "1.4"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -184,6 +184,23 @@ function Get-NicParams([string]$Setting) {
     }
 }
 
+# DNS revert: back to automatic (DHCP) only on adapters that use this provider's servers,
+# so a DNS set up by the user (Pi-hole, router, company network) is left alone.
+function Reset-ProviderDns([string]$Provider, [string[]]$Servers) {
+    $n = 0
+    foreach ($a in @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" })) {
+        $cur = @(Get-DnsClientServerAddress -InterfaceIndex $a.InterfaceIndex -ErrorAction SilentlyContinue | ForEach-Object { $_.ServerAddresses })
+        if (-not @($cur | Where-Object { $Servers -contains $_ }).Count) { continue }
+        Set-DnsClientServerAddress -InterfaceIndex $a.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+        $n++
+    }
+    if ($n) {
+        ipconfig /renew 2>$null | Out-Null   # pick up the router's DNS again
+        Clear-DnsClientCache -ErrorAction SilentlyContinue
+    }
+    Write-Log "Revert: $Provider DNS reset to automatic on $n adapter(s) -- other DNS settings untouched"
+}
+
 # Connected adapters the network status checks look at. Physical ones only when there
 # are any: Hyper-V / WSL (vEthernet), VPN and other virtual adapters can be listed
 # first and would otherwise decide the status. Falls back to every connected adapter.
@@ -191,6 +208,20 @@ function Get-UpAdapters {
     $up = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" })
     $phys = @($up | Where-Object { $_.HardwareInterface })
     if ($phys.Count) { $phys } else { $up }
+}
+
+# The apps "Remove Other Bloatware" removes -- the status check looks for the same list,
+# so a PC that never had Candy Crush (Windows 11 doesn't ship it) isn't reported as done.
+function Get-BloatPatterns {
+    @(
+        "*king.com*", "*Facebook*", "*Spotify*", "*Disney*", "*TikTok*", "*Instagram*",
+        "*Netflix*", "*Twitter*", "*BubbleWitch*", "*MarchofEmpires*", "*CandyCrush*",
+        "*Microsoft.News*", "*Microsoft.BingWeather*", "*Microsoft.BingNews*",
+        "*Microsoft.MicrosoftSolitaireCollection*", "*Microsoft.ZuneMusic*",
+        "*Microsoft.ZuneVideo*", "*Microsoft.WindowsFeedbackHub*", "*Microsoft.Todos*",
+        "*Microsoft.Paint3D*", "*Microsoft.MixedReality*", "*Clipchamp*",
+        "*Microsoft.GetHelp*", "*Microsoft.Getstarted*", "*Microsoft.PowerAutomateDesktop*"
+    )
 }
 
 # Some official policies are only read by Enterprise / Education (and their IoT / LTSC /
@@ -296,7 +327,11 @@ function Write-Log {
     $entry = "[$(Get-Date -Format 'HH:mm:ss')] $Message"
     # A log line must never break a tweak: if the file is briefly locked (antivirus,
     # an editor holding it open), the line is dropped instead.
-    try { Add-Content -Path $LogFile -Value $entry -ErrorAction Stop } catch { }
+    # Three short tries before a line is dropped (antivirus scans hold the file for
+    # a few milliseconds at a time).
+    for ($try = 0; $try -lt 3; $try++) {
+        try { Add-Content -Path $LogFile -Value $entry -ErrorAction Stop; return } catch { Start-Sleep -Milliseconds 40 }
+    }
 }
 
 # -----------------------------------------
@@ -437,8 +472,10 @@ function Backup-Registry {
     $saved = 0
     $skipped = 0
     foreach ($key in $keys) {
-        $fileName = ($key -replace '[\\:\*\?"<>\|]', '_') + ".reg"
-        $dest = Join-Path $backupDir $fileName
+        $base = $key -replace '[\\:\*\?"<>\|]', '_'
+        $dest = Join-Path $backupDir "$base.reg"
+        # two keys that only differ by '\' vs '_' must not overwrite each other
+        for ($i = 2; Test-Path -LiteralPath $dest; $i++) { $dest = Join-Path $backupDir "${base}_$i.reg" }
         try {
             $null = & reg.exe export "$key" "$dest" /y 2>&1
             if ($LASTEXITCODE -eq 0) { $saved++ } else { $skipped++ }
@@ -582,16 +619,7 @@ $AllTweaks = @(
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
-            $bloat = @(
-                "*king.com*","*Facebook*","*Spotify*","*Disney*","*TikTok*","*Instagram*",
-                "*Netflix*","*Twitter*","*BubbleWitch*","*MarchofEmpires*","*CandyCrush*",
-                "*Microsoft.News*","*Microsoft.BingWeather*","*Microsoft.BingNews*",
-                "*Microsoft.MicrosoftSolitaireCollection*","*Microsoft.ZuneMusic*",
-                "*Microsoft.ZuneVideo*","*Microsoft.WindowsFeedbackHub*","*Microsoft.Todos*",
-                "*Microsoft.Paint3D*","*Microsoft.MixedReality*","*Clipchamp*",
-                "*Microsoft.GetHelp*","*Microsoft.Getstarted*","*Microsoft.PowerAutomateDesktop*"
-            )
-            foreach ($app in $bloat) { Get-AppxPackage -AllUsers $app | Remove-AppxPackage -ErrorAction SilentlyContinue }
+            foreach ($app in (Get-BloatPatterns)) { Get-AppxPackage -AllUsers $app | Remove-AppxPackage -ErrorAction SilentlyContinue }
             Write-Log "Bloatware removed"
         }
     },
@@ -704,6 +732,7 @@ $AllTweaks = @(
         Group    = "Privacy"
         Action   = {
             reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location" /v Value /t REG_SZ /d Deny /f | Out-Null
+            Stop-Service lfsvc -Force -ErrorAction SilentlyContinue
             Set-Service lfsvc -StartupType Disabled -ErrorAction SilentlyContinue
             Write-Log "Location tracking disabled"
         }
@@ -819,8 +848,12 @@ $AllTweaks = @(
         Group    = "Performance"
         Action   = {
             bcdedit /deletevalue useplatformclock 2>$null | Out-Null
-            bcdedit /set useplatformtick yes | Out-Null
-            bcdedit /set disabledynamictick yes | Out-Null
+            # bcdedit is an .exe: a refusal (Secure Boot / BitLocker policy) is only an exit
+            # code, never an exception -- check it, so the Apply reports it as failed.
+            foreach ($opt in 'useplatformtick', 'disabledynamictick') {
+                $out = bcdedit /set $opt yes 2>&1
+                if ($LASTEXITCODE -ne 0) { throw "bcdedit /set $opt failed: $(($out | Out-String).Trim())" }
+            }
             Write-Log "HPET disabled"
         }
     },
@@ -1988,9 +2021,9 @@ $RevertActions = @{
     }
     "Disable Bing in Windows Search" = {
         reg delete "HKCU\SOFTWARE\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /f 2>$null
-        reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /t REG_DWORD /d 1 /f | Out-Null
-        reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" /v CortanaConsent /t REG_DWORD /d 1 /f | Out-Null
-        Write-Log "Revert: Bing in Windows Search re-enabled"
+        reg delete "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /f 2>$null
+        reg delete "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" /v CortanaConsent /f 2>$null
+        Write-Log "Revert: Bing in Windows Search re-enabled (values removed -- Windows default)"
     }
     "Process Count Reduction (Svchost)" = {
         reg add "HKLM\SYSTEM\CurrentControlSet\Control" /v SvcHostSplitThresholdInKB /t REG_DWORD /d 380000 /f | Out-Null
@@ -2323,25 +2356,8 @@ $RevertActions = @{
     }
 
     # == NETWORK  --  DNS ====================================================
-    "Set DNS to Cloudflare (1.1.1.1)" = {
-        $adapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
-        foreach ($adapter in $adapters) {
-            Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
-        }
-        # Force Windows to pick up the router's DHCP DNS again and drop stale entries
-        ipconfig /renew 2>$null | Out-Null
-        Clear-DnsClientCache -ErrorAction SilentlyContinue
-        Write-Log "Revert: DNS reset to automatic/DHCP on all adapters (cache flushed, lease renewed)"
-    }
-    "Set DNS to Google (8.8.8.8)" = {
-        $adapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
-        foreach ($adapter in $adapters) {
-            Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
-        }
-        ipconfig /renew 2>$null | Out-Null
-        Clear-DnsClientCache -ErrorAction SilentlyContinue
-        Write-Log "Revert: DNS reset to automatic/DHCP on all adapters (cache flushed, lease renewed)"
-    }
+    "Set DNS to Cloudflare (1.1.1.1)" = { Reset-ProviderDns 'Cloudflare' @('1.1.1.1', '1.0.0.1', '2606:4700:4700::1111', '2606:4700:4700::1001') }
+    "Set DNS to Google (8.8.8.8)"     = { Reset-ProviderDns 'Google' @('8.8.8.8', '8.8.4.4', '2001:4860:4860::8888', '2001:4860:4860::8844') }
     "Flush DNS Cache" = {
         Write-Log "Revert: DNS Flush  --  nothing to restore"
     }
@@ -2631,7 +2647,12 @@ $CheckFunctions = @{
     "Remove Copilot"                     = { $null -eq (Get-AppxPackage -AllUsers "*Copilot*" -EA SilentlyContinue | Where-Object { -not $_.NonRemovable } | Select-Object -First 1) }
     "Remove OneDrive"                    = { -not (Test-Path "$env:LOCALAPPDATA\Microsoft\OneDrive\OneDrive.exe") }
     "Remove Windows Recall"              = { ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableAIDataAnalysis") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "AllowRecallEnablement") -eq 0) }
-    "Remove Other Bloatware"             = { $null -eq (Get-AppxPackage -AllUsers "*CandyCrush*" -EA SilentlyContinue | Select-Object -First 1) }
+    # Active when none of the removable apps from the list is installed for any user
+    "Remove Other Bloatware"             = {
+        $pats = Get-BloatPatterns
+        $left = @(Get-AppxPackage -AllUsers -ErrorAction Stop | Where-Object { $n = $_.Name; -not $_.NonRemovable -and @($pats | Where-Object { $n -like $_ }).Count })
+        $left.Count -eq 0
+    }
     "Stop Auto-Installed Suggested Apps" = {
         $cdm = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
         ((Get-RegVal $cdm "SilentInstalledAppsEnabled") -eq 0) -and ((Get-RegVal $cdm "OemPreInstalledAppsEnabled") -eq 0) -and ((Get-RegVal $cdm "PreInstalledAppsEnabled") -eq 0)
@@ -2680,7 +2701,7 @@ $CheckFunctions = @{
     "Disable Text & Image Generation (AI)" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" "LetAppsAccessSystemAIModels") -eq 2 }
     "Disable Click to Do & Settings Agent (AI)" = { ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableClickToDo") -eq 1) -and ((Get-RegVal "HKCU:\Software\Policies\Microsoft\Windows\WindowsAI" "DisableClickToDo") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableSettingsAgent") -eq 1) }
     "Disable AI in Paint & Notepad"      = { $p = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Paint"; ((Get-RegVal $p "DisableCocreator") -eq 1) -and ((Get-RegVal $p "DisableImageCreator") -eq 1) -and ((Get-RegVal $p "DisableGenerativeFill") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\WindowsNotepad" "DisableAIFeatures") -eq 1) }
-    "Disable Location Tracking"          = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location" "Value") -eq "Deny" }
+    "Disable Location Tracking"          = { $s = Get-Service lfsvc -EA SilentlyContinue; ((Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location" "Value") -eq "Deny") -and ((-not $s) -or $s.StartType -eq "Disabled") }
     # -match on an ARRAY returns the matching lines, not a bool -- the dot logic only
     # understands $true/$false, so this used to show "unknown" forever. Cast to bool,
     # anchor the pattern so a commented-out line doesn't count.
@@ -3800,7 +3821,8 @@ $Script:RestartTweaks = @("Remove Windows Recall", "Disable HPET (High Precision
     "Process Count Reduction (Svchost)", "Enable MSI Mode (Message Signaled Interrupts)", "Enable Hardware-Accelerated GPU Scheduling (HAGS)",
     "Disable Write-Cache Buffer Flushing", "Optimize NVMe Queue Depth", "Disable Windows Platform Binary Table (WPBT)", "Disable Memory Compression",
     "Disable Energy-Efficient Ethernet", "Disable Interrupt Moderation")
-$Script:AppRemovals = @("Remove Cortana", "Remove Xbox Apps", "Remove Microsoft Teams (Personal)", "Remove Copilot", "Remove OneDrive", "Remove Other Bloatware")
+$Script:EnterpriseOnly = @("Disable Get Started & Copilot Sign-in Screens")
+$Script:AppRemovals = @("Remove Cortana", "Remove Xbox Apps", "Remove Microsoft Teams (Personal)", "Remove Copilot", "Remove OneDrive", "Remove Windows Recall", "Remove Other Bloatware")
 
 function Get-TweakDesc($Tweak) {
     $d = if ($LangState.Current -eq "DE") { $Tweak.Desc } elseif ($TweakDescEN.ContainsKey($Tweak.Name)) { $TweakDescEN[$Tweak.Name] } else { $Tweak.Desc }
@@ -3812,7 +3834,9 @@ function New-TweakRow {
     $U = $Script:UI
     $name = $Tweak.Name
     $isWin11Only = ($Tweak.Category -eq "Windows 11") -and (-not $IsWin11)
-    $isWrongGPU  = ($Tweak.Group -eq "NVIDIA" -and -not $IsNVIDIA) -or ($Tweak.Group -eq "AMD" -and -not $IsAMD)
+    $isWrongGPU  = ($Tweak.Group -eq "AMD") -and (-not $IsAMD)
+    # Policies Windows only reads on Enterprise / Education -- not selectable on Home / Pro
+    $isEntOnly   = ($Script:EnterpriseOnly -contains $name) -and (-not (Test-EnterpriseEdition))
 
     $card = New-Object Windows.Controls.Border
     $card.Background = Brush $U.CARD; $card.BorderBrush = Brush $U.BORDER; $card.BorderThickness = Th 1
@@ -3840,7 +3864,8 @@ function New-TweakRow {
     $badges = New-VStack @(); $badges.VerticalAlignment = 'Center'; $badges.MinWidth = 96
     if ($Script:AppRemovals -contains $name)   { $badges.Children.Add((New-Badge 'removes app' $U.AMBER (Mix-Hex $U.CARD $U.AMBER 0.14) 0xE74D)) | Out-Null }
     if ($Script:RestartTweaks -contains $name) { $badges.Children.Add((New-Badge 'restart' $U.AMBER (Mix-Hex $U.CARD $U.AMBER 0.14) 0xE7BA)) | Out-Null }
-    if ($isWrongGPU)  { $badges.Children.Add((New-Badge $(if ($Tweak.Group -eq 'NVIDIA') { 'NVIDIA only' } else { 'AMD only' }) $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
+    if ($isWrongGPU)  { $badges.Children.Add((New-Badge 'AMD only' $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
+    if ($isEntOnly)   { $badges.Children.Add((New-Badge 'Enterprise only' $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
     if ($isWin11Only) { $badges.Children.Add((New-Badge 'Windows 11 only' $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
     if ($name -eq 'Optimize NVMe Queue Depth' -and -not $HasNVMe) { $badges.Children.Add((New-Badge 'no NVMe found' $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
     if ($Script:OneTimeNames -contains $name) { $badges.Children.Add((New-Badge 'one-time' $U.TEXT2 $U.CARD2 0xE72C)) | Out-Null }
@@ -3848,7 +3873,7 @@ function New-TweakRow {
     $badges.Children.Add($active) | Out-Null
     [Windows.Controls.Grid]::SetColumn($badges, 3); $grid.Children.Add($badges) | Out-Null
 
-    if ($isWin11Only -or $isWrongGPU) { $cb.IsEnabled = $false; $card.Opacity = 0.55 }
+    if ($isWin11Only -or $isWrongGPU -or $isEntOnly) { $cb.IsEnabled = $false; $card.Opacity = 0.55 }
     $card.Child = $grid
 
     $CheckBoxMap[$name]           = $cb
@@ -5403,7 +5428,20 @@ function Update-AllDots([string]$Label) {
 # BUTTON EVENTS
 # -----------------------------------------
 $BtnSelectAll.Add_Click({
-    foreach ($cb in $CheckBoxMap.Values) { $cb.IsChecked = $true }
+    # Only what is shown (the open tab, or the search hits) and selectable on this PC --
+    # never greyed-out tweaks (Windows 11 only, AMD only, Enterprise only).
+    $shown = @($Script:Cats | Where-Object { $_.Panel.Visibility -eq 'Visible' } | ForEach-Object { $_.Key })
+    $cfBefore = $CheckBoxMap["Set DNS to Cloudflare (1.1.1.1)"].IsChecked -eq $true
+    $n = 0
+    foreach ($r in $Script:TweakRows.Values) {
+        $cb = $CheckBoxMap[$r.Tweak.Name]
+        if ($cb.IsEnabled -and $r.Card.Visibility -eq 'Visible' -and $shown -contains $r.Tweak.Category) { $cb.IsChecked = $true; $n++ }
+    }
+    # The two DNS tweaks exclude each other (the one applied last would win): keep the
+    # one that was ticked before, Cloudflare if neither was
+    $cf = $CheckBoxMap["Set DNS to Cloudflare (1.1.1.1)"]; $gg = $CheckBoxMap["Set DNS to Google (8.8.8.8)"]
+    if ($cf.IsChecked -and $gg.IsChecked) { $drop = if ($cfBefore) { $gg } else { $cf }; $drop.IsChecked = $false; $n-- }
+    $StatusText.Text = "$n tweaks ticked (the ones shown and available on this PC). Review them, then click 'Apply selected'."
 })
 
 $BtnDeselect.Add_Click({
@@ -5433,7 +5471,7 @@ $BtnVerify.Add_Click({ Invoke-Verify })
 
 $BtnApply.Add_Click({
     if ($Script:Busy) { return }
-    $selected = @($AllTweaks | Where-Object { $CheckBoxMap[$_.Name].IsChecked -eq $true })
+    $selected = @($AllTweaks | Where-Object { $CheckBoxMap[$_.Name].IsEnabled -and $CheckBoxMap[$_.Name].IsChecked -eq $true })
 
     if ($selected.Count -eq 0) {
         [System.Windows.MessageBox]::Show("No tweaks selected!", "GameOptimizerPro", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
@@ -5472,12 +5510,12 @@ $BtnApply.Add_Click({
     # alone. Everything else has its own revert plus the registry backup, and
     # Checkpoint-Computer costs 10-60 s on every Apply.
     $removals = @($selected | Where-Object { $Script:AppRemovals -contains $_.Name })
-    $safetyNote = if ($removals.Count) { "A registry backup and a system restore point are created first ($($removals.Count) app removal(s) selected -- removed apps only come back through System Restore)." } else { "A registry backup is saved first." }
+    $safetyNote = if ($removals.Count) { "WARNING -- this removes apps / Windows components:`n  - " + (@($removals | ForEach-Object { $_.Name }) -join "`n  - ") + "`nThey only come back through System Restore. A restore point and a registry backup are created first." } else { "A registry backup is saved first." }
     $confirm = [System.Windows.MessageBox]::Show(
         "Apply $($selected.Count) selected tweak(s)?`n`n$safetyNote",
         "GameOptimizerPro -- Confirm",
         [System.Windows.MessageBoxButton]::YesNo,
-        [System.Windows.MessageBoxImage]::Question
+        $(if ($removals.Count) { [System.Windows.MessageBoxImage]::Warning } else { [System.Windows.MessageBoxImage]::Question })
     )
     if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) { return }
 
@@ -5505,6 +5543,7 @@ $BtnApply.Add_Click({
     # Apply tweaks
     $done  = 0
     $total = $selected.Count
+    $failedNames = @()
     foreach ($tweak in $selected) {
         Set-Status "Applying: $($tweak.Name) ($done/$total)..."
         try {
@@ -5512,6 +5551,7 @@ $BtnApply.Add_Click({
             Write-Log "OK: $($tweak.Name)"
         } catch {
             Write-Log "FAILED: $($tweak.Name) -- $_"
+            $failedNames += $tweak.Name
         }
         $done++
     }
@@ -5520,17 +5560,27 @@ $BtnApply.Add_Click({
     # (the Ultimate Performance plan switches the active scheme, so every power
     # tweak's status changes with it).
     Update-AllDots "Checking the result:"
-    Set-Status "Done! $done tweaks applied. Log: $LogFile"
+    # External tools (reg, bcdedit, powercfg ...) refuse silently and Windows policies can
+    # override a value -- so trust the status check, not just the absence of an error.
+    # Tweaks that only take effect after a restart are not counted here.
+    $notActive = @($selected | Where-Object { $failedNames -notcontains $_.Name -and $Script:RestartTweaks -notcontains $_.Name -and $Script:TweakState[$_.Name] -eq 'inactive' } | ForEach-Object { $_.Name })
+    foreach ($nm in $notActive) { Write-Log "NOT ACTIVE after Apply: $nm (Windows reports it as not in effect)" }
+    $okCount = $total - $failedNames.Count - $notActive.Count
+    Set-Status "Done! $okCount of $total tweaks applied$(if ($failedNames.Count + $notActive.Count) { " -- $($failedNames.Count + $notActive.Count) not in effect, see the log" }). Log: $LogFile"
+    $listOf = { param($names) $s = @($names | Select-Object -First 8) -join "`n  - "; if (@($names).Count -gt 8) { $s += "`n  ... and $(@($names).Count - 8) more" }; "  - $s" }
+    $problems = ""
+    if ($failedNames.Count) { $problems += "`n`nFailed (details in the log):`n" + (& $listOf $failedNames) }
+    if ($notActive.Count)   { $problems += "`n`nApplied, but Windows reports them as not in effect (often a policy, antivirus or a driver without that option -- see the log):`n" + (& $listOf $notActive) }
 
     # Snapshot the now-active tweaks so the next launch can detect Windows-reverted
     # drift -- from the results just read, instead of running every check again.
     Save-Baseline -FromState
 
     [System.Windows.MessageBox]::Show(
-        "$done tweaks applied successfully!`n`nSome changes require a restart to take effect.`nLog saved to:`n$LogFile`n`nRegistry backup (.reg files) saved to:`n$Script:LastBackupDir",
+        "$okCount of $total tweaks applied.$problems`n`nSome changes require a restart to take effect.`nLog saved to:`n$LogFile`n`nRegistry backup (.reg files) saved to:`n$Script:LastBackupDir",
         "GameOptimizerPro -- Done",
         [System.Windows.MessageBoxButton]::OK,
-        [System.Windows.MessageBoxImage]::Information
+        $(if ($problems) { [System.Windows.MessageBoxImage]::Warning } else { [System.Windows.MessageBoxImage]::Information })
     )
 
     # Neustart-Empfehlung
@@ -5561,7 +5611,8 @@ $BtnRevertAll.Add_Click({
         "           - Point 'GameOptimizerPro Backup' (made before app removals)`n" +
         "           - Opens the Windows wizard, your PC reboots (~5-10 min)`n`n" +
         "  NO   ->  Quick Reset (Recommended)`n" +
-        "           - Every tweak back to the Windows default`n" +
+        "           - Every tweak back to the Windows default -- including`n" +
+        "             personal settings some tweaks cover (dark mode, taskbar, file extensions)`n" +
         "           - No reboot required`n" +
         "           - Removed apps (OneDrive, Cortana etc.) stay removed`n`n" +
         "  CANCEL  ->  Do nothing",
@@ -5623,7 +5674,11 @@ $BtnRevertAll.Add_Click({
     $total = $RevertActions.Count
     $appWarnings = 0
 
+    $catOf = @{}; foreach ($t in $AllTweaks) { $catOf[$t.Name] = $t.Category }
     foreach ($tweakName in $RevertActions.Keys) {
+        # Windows 11 tweaks can't have been applied on Windows 10 (greyed out there) --
+        # their reverts would only restart Explorer for nothing
+        if ($catOf[$tweakName] -eq 'Windows 11' -and -not $IsWin11) { $done++; continue }
         Set-Status "Reverting [$done/$total]: $tweakName..."
         try {
             & $RevertActions[$tweakName]
