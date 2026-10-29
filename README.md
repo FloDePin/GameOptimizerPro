@@ -3,7 +3,7 @@
 # ⚡ GameOptimizerPro
 
 **Windows & gaming optimizer in a single PowerShell script.**<br>
-105 tweaks — every setting can be undone, and you can see which ones are active.
+102 tweaks — every setting can be undone, and you can see which ones are active.
 
 [![Release](https://img.shields.io/github/v/release/FloDePin/GameOptimizerPro?style=flat-square&color=e53935&label=release)](https://github.com/FloDePin/GameOptimizerPro/releases/latest)
 [![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?style=flat-square&logo=windows)](#-requirements)
@@ -40,7 +40,7 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 ## ✨ Why GameOptimizerPro
 
-- ↩️ **Every setting can be undone** — each of the 105 tweaks has its own revert back to the Windows default. Only two kinds are one-way: app removals (they come back through System Restore) and the cleanups (deleted cache files stay deleted).
+- ↩️ **Every setting can be undone** — each of the 102 tweaks has its own revert back to the Windows default. Only two kinds are one-way: app removals (they come back through System Restore) and the cleanups (deleted cache files stay deleted).
 - 🟢 **You see what is active** — 95 tweaks have a live status check read straight from Windows (registry, services, power plan), not from a list of what you once clicked.
 - 🔄 **Notices when Windows resets your tweaks** — updates like to switch things back. At start the app compares with your last Apply and offers to re-apply what was reverted.
 - 🛟 **Safety net before every change** — a `.reg` backup of every affected key before every Apply and Revert, plus a System Restore point whenever apps are removed.
@@ -64,21 +64,21 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 | Category | Tweaks | Examples |
 |---|:---:|---|
-| 🪟 Windows | 45 | Debloat (Copilot, Recall, OneDrive, auto-installed suggested apps), telemetry & privacy, the Windows AI switches, Ultimate Performance, HPET / timer, quality of life |
+| 🪟 Windows | 43 | Debloat (Copilot, Recall, OneDrive, auto-installed suggested apps), telemetry & privacy, the Windows AI switches, Ultimate Performance, HPET / timer, quality of life |
 | 🎮 Gaming | 11 | Game Mode, MMCSS, CPU priority, fullscreen optimizations, MSI mode, HAGS, GPU timeout (TDR) |
 | 🌐 Network | 13 | Nagle, LSO, network throttling, DNS (Cloudflare / Google), TCP, QoS, Energy-Efficient Ethernet, interrupt moderation, adapter power saving |
 | 💾 RAM & Storage | 15 | Page file, memory compression, TRIM, NVMe, write cache, hibernation + **Deep Clean** (6 cleanups, each shows the MB it freed) |
-| 🪟 Windows 11 | 7 | Classic right-click menu, left taskbar, widgets, Start recommendations, End Task |
+| 🪟 Windows 11 | 6 | Classic right-click menu, left taskbar, widgets, Start recommendations, End Task |
 | 🔊 Audio | 4 | Audio enhancements, MMCSS audio, audio service priority, sound scheme |
 | 🖥️ GPU | 3 | AMD driver tweaks (ULPS, Anti-Lag, shader cache). NVIDIA keeps its driver settings in the NVIDIA app, not in the registry |
 | ⚡ Power | 7 | USB / PCIe power saving, disk and system sleep, display timeout, CPU min / max state |
 
 <details>
-<summary><b>Show all 105 tweaks</b></summary>
+<summary><b>Show all 102 tweaks</b></summary>
 
 **🪟 Windows (45)**
 
-- *Bloatware:* Remove Cortana · Remove Xbox Apps · Remove Microsoft Teams (Personal) · Remove Copilot · Remove OneDrive · Remove Windows Recall · Remove Other Bloatware · Stop Auto-Installed Suggested Apps · Disable Get Started & Copilot Sign-in Screens
+- *Bloatware:* Remove Xbox Apps · Remove Copilot · Remove OneDrive · Remove Windows Recall · Remove Other Bloatware · Stop Auto-Installed Suggested Apps · Disable Get Started & Copilot Sign-in Screens
 - *Privacy:* Disable Telemetry & Data Collection · Disable Activity History · Disable Advertising ID · Disable Text & Image Generation (AI) · Disable Click to Do & Settings Agent (AI) · Disable AI in Paint & Notepad · Disable Location Tracking · Block Telemetry Hosts (hosts file) · Disable Scheduled Telemetry Tasks
 - *Performance:* Ultimate Performance Plan · Disable HPET (High Precision Event Timer) · Allow Global Timer Resolution (Windows 11) · Disable Prefetch & Superfetch · Optimize Visual Effects (Performance Mode) · Disable Windows Search Indexing · Disable Power Throttling · Disable Bing in Windows Search · Process Count Reduction (Svchost)
 - *CTT Essentials:* Prevent Device Companion Apps · Disable Consumer Features · Disable Windows Platform Binary Table (WPBT) · Disable Store Recommended Search Results · Enable Start Menu Previous Layout · Disable File Explorer Automatic Folder Discovery · Run Disk Cleanup
@@ -108,7 +108,7 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 **🪟 Windows 11 (7)**
 
-- *Taskbar & Shell:* Restore Classic Right-Click Menu · Left-Align Taskbar · Disable Widgets · Remove Chat Icon from Taskbar · Enable End Task in Taskbar
+- *Taskbar & Shell:* Restore Classic Right-Click Menu · Left-Align Taskbar · Disable Widgets · Enable End Task in Taskbar
 - *Start Menu:* Disable Recommended in Start Menu
 - *Window Management:* Disable Snap Layout Hover Menu
 
@@ -136,8 +136,8 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 | Preset | Tweaks | For whom |
 |---|:---:|---|
 | 🟢 **Minimal** | 19 | Safe basics: privacy, gaming priority, network latency. No app removal — the ideal first run. |
-| 🟠 **Balanced** | 76 | Minimal + Ultimate Performance, timer, GPU and audio tweaks, light debloat (Copilot, Recall, Xbox) and the Windows AI switches. The recommended all-round setup. |
-| 🔴 **Aggressive** | 91 | Everything, incl. Cortana / OneDrive / Teams removal, no hibernation, no memory compression. For experienced users. |
+| 🟠 **Balanced** | 75 | Minimal + Ultimate Performance, timer, GPU and audio tweaks, light debloat (Copilot, Recall, Xbox) and the Windows AI switches. The recommended all-round setup. |
+| 🔴 **Aggressive** | 88 | Everything, incl. OneDrive removal, no hibernation, no memory compression. For experienced users. |
 
 A preset only ticks the boxes — you review the list and click **Apply selected** yourself.
 
@@ -152,7 +152,7 @@ A preset only ticks the boxes — you review the list and click **Apply selected
 ## 🛡️ Safety
 
 - **Registry backup** before every Apply and Revert — the `.reg` files are kept in `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`. **A restore point** comes on top whenever an Apply removes apps
-- **Removed apps** (Cortana, OneDrive, …) are the one thing a revert can't reinstall — they come back via System Restore. Those tweaks are marked *removes app*
+- **Removed apps** (OneDrive, Xbox, …) are the one thing a revert can't reinstall — they come back via System Restore. Those tweaks are marked *removes app*
 - **SHA256 chain** — `install.ps1` only runs a script whose hash matches [CHECKSUMS.txt](CHECKSUMS.txt)
 - **No background process, no telemetry** — the check for reverted tweaks runs only when you start the app
 - **Open source** — one readable PowerShell file; every action is logged to `%TEMP%\GameOptimizerPro_*.log`

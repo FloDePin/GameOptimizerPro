@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.4
+    1.5
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.4"
+$Script:AppVersion = "1.5"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -221,6 +221,21 @@ function Get-BloatPatterns {
         "*Microsoft.ZuneVideo*", "*Microsoft.WindowsFeedbackHub*", "*Microsoft.Todos*",
         "*Microsoft.Paint3D*", "*Microsoft.MixedReality*", "*Clipchamp*",
         "*Microsoft.GetHelp*", "*Microsoft.Getstarted*", "*Microsoft.PowerAutomateDesktop*"
+    )
+}
+
+# The tasks "Disable Scheduled Telemetry Tasks" switches off -- Apply, Revert and the status
+# check share this list. Windows 11 24H2+ has no "Microsoft Compatibility Appraiser" /
+# "ProgramDataUpdater" any more; the appraiser runs as "... Appraiser Exp" there.
+function Get-TelemetryTasks {
+    @(
+        "\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser",
+        "\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser Exp",
+        "\Microsoft\Windows\Application Experience\ProgramDataUpdater",
+        "\Microsoft\Windows\Autochk\Proxy",
+        "\Microsoft\Windows\Customer Experience Improvement Program\Consolidator",
+        "\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip",
+        "\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector"
     )
 }
 
@@ -432,13 +447,17 @@ function Remove-RetiredTweakValues {
         @("HKLM:\SYSTEM\CurrentControlSet\Services\usbaudio", 'DisableSelectiveSuspend'),
         @("HKLM:\SYSTEM\CurrentControlSet\Services\usbaudio2", 'DisableSelectiveSuspend'),
         @("HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync", 'EnableWindowsBackup'),
-        @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore", 'SystemRestorePointCreationFrequency')
+        @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore", 'SystemRestorePointCreationFrequency'),
+        # 1.5: "Remove Chat Icon from Taskbar" and "Remove Microsoft Teams (Personal)" retired
+        @("HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", 'TaskbarMn'),
+        @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications", 'ConfigureChatAutoInstall')
     )
     foreach ($k in @(Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render" -ErrorAction SilentlyContinue)) { $targets += , @($k.PSPath, 'SpatialAudioMode') }
     foreach ($k in @(Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e96c-e325-11ce-bfc1-08002be10318}" -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' })) { $targets += , @($k.PSPath, 'PowerThrottlingOff') }
-    # These two only when they hold exactly what the old code wrote -- an organisation's
-    # Windows Backup policy (1) or a deliberately chosen frequency stays untouched.
-    $onlyIf = @{ 'EnableWindowsBackup' = 0; 'SystemRestorePointCreationFrequency' = 0 }
+    # These only when they hold exactly what the old code wrote -- an organisation's
+    # Windows Backup policy (1), a deliberately chosen frequency or a Chat button the
+    # user switched on stays untouched.
+    $onlyIf = @{ 'EnableWindowsBackup' = 0; 'SystemRestorePointCreationFrequency' = 0; 'TaskbarMn' = 0; 'ConfigureChatAutoInstall' = 0 }
     $n = 0
     foreach ($tg in $targets) {
         $v = Get-RegVal $tg[0] $tg[1]
@@ -538,16 +557,6 @@ $AllTweaks = @(
 
     # == WINDOWS / BLOATWARE ==============================================
     [PSCustomObject]@{
-        Name     = "Remove Cortana"
-        Desc     = "Deinstalliert Cortana vollstaendig. Cortana ist Microsofts Sprachassistent der Daten an Microsoft sendet. Fuer die meisten Nutzer nicht benoetigt."
-        Category = "Windows"
-        Group    = "Bloatware"
-        Action   = {
-            Get-AppxPackage -AllUsers "*Microsoft.549981C3F5F10*" | Remove-AppxPackage -ErrorAction SilentlyContinue
-            Write-Log "Cortana removed"
-        }
-    },
-    [PSCustomObject]@{
         Name     = "Remove Xbox Apps"
         Desc     = "Entfernt Xbox Game Bar, Xbox Identity Provider und Xbox TCUI. Diese Apps laufen im Hintergrund und verbrauchen Ressourcen - auch wenn du keine Xbox hast."
         Category = "Windows"
@@ -556,17 +565,6 @@ $AllTweaks = @(
             $xboxApps = @("*XboxApp*","*XboxGameOverlay*","*XboxGamingOverlay*","*XboxIdentityProvider*","*XboxSpeechToTextOverlay*","*XboxTCUI*")
             foreach ($app in $xboxApps) { Get-AppxPackage -AllUsers $app | Remove-AppxPackage -ErrorAction SilentlyContinue }
             Write-Log "Xbox Apps removed"
-        }
-    },
-    [PSCustomObject]@{
-        Name     = "Remove Microsoft Teams (Personal)"
-        Desc     = "Entfernt Microsoft Teams (die Consumer-Version). Nicht zu verwechseln mit Teams for Work. Blockiert automatische Neuinstallation."
-        Category = "Windows"
-        Group    = "Bloatware"
-        Action   = {
-            Get-AppxPackage -AllUsers "*MicrosoftTeams*" | Remove-AppxPackage -ErrorAction SilentlyContinue
-            reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications" /v ConfigureChatAutoInstall /t REG_DWORD /d 0 /f | Out-Null
-            Write-Log "Teams Personal removed"
         }
     },
     [PSCustomObject]@{
@@ -778,15 +776,8 @@ $AllTweaks = @(
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
-            $tasks = @(
-                "\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser",
-                "\Microsoft\Windows\Application Experience\ProgramDataUpdater",
-                "\Microsoft\Windows\Autochk\Proxy",
-                "\Microsoft\Windows\Customer Experience Improvement Program\Consolidator",
-                "\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip",
-                "\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector"
-            )
-            foreach ($task in $tasks) { schtasks /Change /TN $task /Disable 2>$null }
+            # Tasks this Windows doesn't have are skipped (schtasks only returns an error code)
+            foreach ($task in (Get-TelemetryTasks)) { schtasks /Change /TN $task /Disable 2>$null | Out-Null }
             Write-Log "Telemetry tasks disabled"
         }
     },
@@ -1404,7 +1395,6 @@ $AllTweaks = @(
             netsh int tcp set global ecncapability=disabled 2>$null | Out-Null
             netsh int tcp set global timestamps=disabled 2>$null | Out-Null
             netsh int tcp set global rss=enabled 2>$null | Out-Null
-            netsh int tcp set global chimney=disabled 2>$null | Out-Null
             reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v SackOpts /t REG_DWORD /d 1 /f | Out-Null
             reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v TcpMaxDupAcks /t REG_DWORD /d 2 /f | Out-Null
             Write-Log "TCP Settings optimized (ECN/SACK/Timestamps)"
@@ -1742,16 +1732,6 @@ $AllTweaks = @(
         }
     },
     [PSCustomObject]@{
-        Name     = "Remove Chat Icon from Taskbar"
-        Desc     = "WIN11: Entfernt das Teams Chat-Icon aus der Taskleiste. Das Icon kann ungewollt Teams installieren und laeuft im Hintergrund."
-        Category = "Windows 11"
-        Group    = "Taskbar & Shell"
-        Action   = {
-            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarMn /t REG_DWORD /d 0 /f | Out-Null
-            Write-Log "Win11: Chat icon removed from taskbar"
-        }
-    },
-    [PSCustomObject]@{
         Name     = "Disable Recommended in Start Menu"
         Desc     = "WIN11: Entfernt den 'Empfohlen'-Bereich im Startmenue der zuletzt geoeffnete Dateien und Apps anzeigt. Mehr Platz fuer angeheftete Apps und saubereres Layout."
         Category = "Windows 11"
@@ -1792,7 +1772,9 @@ $AllTweaks = @(
             $renderPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
             if (Test-Path $renderPath) {
                 $count = 0
-                Get-ChildItem $renderPath | ForEach-Object {
+                # Skip devices Windows only remembers (DeviceState 4 = not present: an old monitor,
+                # a removed headset) -- they have no effects to turn off
+                Get-ChildItem $renderPath | Where-Object { ([int64](Get-RegVal $_.PSPath "DeviceState") -band 0xF) -ne 4 } | ForEach-Object {
                     $fxPath = Join-Path $_.PSPath "FxProperties"
                     if (-not (Test-Path $fxPath)) { New-Item -Path $fxPath -Force | Out-Null }
                     Set-ItemProperty -Path $fxPath -Name "{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5" `
@@ -1975,15 +1957,8 @@ $AllTweaks = @(
 $RevertActions = @{
 
     # == BLOATWARE (apps removed  --  registry parts only) ===================
-    "Remove Cortana" = {
-        Write-Log "Revert Cortana: app was removed  --  needs System Restore to reinstall"
-    }
     "Remove Xbox Apps" = {
         Write-Log "Revert Xbox Apps: apps were removed  --  needs System Restore to reinstall"
-    }
-    "Remove Microsoft Teams (Personal)" = {
-        reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications" /v ConfigureChatAutoInstall /f 2>$null
-        Write-Log "Revert Teams: auto-install policy removed (app needs System Restore)"
     }
     "Remove Copilot" = {
         reg delete "HKCU\Software\Policies\Microsoft\Windows\WindowsCopilot" /v TurnOffWindowsCopilot /f 2>$null
@@ -2162,15 +2137,7 @@ $RevertActions = @{
         Write-Log "Revert: Telemetry host entries removed from hosts file ($($lines.Count - $clean.Count) lines)"
     }
     "Disable Scheduled Telemetry Tasks" = {
-        $tasks = @(
-            "\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser",
-            "\Microsoft\Windows\Application Experience\ProgramDataUpdater",
-            "\Microsoft\Windows\Autochk\Proxy",
-            "\Microsoft\Windows\Customer Experience Improvement Program\Consolidator",
-            "\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip",
-            "\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector"
-        )
-        foreach ($task in $tasks) { schtasks /Change /TN $task /Enable 2>$null }
+        foreach ($task in (Get-TelemetryTasks)) { schtasks /Change /TN $task /Enable 2>$null | Out-Null }
         Write-Log "Revert: Telemetry scheduled tasks re-enabled"
     }
 
@@ -2370,7 +2337,6 @@ $RevertActions = @{
     "Optimize TCP Settings (ECN/SACK/Timestamps)" = {
         netsh int tcp set global ecncapability=enabled 2>$null | Out-Null
         netsh int tcp set global timestamps=enabled 2>$null | Out-Null
-        netsh int tcp set global chimney=enabled 2>$null | Out-Null
         reg delete "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v SackOpts /f 2>$null
         reg delete "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v TcpMaxDupAcks /f 2>$null
         Write-Log "Revert: TCP settings restored to Windows defaults"
@@ -2499,10 +2465,6 @@ $RevertActions = @{
         reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarDa /t REG_DWORD /d 1 /f | Out-Null
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Dsh" /v AllowNewsAndInterests /f 2>$null
         Write-Log "Revert: Widgets re-enabled"
-    }
-    "Remove Chat Icon from Taskbar" = {
-        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarMn /t REG_DWORD /d 1 /f | Out-Null
-        Write-Log "Revert: Chat icon restored in taskbar"
     }
     "Disable Recommended in Start Menu" = {
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\Explorer" /v HideRecommendedSection /f 2>$null
@@ -2637,9 +2599,7 @@ function Get-TaskState([string]$Path, [string]$Name) {
 $CheckFunctions = @{
 
     # BLOATWARE
-    "Remove Cortana"                     = { $null -eq (Get-AppxPackage -AllUsers "*Microsoft.549981C3F5F10*" -EA SilentlyContinue | Select-Object -First 1) }
     "Remove Xbox Apps"                   = { $null -eq (Get-AppxPackage -AllUsers "*XboxGamingOverlay*" -EA SilentlyContinue | Select-Object -First 1) }
-    "Remove Microsoft Teams (Personal)"  = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications" "ConfigureChatAutoInstall") -eq 0 }
     # Check the APP, not the policy: Microsoft marks TurnOffWindowsCopilot as deprecated
     # and it doesn't apply to the new Copilot app -- the policy could stay green while
     # an update had quietly reinstalled Copilot. NonRemovable system packages are
@@ -2706,7 +2666,12 @@ $CheckFunctions = @{
     # understands $true/$false, so this used to show "unknown" forever. Cast to bool,
     # anchor the pattern so a commented-out line doesn't count.
     "Block Telemetry Hosts (hosts file)" = { $h = Get-Content "$env:SystemRoot\System32\drivers\etc\hosts" -EA SilentlyContinue; if ($null -eq $h) { $null } else { [bool](@($h) -match '^\s*0\.0\.0\.0\s+telemetry\.microsoft\.com\s*$') } }
-    "Disable Scheduled Telemetry Tasks"  = { (Get-TaskState "\Microsoft\Windows\Application Experience" "Microsoft Compatibility Appraiser") -eq "Disabled" }
+    "Disable Scheduled Telemetry Tasks"  = {
+        # Every task this Windows has must be off; the ones it doesn't have (24H2+) don't count
+        $st = @(Get-TelemetryTasks | ForEach-Object { $i = $_.LastIndexOf('\'); Get-TaskState $_.Substring(0, $i) $_.Substring($i + 1) } | Where-Object { $_ })
+        if (-not $st.Count) { return $null }
+        @($st | Where-Object { $_ -ne 'Disabled' }).Count -eq 0
+    }
 
     # PERFORMANCE
     "Ultimate Performance Plan"          = { $g = Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "UltimatePerfGuid"; $a = (powercfg /getactivescheme 2>$null) -join " "; ($g -and $a -match [regex]::Escape($g)) -or ($a -match "Ultimate Performance|Ultimative Leistung") }
@@ -2828,8 +2793,11 @@ $CheckFunctions = @{
     # WINDOWS 11
     "Restore Classic Right-Click Menu"   = { Test-Path "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" }
     "Left-Align Taskbar"                 = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarAl") -eq 0 }
-    "Disable Widgets"                    = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarDa") -eq 0 }
-    "Remove Chat Icon from Taskbar"      = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarMn") -eq 0 }
+    "Disable Widgets"                    = {
+        # The machine policy turns Widgets off completely. On 24H2+ Windows blocks writing
+        # TaskbarDa (User Choice Protection Driver), so the policy is what counts there.
+        ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Dsh" "AllowNewsAndInterests") -eq 0) -or ((Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarDa") -eq 0)
+    }
     "Disable Recommended in Start Menu"  = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer" "HideRecommendedSection") -eq 1 }
     "Enable End Task in Taskbar"         = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings" "TaskbarEndTask") -eq 1 }
     "Disable Snap Layout Hover Menu"     = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "EnableSnapAssistFlyout") -eq 0 }
@@ -2838,8 +2806,8 @@ $CheckFunctions = @{
     "Disable Audio Enhancements"         = {
         $rp = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
         if (-not (Test-Path $rp)) { return $null }
-        # The Apply writes to every playback device -- active only if every one has it
-        $devs = @(Get-ChildItem $rp -EA SilentlyContinue)
+        # The Apply writes to every playback device that is there -- active only if every one has it
+        $devs = @(Get-ChildItem $rp -EA SilentlyContinue | Where-Object { ([int64](Get-RegVal $_.PSPath "DeviceState") -band 0xF) -ne 4 })
         if (-not $devs.Count) { return $null }
         $off = @($devs | Where-Object { (Get-RegVal (Join-Path $_.PSPath "FxProperties") "{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5") -eq 1 })
         $off.Count -eq $devs.Count
@@ -3016,9 +2984,7 @@ $TweakDescEN = @{
     "Num Lock on Startup"                         = "Enables NumLock automatically at system startup and on the login screen. Handy if you want to use the numpad right away."
     "Disable Lock Screen"                         = "Disables the lock screen. On start/wake it goes straight to the login field -- saves a click or swipe."
     "Enable Long Paths"                           = "Enables paths longer than 260 characters. Helpful for deep folder structures, game mods, Node projects etc. -- prevents 'path too long' errors."
-    "Remove Cortana"                              = "Uninstalls Cortana completely. Cortana is Microsoft's voice assistant that sends data to Microsoft. Not needed by most users."
     "Remove Xbox Apps"                            = "Removes Xbox Game Bar, Identity Provider and TCUI. These apps run in the background consuming resources even without an Xbox."
-    "Remove Microsoft Teams (Personal)"           = "Removes the consumer version of Microsoft Teams and blocks automatic reinstallation via registry."
     "Remove Copilot"                              = "Disables and removes Windows Copilot AI assistant. Prevents Copilot from running in the background and sending data."
     "Remove OneDrive"                             = "Completely uninstalls OneDrive including autostart and Explorer integration. Local files remain untouched."
     "Remove Windows Recall"                       = "Disables AND removes Windows Recall  --  the AI feature that takes screenshots of your activity. Uses Microsoft's official policies: snapshots off + Recall component removed from the system (existing snapshots are deleted). Restart required."
@@ -3086,7 +3052,6 @@ $TweakDescEN = @{
     "Restore Classic Right-Click Menu"            = "WIN11: Restores the Windows 10 classic right-click menu. No more 'Show more options' click needed to access common options."
     "Left-Align Taskbar"                          = "WIN11: Moves taskbar icons to the left like Windows 10. Windows 11 centers icons by default. Takes effect after Explorer restart."
     "Disable Widgets"                             = "WIN11: Disables the Widgets panel (Weather, News, Stocks). Widgets run as an MSN browser process in the background consuming RAM."
-    "Remove Chat Icon from Taskbar"               = "WIN11: Removes the Teams Chat icon from the taskbar. The icon can unintentionally install Microsoft Teams."
     "Disable Recommended in Start Menu"           = "WIN11: Removes the 'Recommended' section from the Start menu. More space for pinned apps and a cleaner layout."
     "Enable End Task in Taskbar"                  = "WIN11: Enables 'End Task' directly in the taskbar right-click menu. Kill unresponsive processes without opening Task Manager."
     "Disable Snap Layout Hover Menu"              = "WIN11: Disables the Snap Layout popup when hovering over the maximize button. Prevents accidental snapping while gaming."
@@ -3822,7 +3787,7 @@ $Script:RestartTweaks = @("Remove Windows Recall", "Disable HPET (High Precision
     "Disable Write-Cache Buffer Flushing", "Optimize NVMe Queue Depth", "Disable Windows Platform Binary Table (WPBT)", "Disable Memory Compression",
     "Disable Energy-Efficient Ethernet", "Disable Interrupt Moderation")
 $Script:EnterpriseOnly = @("Disable Get Started & Copilot Sign-in Screens")
-$Script:AppRemovals = @("Remove Cortana", "Remove Xbox Apps", "Remove Microsoft Teams (Personal)", "Remove Copilot", "Remove OneDrive", "Remove Windows Recall", "Remove Other Bloatware")
+$Script:AppRemovals = @("Remove Xbox Apps", "Remove Copilot", "Remove OneDrive", "Remove Windows Recall", "Remove Other Bloatware")
 
 function Get-TweakDesc($Tweak) {
     $d = if ($LangState.Current -eq "DE") { $Tweak.Desc } elseif ($TweakDescEN.ContainsKey($Tweak.Name)) { $TweakDescEN[$Tweak.Name] } else { $Tweak.Desc }
@@ -5156,7 +5121,7 @@ function Build-PresetsPage {
     $defs = @(
         @{ Name = 'Minimal';    Color = $U.GREEN; Fg = '#ffffff'; Desc = 'Safe basics only: privacy, gaming priority, network latency. No app removal, nothing you would miss. Ideal first run.' }
         @{ Name = 'Balanced';   Color = $U.AMBER; Fg = '#1a1205'; Desc = 'Minimal + Ultimate Performance, HPET / timer, GPU and audio tweaks, light debloat (Copilot, Recall, Xbox) and the Windows AI switches. The recommended all-round setup.' }
-        @{ Name = 'Aggressive'; Color = $U.RED;   Fg = '#ffffff'; Desc = 'Everything: + Cortana / OneDrive / Teams removal, no hibernation, no memory compression. For experienced users -- removed apps need System Restore.' }
+        @{ Name = 'Aggressive'; Color = $U.RED;   Fg = '#ffffff'; Desc = 'Everything: + OneDrive removal, no hibernation, no memory compression. For experienced users -- removed apps need System Restore.' }
     )
     $grid = New-Object Windows.Controls.Grid; $grid.Margin = Th 0, 0, -14, 0
     foreach ($i in 0..2) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $grid.ColumnDefinitions.Add($cd) }
@@ -5323,13 +5288,13 @@ $Script:PresetBalanced = $Script:PresetMinimal + @(
     "Disable Audio Enhancements","Optimize MMCSS Audio Profile","Set Audio Service High Priority","Disable Windows Sound Scheme",
     "Disable Large Send Offload (LSO)","Optimize TCP Settings (ECN/SACK/Timestamps)","Disable TCP Auto-Tuning","Disable Network Adapter Power Saving","Disable Energy-Efficient Ethernet",
     "Disable Sticky Keys","Enable Dark Mode","Disable Transparency Effects",
-    "Restore Classic Right-Click Menu","Left-Align Taskbar","Disable Widgets","Remove Chat Icon from Taskbar","Disable Recommended in Start Menu","Enable End Task in Taskbar","Disable Snap Layout Hover Menu",
+    "Restore Classic Right-Click Menu","Left-Align Taskbar","Disable Widgets","Disable Recommended in Start Menu","Enable End Task in Taskbar","Disable Snap Layout Hover Menu",
     "Show Hidden Files","Num Lock on Startup","Enable Long Paths",
     "Optimize PageFile (System Managed)","Enable SSD TRIM","Disable Scheduled Defragmentation","Optimize NVMe Queue Depth",
     "Disable USB Selective Suspend","Disable PCI-E Link State Power Management","Disable Hard Disk Sleep","CPU Minimum Processor State = 100%","CPU Maximum Processor State = 100%"
 )
 $Script:PresetAggressive = $Script:PresetBalanced + @(
-    "Remove Cortana","Remove Microsoft Teams (Personal)","Remove OneDrive",
+    "Remove OneDrive",
     "Disable Windows Search Indexing","Process Count Reduction (Svchost)","Disable Interrupt Moderation",
     "Disable Memory Compression","Disable Write-Cache Buffer Flushing","Disable Hibernation","Clear PageFile on Shutdown",
     "Disable Reserved Storage","Disable Storage Sense","Disable Lock Screen","Enable Start Menu Previous Layout",
@@ -5454,7 +5419,7 @@ $BtnPresetMin.Add_Click({ Set-Preset $Script:PresetMinimal "Minimal"; Show-Prese
 $BtnPresetBal.Add_Click({ Set-Preset $Script:PresetBalanced "Balanced"; Show-Preset-Result })
 $BtnPresetAgg.Add_Click({
     $r = [System.Windows.MessageBox]::Show(
-        "The 'Aggressive' preset also selects app removals (Cortana, OneDrive, Teams, Xbox, Recall, bloatware) and aggressive tweaks.`n`nRemoved apps cannot be restored by 'Revert All' -- only via System Restore.`n`nSelect the aggressive preset now? (Nothing is applied until you click 'Apply selected'.)",
+        "The 'Aggressive' preset also selects app removals (OneDrive, Xbox, Recall, bloatware) and aggressive tweaks.`n`nRemoved apps cannot be restored by 'Revert All' -- only via System Restore.`n`nSelect the aggressive preset now? (Nothing is applied until you click 'Apply selected'.)",
         "GameOptimizerPro -- Aggressive Preset",
         [System.Windows.MessageBoxButton]::YesNo,
         [System.Windows.MessageBoxImage]::Warning)
@@ -5614,7 +5579,7 @@ $BtnRevertAll.Add_Click({
         "           - Every tweak back to the Windows default -- including`n" +
         "             personal settings some tweaks cover (dark mode, taskbar, file extensions)`n" +
         "           - No reboot required`n" +
-        "           - Removed apps (OneDrive, Cortana etc.) stay removed`n`n" +
+        "           - Removed apps (OneDrive, Xbox etc.) stay removed`n`n" +
         "  CANCEL  ->  Do nothing",
         "GameOptimizerPro  --  Revert All",
         [System.Windows.MessageBoxButton]::YesNoCancel,
@@ -5651,7 +5616,7 @@ $BtnRevertAll.Add_Click({
         "Quick Registry Reset`n`n" +
         "This will restore all registry, service and network settings`n" +
         "to Windows defaults.`n`n" +
-        "NOTE: Removed apps (Cortana, Xbox, Teams, OneDrive, Bloatware)`n" +
+        "NOTE: Removed apps (Xbox, OneDrive, Bloatware)`n" +
         "cannot be restored this way  --  use System Restore for those.`n`n" +
         "A registry backup is saved first. Continue?",
         "GameOptimizerPro  --  Confirm Quick Reset",
@@ -5689,7 +5654,7 @@ $BtnRevertAll.Add_Click({
             $done++
         }
         # Count app-restore warnings
-        if ($tweakName -match "Remove Cortana|Remove Xbox|Remove.*Teams|Remove OneDrive|Remove Other Bloat") {
+        if ($tweakName -match "Remove Xbox|Remove OneDrive|Remove Other Bloat") {
             $appWarnings++
         }
     }
@@ -5711,7 +5676,7 @@ $BtnRevertAll.Add_Click({
     Write-Log "Revert All complete: $done processed, $failed failed"
 
     $appNote = if ($appWarnings -gt 0) {
-        "`n`nIMPORTANT: $appWarnings removed apps (Cortana, Xbox, Teams etc.) cannot be`nrestored via Quick Reset  --  use System Restore for those."
+        "`n`nIMPORTANT: $appWarnings removed apps (Xbox, OneDrive etc.) cannot be`nrestored via Quick Reset  --  use System Restore for those."
     } else { "" }
 
     [System.Windows.MessageBox]::Show(

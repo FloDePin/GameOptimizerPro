@@ -4,6 +4,28 @@ All notable changes to GameOptimizerPro (the PowerShell edition), newest first. 
 
 ---
 
+## [1.5] — 2026-10-29
+
+Checked on a fresh Windows 11 26H2 (build 26300): tweaks that no longer do anything are gone, and four status checks read the right thing again.
+
+- **3 tweaks removed** — *Remove Cortana* (Windows 11 24H2 and later ship without Cortana), *Remove Microsoft Teams (Personal)* (no longer preinstalled, and Windows locks the auto-install value so even an administrator can't write it) and *Remove Chat Icon from Taskbar* (the Chat button became a normal Teams app with 23H2). Now **102 tweaks**; *Revert all* also removes what the old ones left behind.
+- **Disable Scheduled Telemetry Tasks** — 24H2 and later run the appraiser as *Microsoft Compatibility Appraiser Exp* and dropped *ProgramDataUpdater*; the tweak now switches the new task off too, and the status checks every task this Windows has instead of one that no longer exists.
+- **Disable Widgets** — Windows blocks writing the taskbar value, so the status now reads the policy that turns Widgets off. Before, it stayed red although Widgets were off.
+- **Disable Audio Enhancements** — playback devices Windows only remembers (an old monitor, a removed headset) are skipped; they kept the status red.
+- **Optimize TCP Settings** — a `netsh` option Windows 10 and 11 no longer know (*chimney*) is gone.
+
+<details>
+<summary><b>Development log — 1.5</b></summary>
+
+- **Real-system check** — every status check run read-only on the fresh 26H2 PC, plus the targets themselves: services, scheduled tasks, apps, network adapter settings, playback devices and registry permissions.
+- **Found** — the telemetry check asked for a task that doesn't exist on 24H2+; the Communications key belongs to TrustedInstaller (administrators may only read it); TaskbarDa is refused (User Choice Protection Driver), the Widgets policy is written; twelve remembered audio devices without the value (all "not present"); `netsh … chimney` answers "not a valid argument".
+- **Not changed** — *Disable Energy-Efficient Ethernet* is correct: the Realtek driver turns EEE off by default, Green Ethernet is still on until the tweak runs.
+- **Tests** — the NVIDIA test PC now models 26H2 (new task layout, refused registry writes); new scenarios for the telemetry tasks, Widgets, audio devices and the retired values; unit tests, static checks, the real window offscreen; the real system unchanged.
+
+</details>
+
+---
+
 ## [1.4] — 2026-10-22
 
 Two more external reviews, checked against the code — what holds is fixed.
