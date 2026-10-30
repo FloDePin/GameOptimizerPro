@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.5
+    1.2.3
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.5"
+$Script:AppVersion = "1.2.3"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -433,7 +433,7 @@ $Script:RegistryBackupKeys = @(
     "HKU\.DEFAULT\Control Panel\Keyboard"
 )
 
-# Values written by tweaks that were removed in v1.3 because Windows or the driver never
+# Values written by tweaks that were removed in 1.2.1 because Windows or the driver never
 # read them (five NVIDIA registry values, Spatial Sound, Audio Device Power Save, the
 # organisation-only Windows Backup policy), plus the restore-point frequency override
 # older versions left at 0. Harmless, but Revert All promises a clean state -- so it
@@ -448,7 +448,7 @@ function Remove-RetiredTweakValues {
         @("HKLM:\SYSTEM\CurrentControlSet\Services\usbaudio2", 'DisableSelectiveSuspend'),
         @("HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync", 'EnableWindowsBackup'),
         @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore", 'SystemRestorePointCreationFrequency'),
-        # 1.5: "Remove Chat Icon from Taskbar" and "Remove Microsoft Teams (Personal)" retired
+        # 1.2.3: "Remove Chat Icon from Taskbar" and "Remove Microsoft Teams (Personal)" retired
         @("HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", 'TaskbarMn'),
         @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications", 'ConfigureChatAutoInstall')
     )

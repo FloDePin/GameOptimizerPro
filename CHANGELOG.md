@@ -2,9 +2,11 @@
 
 All notable changes to GameOptimizerPro (the PowerShell edition), newest first. The round-by-round logs are folded — click to open.
 
+**Version numbers** — the third number counts fixes and tweaks for new Windows builds (1.2.1, 1.2.2, …), the second one a bigger update. The bigger next step is GameOptimizerPro v2, a separate project. 1.2.1 – 1.2.3 were first published as 1.3 – 1.5 and renumbered on 2026-10-30; nothing else changed.
+
 ---
 
-## [1.5] — 2026-10-29
+## [1.2.3] — 2026-10-29
 
 Checked on a fresh Windows 11 26H2 (build 26300): tweaks that no longer do anything are gone, and four status checks read the right thing again.
 
@@ -15,7 +17,7 @@ Checked on a fresh Windows 11 26H2 (build 26300): tweaks that no longer do anyth
 - **Optimize TCP Settings** — a `netsh` option Windows 10 and 11 no longer know (*chimney*) is gone.
 
 <details>
-<summary><b>Development log — 1.5</b></summary>
+<summary><b>Development log — 1.2.3</b></summary>
 
 - **Real-system check** — every status check run read-only on the fresh 26H2 PC, plus the targets themselves: services, scheduled tasks, apps, network adapter settings, playback devices and registry permissions.
 - **Found** — the telemetry check asked for a task that doesn't exist on 24H2+; the Communications key belongs to TrustedInstaller (administrators may only read it); TaskbarDa is refused (User Choice Protection Driver), the Widgets policy is written; twelve remembered audio devices without the value (all "not present"); `netsh … chimney` answers "not a valid argument".
@@ -26,7 +28,7 @@ Checked on a fresh Windows 11 26H2 (build 26300): tweaks that no longer do anyth
 
 ---
 
-## [1.4] — 2026-10-22
+## [1.2.2] — 2026-10-22
 
 Two more external reviews, checked against the code — what holds is fixed.
 
@@ -40,7 +42,7 @@ Two more external reviews, checked against the code — what holds is fixed.
 - The log retries a locked file before dropping a line; registry backup files can't overwrite each other.
 
 <details>
-<summary><b>Development log — 1.4</b></summary>
+<summary><b>Development log — 1.2.2</b></summary>
 
 - **Two reviews** — the first with nine general points, the second fact-checked it and added eight findings. Confirmed and fixed: exit codes of external tools not checked, "All" ticking greyed-out tweaks, the DNS revert, Windows 11 reverts on Windows 10, the Bing revert, the bloatware check, the location service, Get Started selectable on Home / Pro, Recall without a restore point, leftover NVIDIA code.
 - **Not changed, with reasons** — powercfg output is read by its hex values, not its labels (labels are translated, label parsing would break on every non-English Windows), and `/SETACTIVE SCHEME_CURRENT` is what makes a change take effect without a restart; `Get-WmiObject` works in Windows PowerShell 5.1, which the tool is built for; the retired-value cleanup is meant to remove exactly what older versions wrote; the installer already stops with an error message when the launch fails; *Revert all* sets personal settings such as dark mode back to the Windows default by design — its dialog now says so.
@@ -51,7 +53,7 @@ Two more external reviews, checked against the code — what holds is fixed.
 
 ---
 
-## [1.3] — 2026-10-22
+## [1.2.1] — 2026-10-22
 
 An honesty pass: tweaks that never did anything are gone, the safety net is lighter, and two dashboard tools work properly again.
 
@@ -63,7 +65,7 @@ An honesty pass: tweaks that never did anything are gone, the safety net is ligh
 - **README** — "every setting can be undone": app removals and the cleanups are one-way, and it now says so.
 
 <details>
-<summary><b>Development log — 1.3</b> (one or two lines per step)</summary>
+<summary><b>Development log — 1.2.1</b> (one or two lines per step)</summary>
 
 - **External review** — nine points checked against the code and Microsoft's policy documentation; all confirmed, one with a different cause (the restore-point limit was not in the way — the old code lifted it and never put it back).
 - **Tweaks out** — eight removed from every table, the presets (19 / 76 / 91) and the README; *Revert all* removes their values. Only `EnableWindowsBackup = 0` and a frequency of 0 are treated as ours — an organisation's own values stay.
