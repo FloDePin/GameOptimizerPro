@@ -3,7 +3,7 @@
 # ⚡ GameOptimizerPro
 
 **Windows- & Gaming-Optimierer in einem einzigen PowerShell-Skript.**<br>
-102 Tweaks — jede Einstellung lässt sich rückgängig machen, und du siehst, welche aktiv sind.
+114 Tweaks — jede Einstellung lässt sich rückgängig machen, und du siehst, welche aktiv sind.
 
 [![Release](https://img.shields.io/github/v/release/FloDePin/GameOptimizerPro?style=flat-square&color=e53935&label=release)](https://github.com/FloDePin/GameOptimizerPro/releases/latest)
 [![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?style=flat-square&logo=windows)](#-voraussetzungen)
@@ -40,7 +40,7 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 ## ✨ Was GameOptimizerPro ausmacht
 
-- ↩️ **Jede Einstellung lässt sich rückgängig machen** — alle 102 Tweaks haben ein eigenes Revert zum Windows-Standard. Nur zwei Arten gehen in eine Richtung: App-Entfernungen (sie kommen über die Systemwiederherstellung zurück) und die Bereinigungen (gelöschte Cache-Dateien bleiben gelöscht).
+- ↩️ **Jede Einstellung lässt sich rückgängig machen** — alle 114 Tweaks haben ein eigenes Revert zum Windows-Standard. Nur zwei Arten gehen in eine Richtung: App-Entfernungen (sie kommen über die Systemwiederherstellung zurück) und die Bereinigungen (gelöschte Cache-Dateien bleiben gelöscht).
 - 🟢 **Du siehst, was aktiv ist** — 95 Tweaks haben einen Live-Status, direkt aus Windows gelesen (Registry, Dienste, Energieplan), nicht aus einer Liste dessen, was du mal angeklickt hast.
 - 🔄 **Merkt, wenn Windows Tweaks zurücksetzt** — Updates stellen gern Dinge zurück. Beim Start vergleicht das Tool mit deinem letzten Apply und bietet an, Zurückgesetztes neu anzuwenden.
 - 🛟 **Sicherheitsnetz vor jeder Änderung** — ein `.reg`-Backup aller betroffenen Schlüssel vor jedem Apply und Revert, dazu ein Systemwiederherstellungspunkt, sobald Apps entfernt werden.
@@ -66,26 +66,27 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 | Kategorie | Tweaks | Beispiele |
 |---|:---:|---|
-| 🪟 Windows | 43 | Debloat (Copilot, Recall, OneDrive, still nachinstallierte Vorschlags-Apps), Telemetrie & Datenschutz, die Windows-KI-Schalter, Ultimate Performance, HPET / Timer, Komfort |
+| 🪟 Windows | 52 | Debloat (Copilot, Recall, OneDrive, still nachinstallierte Vorschlags-Apps, Tipps & Werbung), Telemetrie & Datenschutz, die Windows-KI-Schalter, Windows-Update-Steuerung (Pro), Ultimate Performance, HPET / Timer, Komfort |
 | 🎮 Gaming | 11 | Spielmodus, MMCSS, CPU-Priorität, Vollbildoptimierungen, MSI-Modus, HAGS, GPU-Timeout (TDR) |
 | 🌐 Netzwerk | 13 | Nagle, LSO, Network Throttling, DNS (Cloudflare / Google), TCP, QoS, Energy-Efficient Ethernet, Interrupt Moderation, Energiesparen der Adapter |
 | 💾 RAM & Speicher | 15 | Auslagerungsdatei, Speicherkomprimierung, TRIM, NVMe, Schreibcache, Ruhezustand + **Deep Clean** (6 Bereinigungen, jede zeigt die freigegebenen MB) |
-| 🪟 Windows 11 | 6 | Klassisches Kontextmenü, Taskleiste links, Widgets, Start-Empfehlungen, Task beenden |
+| 🪟 Windows 11 | 7 | Klassisches Kontextmenü, Taskleiste links, Widgets, Start-Empfehlungen, Task beenden, Dynamische Beleuchtung |
 | 🔊 Audio | 4 | Audioverbesserungen, MMCSS-Audio, Priorität des Audiodienstes, Soundschema |
 | 🖥️ GPU | 3 | AMD-Treiber-Tweaks (ULPS, Anti-Lag, Shader-Cache). NVIDIA speichert seine Treiber-Einstellungen in der NVIDIA App, nicht in der Registry |
-| ⚡ Energie | 7 | USB- / PCIe-Energiesparen, Festplatten- und System-Standby, Bildschirm-Timeout, CPU-Min / -Max |
+| ⚡ Energie | 9 | USB- / USB-3- / PCIe-Energiesparen, Festplatten- und System-Standby, Weck-Timer, Bildschirm-Timeout, CPU-Min / -Max |
 
 <details>
-<summary><b>Alle 102 Tweaks anzeigen</b> (Namen wie in der Oberfläche)</summary>
+<summary><b>Alle 114 Tweaks anzeigen</b> (Namen wie in der Oberfläche)</summary>
 
-**🪟 Windows (45)**
+**🪟 Windows (52)**
 
-- *Bloatware:* Remove Xbox Apps · Remove Copilot · Remove OneDrive · Remove Windows Recall · Remove Other Bloatware · Stop Auto-Installed Suggested Apps · Disable Get Started & Copilot Sign-in Screens
-- *Privacy:* Disable Telemetry & Data Collection · Disable Activity History · Disable Advertising ID · Disable Text & Image Generation (AI) · Disable Click to Do & Settings Agent (AI) · Disable AI in Paint & Notepad · Disable Location Tracking · Block Telemetry Hosts (hosts file) · Disable Scheduled Telemetry Tasks
-- *Performance:* Ultimate Performance Plan · Disable HPET (High Precision Event Timer) · Allow Global Timer Resolution (Windows 11) · Disable Prefetch & Superfetch · Optimize Visual Effects (Performance Mode) · Disable Windows Search Indexing · Disable Power Throttling · Disable Bing in Windows Search · Process Count Reduction (Svchost)
+- *Bloatware:* Remove Xbox Apps · Remove Copilot · Remove OneDrive · Remove Windows Recall · Remove Other Bloatware · Stop Auto-Installed Suggested Apps · Disable Tips, Ads & Suggestions · Stop OneDrive Folder Backup · Disable Get Started & Copilot Sign-in Screens
+- *Privacy:* Disable Telemetry & Data Collection · Disable Activity History · Disable Advertising ID · Disable Text & Image Generation (AI) · Disable Click to Do & Settings Agent (AI) · Disable AI in Paint & Notepad · Disable Location Tracking · Block Telemetry Hosts (hosts file) · Disable Scheduled Telemetry Tasks · Disable Input & Speech Data Collection · Disable Remote Assistance
+- *Performance:* Ultimate Performance Plan · Disable HPET (High Precision Event Timer) · Allow Global Timer Resolution (Windows 11) · Disable Prefetch & Superfetch · Optimize Visual Effects (Performance Mode) · Disable Startup App Delay · Disable Windows Search Indexing · Disable Power Throttling · Disable Bing in Windows Search · Process Count Reduction (Svchost) · Block Background Apps (Policy)
+- *Windows Update:* Exclude Drivers from Windows Update · Hold Feature Updates (Stay on Current Version)
 - *CTT Essentials:* Prevent Device Companion Apps · Disable Consumer Features · Disable Windows Platform Binary Table (WPBT) · Disable Store Recommended Search Results · Enable Start Menu Previous Layout · Disable File Explorer Automatic Folder Discovery · Run Disk Cleanup
 - *Quality of Life:* Show File Extensions · Show Hidden Files · Disable Reserved Storage · Disable Storage Sense · Num Lock on Startup · Disable Lock Screen · Enable Long Paths
-- *Mouse & UI:* Disable Mouse Acceleration · Disable Sticky Keys · Enable Dark Mode · Disable Transparency Effects
+- *Mouse & UI:* Disable Mouse Acceleration · Disable Sticky Keys · Enable Dark Mode · Disable Transparency Effects · Alt+Tab Without Browser Tabs
 
 **🎮 Gaming (11)**
 
@@ -113,6 +114,7 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 - *Taskbar & Shell:* Restore Classic Right-Click Menu · Left-Align Taskbar · Disable Widgets · Enable End Task in Taskbar
 - *Start Menu:* Disable Recommended in Start Menu
 - *Window Management:* Disable Snap Layout Hover Menu
+- *Devices:* Disable Dynamic Lighting
 
 **🔊 Audio (4)**
 
@@ -123,12 +125,12 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 - *AMD:* AMD: Disable ULPS (Ultra Low Power State) · AMD: Shader Cache (Unlimited) · AMD: Anti-Lag (Low Latency Mode)
 
-**⚡ Energie (7)**
+**⚡ Energie (9)**
 
-- *USB & PCI:* Disable USB Selective Suspend · Disable PCI-E Link State Power Management
+- *USB & PCI:* Disable USB Selective Suspend · Disable USB 3 Link Power Management · Disable PCI-E Link State Power Management
 - *Storage:* Disable Hard Disk Sleep
 - *Display:* Set Display Sleep = 15 Minutes
-- *Sleep:* Disable Sleep (System)
+- *Sleep:* Disable Sleep (System) · Disable Wake Timers
 - *CPU:* CPU Minimum Processor State = 100% · CPU Maximum Processor State = 100%
 
 </details>
@@ -138,8 +140,8 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 | Preset | Tweaks | Für wen |
 |---|:---:|---|
 | 🟢 **Minimal** | 19 | Sichere Grundlagen: Datenschutz, Gaming-Priorität, Netzwerk-Latenz. Keine App-Entfernung — ideal für den ersten Lauf. |
-| 🟠 **Balanced** | 75 | Minimal + Ultimate Performance, Timer, GPU- und Audio-Tweaks, leichtes Debloat (Copilot, Recall, Xbox) und die Windows-KI-Schalter. Die empfohlene Allround-Einstellung. |
-| 🔴 **Aggressive** | 88 | Alles, inkl. Entfernen von OneDrive, kein Ruhezustand, keine Speicherkomprimierung. Für erfahrene Nutzer. |
+| 🟠 **Balanced** | 81 | Minimal + Ultimate Performance, Timer, GPU- und Audio-Tweaks, leichtes Debloat (Copilot, Recall, Tipps & Werbung) und die Windows-KI- und Datenschutz-Schalter. Die empfohlene Allround-Einstellung. |
+| 🔴 **Aggressive** | 97 | Alles, inkl. Entfernen von Xbox-Apps und OneDrive, keine Store-Apps im Hintergrund, keine Treiber über Windows Update, kein Ruhezustand, keine Speicherkomprimierung. Für erfahrene Nutzer. |
 
 Ein Preset setzt nur die Haken — du prüfst die Liste und klickst selbst auf **Apply selected**.
 
@@ -161,7 +163,7 @@ Ein Preset setzt nur die Haken — du prüfst die Liste und klickst selbst auf *
 
 ## 📋 Voraussetzungen
 
-- **Windows 11** oder **Windows 10 22H2** (reine Windows-11-Tweaks sind unter Windows 10 ausgegraut)
+- **Windows 11** oder **Windows 10 22H2** (reine Windows-11-Tweaks sind unter Windows 10 ausgegraut; Richtlinien, die Windows Home oder Pro ignoriert, sind dort ausgegraut und mit *Pro and up* / *Enterprise only* markiert)
 - **Windows PowerShell 5.1** — in Windows enthalten
 - **Administratorrechte** — der Installer fragt danach
 - GPU-Tab: nur Grafikkarten von **AMD** (alle anderen Tweaks funktionieren mit jeder Karte)

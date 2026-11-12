@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.2.3
+    1.2.4
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.2.3"
+$Script:AppVersion = "1.2.4"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -235,7 +235,14 @@ function Get-TelemetryTasks {
         "\Microsoft\Windows\Autochk\Proxy",
         "\Microsoft\Windows\Customer Experience Improvement Program\Consolidator",
         "\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip",
-        "\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector"
+        "\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector",
+        # 1.2.4: feedback prompts, the error-report upload queue, SQM and the power-efficiency
+        # analysis (Sqm-Tasks is gone on 26H2 -- missing tasks are skipped)
+        "\Microsoft\Windows\Feedback\Siuf\DmClient",
+        "\Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload",
+        "\Microsoft\Windows\Windows Error Reporting\QueueReporting",
+        "\Microsoft\Windows\PI\Sqm-Tasks",
+        "\Microsoft\Windows\Power Efficiency Diagnostics\AnalyzeSystem"
     )
 }
 
@@ -244,6 +251,120 @@ function Get-TelemetryTasks {
 function Test-EnterpriseEdition {
     (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" "EditionID") -match '^(Enterprise|Education|IoTEnterprise|ServerRdsh)'
 }
+
+# Windows Update for Business and most Policy CSP settings are read from Pro upwards;
+# Home (EditionID Core, CoreN, CoreSingleLanguage, CoreCountrySpecific) ignores them.
+function Test-HomeEdition {
+    (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" "EditionID") -match '^Core'
+}
+
+# Audio enhancements through the Windows audio API. Windows 11 refuses direct writes to the
+# endpoint stores (MMDevices\...\FxProperties: "requested registry access is not allowed",
+# measured on 26H2 with a test value), and the registry also keeps endpoints Windows only
+# remembers. The policy-config interface asks the audio endpoint service to write instead,
+# like the Sound control panel does. PKEY_AudioEndpoint_Disable_SysFx {1da5d803-...},5 in
+# the FX store: 1 = enhancements off, 0 = on.
+function Initialize-AudioPolicy {
+    if ('GOPAudio.Fx' -as [type]) { return }
+    Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+namespace GOPAudio {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct PROPERTYKEY { public Guid fmtid; public int pid; }
+
+  [StructLayout(LayoutKind.Explicit, Size = 24)]
+  public struct PROPVARIANT {
+    [FieldOffset(0)] public ushort vt;
+    [FieldOffset(8)] public uint uintVal;
+    [FieldOffset(8)] public IntPtr ptr;
+  }
+
+  [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IMMDeviceEnumerator {
+    [PreserveSig] int EnumAudioEndpoints(int dataFlow, int stateMask, out IMMDeviceCollection devices);
+  }
+
+  [ComImport, Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IMMDeviceCollection {
+    [PreserveSig] int GetCount(out uint count);
+    [PreserveSig] int Item(uint index, out IMMDevice device);
+  }
+
+  [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IMMDevice {
+    [PreserveSig] int Activate(ref Guid iid, int clsCtx, IntPtr p, [MarshalAs(UnmanagedType.IUnknown)] out object iface);
+    [PreserveSig] int OpenPropertyStore(int access, out IntPtr props);
+    [PreserveSig] int GetId([MarshalAs(UnmanagedType.LPWStr)] out string id);
+    [PreserveSig] int GetState(out int state);
+  }
+
+  [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class MMDeviceEnumerator { }
+
+  [ComImport, Guid("F8679F50-850A-41CF-9C72-430F290290C8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IPolicyConfig {
+    [PreserveSig] int GetMixFormat([MarshalAs(UnmanagedType.LPWStr)] string dev, IntPtr fmt);
+    [PreserveSig] int GetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string dev, int bDefault, IntPtr fmt);
+    [PreserveSig] int ResetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string dev);
+    [PreserveSig] int SetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string dev, IntPtr ep, IntPtr mix);
+    [PreserveSig] int GetProcessingPeriod([MarshalAs(UnmanagedType.LPWStr)] string dev, int bDefault, IntPtr d, IntPtr m);
+    [PreserveSig] int SetProcessingPeriod([MarshalAs(UnmanagedType.LPWStr)] string dev, IntPtr p);
+    [PreserveSig] int GetShareMode([MarshalAs(UnmanagedType.LPWStr)] string dev, IntPtr m);
+    [PreserveSig] int SetShareMode([MarshalAs(UnmanagedType.LPWStr)] string dev, IntPtr m);
+    [PreserveSig] int GetPropertyValue([MarshalAs(UnmanagedType.LPWStr)] string dev, int bFxStore, ref PROPERTYKEY key, out PROPVARIANT pv);
+    [PreserveSig] int SetPropertyValue([MarshalAs(UnmanagedType.LPWStr)] string dev, int bFxStore, ref PROPERTYKEY key, ref PROPVARIANT pv);
+  }
+
+  [ComImport, Guid("870AF99C-171D-4F9E-AF0D-E63DF40C2BC9")] class PolicyConfigClient { }
+
+  public static class Fx {
+    [DllImport("ole32.dll")] static extern int PropVariantClear(ref PROPVARIANT pv);
+
+    // eRender = 0; stateMask: DEVICE_STATE_ACTIVE = 1, DEVICE_STATE_UNPLUGGED = 8
+    public static string[] RenderIds(int stateMask) {
+      var list = new List<string>();
+      var en = (IMMDeviceEnumerator)(new MMDeviceEnumerator());
+      IMMDeviceCollection col;
+      if (en.EnumAudioEndpoints(0, stateMask, out col) != 0) return list.ToArray();
+      uint n; col.GetCount(out n);
+      for (uint i = 0; i < n; i++) {
+        IMMDevice d; if (col.Item(i, out d) != 0) continue;
+        string id; if (d.GetId(out id) == 0) list.Add(id);
+      }
+      return list.ToArray();
+    }
+
+    static PROPERTYKEY Key(string fmtid, int pid) { var k = new PROPERTYKEY(); k.fmtid = new Guid(fmtid); k.pid = pid; return k; }
+
+    // the value, -1 when the property isn't set (Windows default), -2 when the service refused
+    public static long GetUInt(string id, bool fx, string fmtid, int pid) {
+      var pc = (IPolicyConfig)(new PolicyConfigClient());
+      var k = Key(fmtid, pid);
+      PROPVARIANT pv;
+      if (pc.GetPropertyValue(id, fx ? 1 : 0, ref k, out pv) != 0) return -2;
+      long r = (pv.vt == 19 || pv.vt == 18) ? (long)pv.uintVal : -1;
+      PropVariantClear(ref pv);
+      return r;
+    }
+
+    // HRESULT, 0 = written
+    public static int SetUInt(string id, bool fx, string fmtid, int pid, uint value) {
+      var pc = (IPolicyConfig)(new PolicyConfigClient());
+      var k = Key(fmtid, pid);
+      var pv = new PROPVARIANT(); pv.vt = 19; pv.uintVal = value;   // VT_UI4
+      return pc.SetPropertyValue(id, fx ? 1 : 0, ref k, ref pv);
+    }
+  }
+}
+'@
+}
+# Playback devices that are there: active or unplugged (the jack is empty) -- not the ones
+# Windows only remembers.
+function Get-AudioRenderIds { Initialize-AudioPolicy; @([GOPAudio.Fx]::RenderIds(1 -bor 8)) }
+function Get-AudioFx([string]$Id) { Initialize-AudioPolicy; [GOPAudio.Fx]::GetUInt($Id, $true, '{1da5d803-d492-4edd-8c23-e0c0ffee7f0e}', 5) }
+function Set-AudioFx([string]$Id, [uint32]$Value) { Initialize-AudioPolicy; [GOPAudio.Fx]::SetUInt($Id, $true, '{1da5d803-d492-4edd-8c23-e0c0ffee7f0e}', 5, $Value) }
 
 # The WMI results are kept in $Script:VideoCtrls / $Script:GpuObj / $Script:CpuObj and
 # reused by the dashboard, so every class is queried only once per start.
@@ -397,8 +518,18 @@ $Script:RegistryBackupKeys = @(
     # Automatic Folder Discovery" DELETES these trees, so they must be saved first.
     "HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell",
     "HKCU\Software\Microsoft\GameBar",
+    "HKCU\Software\Microsoft\Input\TIPC",
+    "HKCU\Software\Microsoft\InputPersonalization",
+    "HKCU\Software\Microsoft\Lighting",
+    "HKCU\Software\Microsoft\Siuf\Rules",
+    "HKCU\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy",
     "HKCU\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo",
     "HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications",
+    "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize",
+    "HKCU\Software\Microsoft\Windows\CurrentVersion\Privacy",
+    "HKCU\Software\Microsoft\Windows\CurrentVersion\SearchSettings",
+    "HKCU\Software\Microsoft\Windows\CurrentVersion\SystemSettings\AccountNotifications",
+    "HKCU\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement",
     "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager",
     "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
     "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved",
@@ -422,6 +553,7 @@ $Script:RegistryBackupKeys = @(
     "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
     "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run",
     "HKLM\SOFTWARE\Policies\Microsoft\Dsh",
+    "HKLM\SOFTWARE\Policies\Microsoft\OneDrive",
     "HKLM\SOFTWARE\Policies\Microsoft\Windows",
     "HKLM\SOFTWARE\Policies\WindowsNotepad",
     "HKLM\SYSTEM\CurrentControlSet\Control",
@@ -541,8 +673,10 @@ function Set-PowerAllSchemes {
 # Returns the AC index as a lowercase 8-digit hex string, or $null.
 # -----------------------------------------
 function Get-PowerValueAC {
-    param([string]$Sub, [string]$Setting)
-    $out = powercfg /QUERY SCHEME_CURRENT $Sub $Setting 2>$null
+    # -Hidden: settings Windows hides from Power Options (USB 3 link power management)
+    # only show up with /QH
+    param([string]$Sub, [string]$Setting, [switch]$Hidden)
+    $out = if ($Hidden) { powercfg /QH SCHEME_CURRENT $Sub $Setting 2>$null } else { powercfg /QUERY SCHEME_CURRENT $Sub $Setting 2>$null }
     if (-not $out) { return $null }
     $hex = @($out | ForEach-Object { if ($_ -match '0x([0-9a-fA-F]{8})') { $matches[1] } })
     if ($hex.Count -lt 2) { return $null }
@@ -558,7 +692,7 @@ $AllTweaks = @(
     # == WINDOWS / BLOATWARE ==============================================
     [PSCustomObject]@{
         Name     = "Remove Xbox Apps"
-        Desc     = "Entfernt Xbox Game Bar, Xbox Identity Provider und Xbox TCUI. Diese Apps laufen im Hintergrund und verbrauchen Ressourcen - auch wenn du keine Xbox hast."
+        Desc     = "Entfernt Xbox Game Bar, Xbox Identity Provider und Xbox TCUI. Diese Apps laufen im Hintergrund und verbrauchen Ressourcen - auch wenn du keine Xbox hast. ACHTUNG: Danach fehlen die Xbox-Anmeldung fuer Spiele aus Game Pass und dem Microsoft Store (Xbox Identity Provider), der Xbox-Modus und Aufnahmen mit der Game Bar - bis du die Apps aus dem Microsoft Store neu installierst. Steam-, Epic- und andere Spiele laufen normal weiter."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
@@ -632,6 +766,35 @@ $AllTweaks = @(
             reg add $cdm /v OemPreInstalledAppsEnabled /t REG_DWORD /d 0 /f | Out-Null
             reg add $cdm /v PreInstalledAppsEnabled    /t REG_DWORD /d 0 /f | Out-Null
             Write-Log "Auto-install of suggested apps disabled (ContentDeliveryManager)"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Tips, Ads & Suggestions"
+        Desc     = "Schaltet die Werbung, Tipps und Vorschlaege ab, die Windows ueberall einstreut: Tipp-Benachrichtigungen, die Seiten 'Einrichtung abschliessen' und die Willkommensseite nach Updates, Vorschlaege in den Einstellungen und im Start, Konto-Hinweise (Microsoft 365, OneDrive-Sicherung) im Start und in den Einstellungen sowie Werbung von Sync-Anbietern im Datei-Explorer. Die Bilder von Windows-Blickpunkt (Spotlight) auf dem Sperrbildschirm bleiben, nur die Tipps darauf verschwinden - den Hauptschalter 'ContentDeliveryAllowed' laesst der Tweak bewusst aus, weil nicht belegt ist, ob er Spotlight mit abschaltet. Wirkt auf allen Editionen. Empfehlungen im Startmenue: 'Disable Recommended in Start Menu'."
+        Category = "Windows"
+        Group    = "Bloatware"
+        Action   = {
+            $cdm = "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+            foreach ($v in 'SoftLandingEnabled', 'FeatureManagementEnabled', 'PreInstalledAppsEverEnabled', 'RotatingLockScreenOverlayEnabled', 'SystemPaneSuggestionsEnabled',
+                    'SubscribedContent-310093Enabled', 'SubscribedContent-338387Enabled', 'SubscribedContent-338389Enabled', 'SubscribedContent-338393Enabled',
+                    'SubscribedContent-353694Enabled', 'SubscribedContent-353696Enabled') {
+                reg add $cdm /v $v /t REG_DWORD /d 0 /f | Out-Null
+            }
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement" /v ScoobeSystemSettingEnabled /t REG_DWORD /d 0 /f | Out-Null
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_AccountNotifications /t REG_DWORD /d 0 /f | Out-Null
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowSyncProviderNotifications /t REG_DWORD /d 0 /f | Out-Null
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\SystemSettings\AccountNotifications" /v EnableAccountNotifications /t REG_DWORD /d 0 /f | Out-Null
+            Write-Log "Tips, ads and suggestions disabled (ContentDeliveryManager, account notifications, sync provider ads)"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Stop OneDrive Folder Backup"
+        Desc     = "Verhindert per offizieller OneDrive-Richtlinie, dass OneDrive die Ordner Desktop, Dokumente und Bilder in die Cloud verschiebt ('Ordnersicherung') - auch nicht nach Nachfrage beim Einrichten. Wirkt auf allen Editionen. Schon gesicherte Ordner bleiben in OneDrive; zurueckholen geht in OneDrive unter Einstellungen > Synchronisierung und Sicherung. Ohne installiertes OneDrive aendert sich nichts Sichtbares, die Richtlinie greift aber, falls OneDrive zurueckkommt."
+        Category = "Windows"
+        Group    = "Bloatware"
+        Action   = {
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\OneDrive" /v KFMBlockOptIn /t REG_DWORD /d 1 /f | Out-Null
+            Write-Log "OneDrive folder backup (Known Folder Move) blocked by policy"
         }
     },
     [PSCustomObject]@{
@@ -772,13 +935,43 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Scheduled Telemetry Tasks"
-        Desc     = "Deaktiviert alle geplanten Windows-Aufgaben die Telemetriedaten sammeln und senden (z.B. Microsoft Compatibility Appraiser, Customer Experience Improvement)."
+        Desc     = "Deaktiviert die geplanten Windows-Aufgaben, die Telemetrie- und Nutzungsdaten sammeln und senden: Kompatibilitaets-Appraiser, Programm zur Verbesserung der Benutzerfreundlichkeit (CEIP), Datentraeger-Diagnose, Feedback-Abfragen, das Hochladen gesammelter Fehlerberichte und die Energieeffizienz-Analyse. Aufgaben, die es auf diesem Windows nicht gibt, werden uebersprungen."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
             # Tasks this Windows doesn't have are skipped (schtasks only returns an error code)
             foreach ($task in (Get-TelemetryTasks)) { schtasks /Change /TN $task /Disable 2>$null | Out-Null }
             Write-Log "Telemetry tasks disabled"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Input & Speech Data Collection"
+        Desc     = "Schaltet die Datensammlung bei Eingabe und Sprache ab, wie unter Einstellungen > Datenschutz: Online-Spracherkennung, Freihand- und Eingabe-Personalisierung (Windows lernt nicht mehr aus deinem Tippen, Schreiben und deinen Kontakten), 'Freihand- und Eingabeerkennung verbessern', massgeschneiderte Erfahrungen mit Diagnosedaten und Feedback-Abfragen (Haeufigkeit 'Nie', ab Pro zusaetzlich per Richtlinie). Websites koennen deine Sprachliste nicht mehr lesen, und Windows merkt sich nicht mehr, welche Apps du startest - dadurch bleibt 'Meistverwendet' im Startmenue leer. Diktieren mit Win+H kann ohne Online-Spracherkennung eingeschraenkt sein. Wirkt auf allen Editionen."
+        Category = "Windows"
+        Group    = "Privacy"
+        Action   = {
+            reg add "HKCU\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy" /v HasAccepted /t REG_DWORD /d 0 /f | Out-Null
+            reg add "HKCU\Software\Microsoft\InputPersonalization" /v RestrictImplicitTextCollection /t REG_DWORD /d 1 /f | Out-Null
+            reg add "HKCU\Software\Microsoft\InputPersonalization" /v RestrictImplicitInkCollection /t REG_DWORD /d 1 /f | Out-Null
+            reg add "HKCU\Software\Microsoft\InputPersonalization\TrainedDataStore" /v HarvestContacts /t REG_DWORD /d 0 /f | Out-Null
+            reg add "HKCU\Software\Microsoft\Input\TIPC" /v Enabled /t REG_DWORD /d 0 /f | Out-Null
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Privacy" /v TailoredExperiencesWithDiagnosticDataEnabled /t REG_DWORD /d 0 /f | Out-Null
+            reg add "HKCU\Software\Microsoft\Siuf\Rules" /v NumberOfSIUFInPeriod /t REG_DWORD /d 0 /f | Out-Null
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_TrackProgs /t REG_DWORD /d 0 /f | Out-Null
+            reg add "HKCU\Control Panel\International\User Profile" /v HttpAcceptLanguageOptOut /t REG_DWORD /d 1 /f | Out-Null
+            # The feedback policy is read from Pro upwards (Policy CSP Experience); Home uses the frequency above
+            if (-not (Test-HomeEdition)) { reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection" /v DoNotShowFeedbackNotifications /t REG_DWORD /d 1 /f | Out-Null }
+            Write-Log "Input, inking and speech data collection disabled (speech, personalization, tailored experiences, feedback, app-launch tracking, language list)"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Remote Assistance"
+        Desc     = "Schaltet die Windows-Remoteunterstuetzung ab (Systemeigenschaften > Remote: 'Remoteunterstuetzungsverbindungen mit diesem Computer zulassen'). Niemand kann sich dann per Einladung auf deinen PC schalten. Remotedesktop, die App 'Remotehilfe' (Quick Assist) und Programme wie AnyDesk oder TeamViewer sind nicht betroffen. Wirkt auf allen Editionen."
+        Category = "Windows"
+        Group    = "Privacy"
+        Action   = {
+            reg add "HKLM\SYSTEM\CurrentControlSet\Control\Remote Assistance" /v fAllowToGetHelp /t REG_DWORD /d 0 /f | Out-Null
+            Write-Log "Remote Assistance disabled"
         }
     },
 
@@ -873,7 +1066,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Optimize Visual Effects (Performance Mode)"
-        Desc     = "Schaltet alle Windows-Animationen und visuelle Effekte aus. Windows reagiert dadurch spuerbar schneller - besonders auf schwaecheren Systemen oder beim Gaming."
+        Desc     = "Schaltet die Windows-Animationen und visuellen Effekte aus wie 'Fuer optimale Leistung anpassen' (Systemeigenschaften > Leistungsoptionen): Fenster-, Menue- und Taskleisten-Animationen, Ein- und Ausblenden, Schatten unter Fenstern und Mauszeiger, Fensterinhalt beim Ziehen, durchsichtiges Auswahlrechteck und Symbolschatten. Die Kantenglaettung der Schrift (ClearType) bleibt an, damit Text scharf bleibt. Vollstaendig wirksam nach Ab- und wieder Anmelden. Windows reagiert dadurch spuerbar direkter - besonders auf schwaecheren Systemen."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -881,7 +1074,23 @@ $AllTweaks = @(
             $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
             Set-ItemProperty $path -Name "TaskbarAnimations" -Value 0
             reg add "HKCU\Control Panel\Desktop\WindowMetrics" /v MinAnimate /t REG_SZ /d 0 /f | Out-Null
-            Write-Log "Visual effects set to performance mode"
+            # The single effects: VisualFXSetting alone only moves the radio button. The mask is the
+            # "best performance" set (90 12 03 80 10 ...); FontSmoothing (ClearType) is left on.
+            reg add "HKCU\Control Panel\Desktop" /v UserPreferencesMask /t REG_BINARY /d 9012038010000000 /f | Out-Null
+            reg add "HKCU\Control Panel\Desktop" /v DragFullWindows /t REG_SZ /d 0 /f | Out-Null
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ListviewAlphaSelect /t REG_DWORD /d 0 /f | Out-Null
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ListviewShadow /t REG_DWORD /d 0 /f | Out-Null
+            Write-Log "Visual effects set to performance mode (takes full effect after signing out and in)"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Startup App Delay"
+        Desc     = "Windows startet Autostart-Programme nach der Anmeldung erst mit einigen Sekunden Verzoegerung. Mit diesem Tweak starten sie sofort - Discord, Steam und Co. sind schneller da, dafuer ist der Desktop in den ersten Sekunden etwas traeger. Nicht offiziell dokumentiert, aber bis Windows 11 26H2 von Nutzern bestaetigt; ein grosses Windows-Update kann den Wert entfernen (die Drift-Pruefung meldet das). Wirkt auf allen Editionen."
+        Category = "Windows"
+        Group    = "Performance"
+        Action   = {
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize" /v StartupDelayInMSec /t REG_DWORD /d 0 /f | Out-Null
+            Write-Log "Startup app delay disabled"
         }
     },
     [PSCustomObject]@{
@@ -910,14 +1119,18 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Bing in Windows Search"
-        Desc     = "Deaktiviert die Bing-Integration in der Windows-Suche. Das Startmenue sucht nur noch lokal -- schneller, kein Datenaustausch mit Microsoft bei jeder Suche."
+        Desc     = "Deaktiviert die Bing-Integration in der Windows-Suche. Das Startmenue sucht nur noch lokal -- schneller, kein Datenaustausch mit Microsoft bei jeder Suche. Ausserdem aus: die Suchhighlights (wechselnde Bilder und Themen im Suchfeld) und die Cloud-Inhaltssuche in OneDrive, Outlook und Bing fuer Microsoft- und Arbeits-/Schulkonten (Einstellungen > Datenschutz > Suchberechtigungen)."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
             reg add "HKCU\SOFTWARE\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /t REG_DWORD /d 1 /f | Out-Null
             reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /t REG_DWORD /d 0 /f | Out-Null
             reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" /v CortanaConsent /t REG_DWORD /d 0 /f | Out-Null
-            Write-Log "Bing in Windows Search disabled"
+            $ss = "HKCU\Software\Microsoft\Windows\CurrentVersion\SearchSettings"
+            reg add $ss /v IsDynamicSearchBoxEnabled /t REG_DWORD /d 0 /f | Out-Null
+            reg add $ss /v IsMSACloudSearchEnabled /t REG_DWORD /d 0 /f | Out-Null
+            reg add $ss /v IsAADCloudSearchEnabled /t REG_DWORD /d 0 /f | Out-Null
+            Write-Log "Bing in Windows Search disabled (plus search highlights and cloud content search)"
         }
     },
     [PSCustomObject]@{
@@ -929,6 +1142,48 @@ $AllTweaks = @(
             $ramKB = [math]::Round((Get-WmiObject Win32_ComputerSystem).TotalPhysicalMemory / 1024)
             reg add "HKLM\SYSTEM\CurrentControlSet\Control" /v SvcHostSplitThresholdInKB /t REG_DWORD /d $ramKB /f | Out-Null
             Write-Log ("Svchost split threshold set to " + [math]::Round($ramKB/1024) + " MB (RAM size)")
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Block Background Apps (Policy)"
+        Desc     = "Nur ab Windows Pro: Store-Apps (z.B. WhatsApp, Smartphone-Link, Mail, Wetter) duerfen per offizieller Richtlinie nicht mehr im Hintergrund laufen - spart RAM und Hintergrundlast. ACHTUNG: Ihre Benachrichtigungen (z.B. neue WhatsApp-Nachrichten oder SMS ueber Smartphone-Link) kommen dann erst, wenn die App offen ist. Normale Programme (Steam, Discord, Treiber-Tools) sind nicht betroffen. Unter Home wertet Windows die Richtlinie nicht aus - dort ist der Tweak ausgegraut."
+        Category = "Windows"
+        Group    = "Performance"
+        Action   = {
+            if (Test-HomeEdition) { Write-Log "Background apps policy skipped: Windows Home doesn't read it"; return }
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" /v LetAppsRunInBackground /t REG_DWORD /d 2 /f | Out-Null
+            Write-Log "Store apps blocked from running in the background (LetAppsRunInBackground = Force Deny)"
+        }
+    },
+
+    # == WINDOWS / WINDOWS UPDATE ===========================================
+    [PSCustomObject]@{
+        Name     = "Exclude Drivers from Windows Update"
+        Desc     = "Nur ab Windows Pro: Windows Update installiert keine Treiber mehr (offizielle Richtlinie 'Treiber nicht in Windows-Updates einschliessen'). Verhindert, dass Windows z.B. deinen frisch installierten Grafiktreiber durch eine aeltere Version ersetzt. Treiber holst du dann selbst beim Hersteller (NVIDIA App, AMD Software, Mainboard-Seite). Sicherheits- und Funktionsupdates kommen weiter. Unter Home wirkungslos - dort ausgegraut."
+        Category = "Windows"
+        Group    = "Windows Update"
+        Action   = {
+            if (Test-HomeEdition) { Write-Log "Driver exclusion skipped: Windows Home doesn't read this policy"; return }
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v ExcludeWUDriversInQualityUpdate /t REG_DWORD /d 1 /f | Out-Null
+            Write-Log "Windows Update no longer installs drivers"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Hold Feature Updates (Stay on Current Version)"
+        Desc     = "Nur ab Windows Pro: Haelt Windows auf der installierten Version fest (z.B. 26H2) - das naechste grosse Funktionsupdate wird nicht automatisch installiert. Die monatlichen Sicherheitsupdates kommen weiter. Die Version wird beim Anwenden ausgelesen, nicht fest eingetragen. Wichtig: Jede Windows-Version bekommt nur begrenzt Updates (Home und Pro 24 Monate) - rechtzeitig zuruecksetzen, damit du nicht ohne Sicherheitsupdates dastehst. Unter Home wirkungslos - dort ausgegraut."
+        Category = "Windows"
+        Group    = "Windows Update"
+        Action   = {
+            if (Test-HomeEdition) { Write-Log "Feature update hold skipped: Windows Home doesn't read this policy"; return }
+            # read only -- the version is never hard-coded
+            $ver = Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" "DisplayVersion"
+            if (-not $ver) { throw "the installed Windows version (DisplayVersion) could not be read" }
+            $prod = if ([int](Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" "CurrentBuildNumber") -ge 22000) { "Windows 11" } else { "Windows 10" }
+            $wu = "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+            reg add $wu /v TargetReleaseVersion /t REG_DWORD /d 1 /f | Out-Null
+            reg add $wu /v ProductVersion /t REG_SZ /d $prod /f | Out-Null
+            reg add $wu /v TargetReleaseVersionInfo /t REG_SZ /d $ver /f | Out-Null
+            Write-Log "Feature updates held at $prod $ver (security updates continue)"
         }
     },
 
@@ -945,10 +1200,11 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Consumer Features"
-        Desc     = "Setzt die offizielle Richtlinie 'Turn off Microsoft consumer experiences' (1:1 aus WinUtil). Achtung: Laut Microsoft wertet Windows sie nur auf Enterprise und Education aus. Auf Home und Pro stoppt 'Stop Auto-Installed Suggested Apps' (Tab Windows, Bloatware) das automatische Nachinstallieren von Vorschlags-Apps."
+        Desc     = "Nur Windows Enterprise / Education: Setzt die offizielle Richtlinie 'Turn off Microsoft consumer experiences' (1:1 aus WinUtil). Home und Pro werten sie laut Microsoft nicht aus -- dort ist der Tweak ausgegraut; dort stoppt 'Stop Auto-Installed Suggested Apps' (Tab Windows, Bloatware) das automatische Nachinstallieren von Vorschlags-Apps."
         Category = "Windows"
         Group    = "CTT Essentials"
         Action   = {
+            if (-not (Test-EnterpriseEdition)) { Write-Log "Consumer features policy skipped: only Enterprise / Education read it"; return }
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableWindowsConsumerFeatures /t REG_DWORD /d 1 /f | Out-Null
             Write-Log "Windows Consumer Features disabled"
         }
@@ -1133,6 +1389,16 @@ $AllTweaks = @(
             Write-Log "Transparency disabled"
         }
     },
+    [PSCustomObject]@{
+        Name     = "Alt+Tab Without Browser Tabs"
+        Desc     = "Alt+Tab zeigt nur noch Fenster, keine einzelnen Edge-Tabs mehr (Einstellungen > System > Multitasking > 'Registerkarten aus Apps anzeigen': keine). Wirkt auf allen Editionen."
+        Category = "Windows"
+        Group    = "Mouse & UI"
+        Action   = {
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v MultiTaskingAltTabFilter /t REG_DWORD /d 3 /f | Out-Null
+            Write-Log "Alt+Tab shows windows only (no browser tabs)"
+        }
+    },
 
     # == GAMING / IN-GAME BOOSTS ==========================================
     [PSCustomObject]@{
@@ -1148,13 +1414,14 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Xbox Game Bar"
-        Desc     = "Deaktiviert die Xbox Game Bar (Win+G Overlay). Verhindert dass die Game Bar im Hintergrund laeuft und Ressourcen verbraucht. Game Mode bleibt davon unberuehrt."
+        Desc     = "Deaktiviert die Xbox Game Bar (Win+G Overlay). Verhindert dass die Game Bar im Hintergrund laeuft und Ressourcen verbraucht. Die Xbox-Taste am Controller oeffnet die Game Bar nicht mehr. Game Mode bleibt davon unberuehrt."
         Category = "Gaming"
         Group    = "In-Game Boosts"
         Action   = {
             reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v AppCaptureEnabled /t REG_DWORD /d 0 /f | Out-Null
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR" /v AllowGameDVR /t REG_DWORD /d 0 /f | Out-Null
-            Write-Log "Xbox Game Bar disabled"
+            reg add "HKCU\Software\Microsoft\GameBar" /v UseNexusForGameBarEnabled /t REG_DWORD /d 0 /f | Out-Null
+            Write-Log "Xbox Game Bar disabled (incl. the controller's Xbox button)"
         }
     },
     [PSCustomObject]@{
@@ -1733,12 +2000,14 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Recommended in Start Menu"
-        Desc     = "WIN11: Entfernt den 'Empfohlen'-Bereich im Startmenue der zuletzt geoeffnete Dateien und Apps anzeigt. Mehr Platz fuer angeheftete Apps und saubereres Layout."
+        Desc     = "WIN11: Leert den 'Empfohlen'-Bereich im Startmenue auf allen Editionen: keine zuletzt geoeffneten Dateien und keine Tipps oder App-Empfehlungen mehr (das betrifft auch 'Zuletzt verwendet' im Datei-Explorer und die Sprunglisten der Taskleiste). Ganz ausgeblendet wird der Bereich per Richtlinie - laut Microsoft ab Pro; unter Home bleibt er leer stehen."
         Category = "Windows 11"
         Group    = "Start Menu"
         Action   = {
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Explorer" /v HideRecommendedSection /t REG_DWORD /d 1 /f | Out-Null
-            Write-Log "Win11: Recommended section in Start Menu disabled"
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_TrackDocs /t REG_DWORD /d 0 /f | Out-Null
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_IrisRecommendations /t REG_DWORD /d 0 /f | Out-Null
+            Write-Log "Win11: Recommended section in Start Menu disabled (policy + recent files + recommendations)"
         }
     },
     [PSCustomObject]@{
@@ -1761,30 +2030,35 @@ $AllTweaks = @(
             Write-Log "Win11: Snap Layout hover menu disabled"
         }
     },
+    [PSCustomObject]@{
+        Name     = "Disable Dynamic Lighting"
+        Desc     = "WIN11: Schaltet die Dynamische Beleuchtung von Windows ab (Einstellungen > Personalisierung > Dynamische Beleuchtung). Sonst greift Windows auf RGB-Tastaturen, -Maeuse und -Beleuchtung zu und kann sich mit der Hersteller-Software (iCUE, Armoury Crate, G HUB, SignalRGB) streiten - Effekte flackern oder werden ueberschrieben. Wer RGB nur ueber Windows steuert, laesst sie an."
+        Category = "Windows 11"
+        Group    = "Devices"
+        Action   = {
+            reg add "HKCU\Software\Microsoft\Lighting" /v AmbientLightingEnabled /t REG_DWORD /d 0 /f | Out-Null
+            Write-Log "Win11: Dynamic Lighting disabled"
+        }
+    },
 
     # == AUDIO ============================================================
     [PSCustomObject]@{
         Name     = "Disable Audio Enhancements"
-        Desc     = "Deaktiviert alle Windows-Audio-Effekte (Bass Boost, Raumklang, Equalizer) fuer alle Wiedergabegeraete. Reduziert Audio-Latenz und CPU-Last von audiodg.exe. Empfohlen fuer Gaming-Headsets und Low-Latency-Audio."
+        Desc     = "Schaltet die Audioverbesserungen (Bass Boost, Raumklang, Equalizer, Lautheitsausgleich) fuer alle angeschlossenen Wiedergabegeraete ab - ueber die Windows-Audio-Schnittstelle, wie die Sound-Systemsteuerung. Den direkten Weg ueber die Registry sperrt Windows 11 inzwischen, aeltere Versionen dieses Tweaks liefen deshalb ins Leere. Reduziert Audio-Latenz und CPU-Last von audiodg.exe. Spaeter angeschlossene Geraete: Tweak erneut anwenden (die Drift-Pruefung meldet sie)."
         Category = "Audio"
         Group    = "Latency & Quality"
         Action   = {
-            $renderPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
-            if (Test-Path $renderPath) {
-                $count = 0
-                # Skip devices Windows only remembers (DeviceState 4 = not present: an old monitor,
-                # a removed headset) -- they have no effects to turn off
-                Get-ChildItem $renderPath | Where-Object { ([int64](Get-RegVal $_.PSPath "DeviceState") -band 0xF) -ne 4 } | ForEach-Object {
-                    $fxPath = Join-Path $_.PSPath "FxProperties"
-                    if (-not (Test-Path $fxPath)) { New-Item -Path $fxPath -Force | Out-Null }
-                    Set-ItemProperty -Path $fxPath -Name "{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5" `
-                        -Value 1 -Type DWord -ErrorAction SilentlyContinue
-                    $count++
-                }
-                Write-Log ("Audio Enhancements disabled (" + $count + " device(s))")
-            } else {
-                Write-Log "Audio Enhancements: no render devices found"
+            # Active and unplugged playback devices as Windows sees them; written through the audio
+            # service and read back -- only real successes count
+            $ids = @(Get-AudioRenderIds)
+            if (-not $ids.Count) { Write-Log "Audio Enhancements: Windows reports no playback device"; return }
+            $ok = 0; $bad = @()
+            foreach ($id in $ids) {
+                $hr = Set-AudioFx $id 1
+                if ($hr -eq 0 -and (Get-AudioFx $id) -eq 1) { $ok++ } else { $bad += $(if ($hr -ne 0) { '0x{0:X8}' -f $hr } else { 'not read back' }) }
             }
+            Write-Log "Audio Enhancements disabled on $ok of $($ids.Count) playback device(s) (Windows audio API)"
+            if ($bad.Count) { throw "Windows refused the setting on $($bad.Count) of $($ids.Count) playback device(s) ($($bad[0]))" }
         }
     },
     [PSCustomObject]@{
@@ -1889,6 +2163,16 @@ $AllTweaks = @(
         }
     },
     [PSCustomObject]@{
+        Name     = "Disable USB 3 Link Power Management"
+        Desc     = "Schaltet die Stromsparzustaende der USB-3-Verbindungen (U1/U2) in allen Energieplaenen ab. Die Verbindung zu USB-3-Geraeten (Headset-DACs, Capture-Karten, externe SSDs, VR-Brillen) muss dann nicht erst aufwachen - hilft gegen Aussetzer und kurze Ruckler. Ergaenzt 'Disable USB Selective Suspend' (das schickt ganze Geraete schlafen, dies nur die Verbindung). Windows blendet diese Einstellung in den Energieoptionen aus. Etwas mehr Stromverbrauch."
+        Category = "Power Plan"
+        Group    = "USB & PCI"
+        Action   = {
+            Set-PowerAllSchemes "2a737441-1930-4402-8d77-b2bebba308a3" "d4e98f31-5ffe-4ce1-be31-1b38b384c009" 0
+            Write-Log "USB 3 link power management disabled (all power schemes)"
+        }
+    },
+    [PSCustomObject]@{
         Name     = "Disable PCI-E Link State Power Management"
         Desc     = "Deaktiviert PCI-E ASPM (Active State Power Management). Verhindert dass die GPU ihre PCI-Express-Verbindung in den Stromsparmodus versetzt. Reduziert GPU-Latenzschwankungen unter Last."
         Category = "Power Plan"
@@ -1926,6 +2210,16 @@ $AllTweaks = @(
         Action   = {
             Set-PowerAllSchemes "SUB_SLEEP" "STANDBYIDLE" 0
             Write-Log "System Sleep disabled (all power schemes)"
+        }
+    },
+    [PSCustomObject]@{
+        Name     = "Disable Wake Timers"
+        Desc     = "Geplante Aufgaben (z.B. Neustarts nach Windows-Updates und die automatische Wartung) duerfen den PC nicht mehr aus dem Energiesparmodus wecken - kein PC mehr, der nachts von allein anspringt. Aufwecken per Maus, Tastatur oder Netzwerk (Wake-on-LAN) bleibt. Gilt fuer alle Energieplaene; spielt nur eine Rolle, wenn der PC in den Energiesparmodus geht."
+        Category = "Power Plan"
+        Group    = "Sleep"
+        Action   = {
+            Set-PowerAllSchemes "SUB_SLEEP" "RTCWAKE" 0
+            Write-Log "Wake timers disabled (all power schemes)"
         }
     },
     [PSCustomObject]@{
@@ -1983,6 +2277,24 @@ $RevertActions = @{
         reg add $cdm /v PreInstalledAppsEnabled    /t REG_DWORD /d 1 /f | Out-Null
         Write-Log "Revert: auto-install of suggested apps restored to the Windows default"
     }
+    "Disable Tips, Ads & Suggestions" = {
+        # Not set = the Windows default (on)
+        $cdm = "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+        foreach ($v in 'SoftLandingEnabled', 'FeatureManagementEnabled', 'PreInstalledAppsEverEnabled', 'RotatingLockScreenOverlayEnabled', 'SystemPaneSuggestionsEnabled',
+                'SubscribedContent-310093Enabled', 'SubscribedContent-338387Enabled', 'SubscribedContent-338389Enabled', 'SubscribedContent-338393Enabled',
+                'SubscribedContent-353694Enabled', 'SubscribedContent-353696Enabled') {
+            reg delete $cdm /v $v /f 2>$null
+        }
+        reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement" /v ScoobeSystemSettingEnabled /f 2>$null
+        reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_AccountNotifications /f 2>$null
+        reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ShowSyncProviderNotifications /f 2>$null
+        reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\SystemSettings\AccountNotifications" /v EnableAccountNotifications /f 2>$null
+        Write-Log "Revert: tips, ads and suggestions back to the Windows default (values removed)"
+    }
+    "Stop OneDrive Folder Backup" = {
+        reg delete "HKLM\SOFTWARE\Policies\Microsoft\OneDrive" /v KFMBlockOptIn /f 2>$null
+        Write-Log "Revert: OneDrive folder backup allowed again (policy removed)"
+    }
     "Disable Get Started & Copilot Sign-in Screens" = {
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableGetStarted /f 2>$null
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableCopilotPinScreen /f 2>$null
@@ -1998,11 +2310,36 @@ $RevertActions = @{
         reg delete "HKCU\SOFTWARE\Policies\Microsoft\Windows\Explorer" /v DisableSearchBoxSuggestions /f 2>$null
         reg delete "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" /v BingSearchEnabled /f 2>$null
         reg delete "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" /v CortanaConsent /f 2>$null
+        $ss = "HKCU\Software\Microsoft\Windows\CurrentVersion\SearchSettings"
+        reg delete $ss /v IsDynamicSearchBoxEnabled /f 2>$null
+        reg delete $ss /v IsMSACloudSearchEnabled /f 2>$null
+        reg delete $ss /v IsAADCloudSearchEnabled /f 2>$null
         Write-Log "Revert: Bing in Windows Search re-enabled (values removed -- Windows default)"
     }
     "Process Count Reduction (Svchost)" = {
         reg add "HKLM\SYSTEM\CurrentControlSet\Control" /v SvcHostSplitThresholdInKB /t REG_DWORD /d 380000 /f | Out-Null
         Write-Log "Revert: Svchost threshold reset to Windows default (380000 KB)"
+    }
+    "Disable Startup App Delay" = {
+        reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize" /v StartupDelayInMSec /f 2>$null
+        Write-Log "Revert: startup app delay back to the Windows default"
+    }
+    "Block Background Apps (Policy)" = {
+        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" /v LetAppsRunInBackground /f 2>$null
+        Write-Log "Revert: background apps policy removed (user decides again)"
+    }
+
+    # == WINDOWS UPDATE ====================================================
+    "Exclude Drivers from Windows Update" = {
+        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v ExcludeWUDriversInQualityUpdate /f 2>$null
+        Write-Log "Revert: Windows Update may install drivers again"
+    }
+    "Hold Feature Updates (Stay on Current Version)" = {
+        $wu = "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+        reg delete $wu /v TargetReleaseVersion /f 2>$null
+        reg delete $wu /v ProductVersion /f 2>$null
+        reg delete $wu /v TargetReleaseVersionInfo /f 2>$null
+        Write-Log "Revert: feature updates no longer held"
     }
 
     # == WINDOWS / CTT ESSENTIALS ==========================================
@@ -2140,6 +2477,24 @@ $RevertActions = @{
         foreach ($task in (Get-TelemetryTasks)) { schtasks /Change /TN $task /Enable 2>$null | Out-Null }
         Write-Log "Revert: Telemetry scheduled tasks re-enabled"
     }
+    "Disable Input & Speech Data Collection" = {
+        reg delete "HKCU\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy" /v HasAccepted /f 2>$null
+        # Windows writes these three at setup with exactly these values
+        reg add "HKCU\Software\Microsoft\InputPersonalization" /v RestrictImplicitTextCollection /t REG_DWORD /d 0 /f | Out-Null
+        reg add "HKCU\Software\Microsoft\InputPersonalization" /v RestrictImplicitInkCollection /t REG_DWORD /d 0 /f | Out-Null
+        reg add "HKCU\Software\Microsoft\InputPersonalization\TrainedDataStore" /v HarvestContacts /t REG_DWORD /d 1 /f | Out-Null
+        reg delete "HKCU\Software\Microsoft\Input\TIPC" /v Enabled /f 2>$null
+        reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Privacy" /v TailoredExperiencesWithDiagnosticDataEnabled /f 2>$null
+        reg delete "HKCU\Software\Microsoft\Siuf\Rules" /v NumberOfSIUFInPeriod /f 2>$null
+        reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_TrackProgs /f 2>$null
+        reg delete "HKCU\Control Panel\International\User Profile" /v HttpAcceptLanguageOptOut /f 2>$null
+        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection" /v DoNotShowFeedbackNotifications /f 2>$null
+        Write-Log "Revert: input, inking and speech settings back to the Windows default"
+    }
+    "Disable Remote Assistance" = {
+        reg add "HKLM\SYSTEM\CurrentControlSet\Control\Remote Assistance" /v fAllowToGetHelp /t REG_DWORD /d 1 /f | Out-Null
+        Write-Log "Revert: Remote Assistance allowed again (Windows default)"
+    }
 
     # == PERFORMANCE ======================================================
     "Ultimate Performance Plan" = {
@@ -2193,7 +2548,12 @@ $RevertActions = @{
         $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
         Set-ItemProperty $path -Name "TaskbarAnimations" -Value 1 -ErrorAction SilentlyContinue
         reg add "HKCU\Control Panel\Desktop\WindowMetrics" /v MinAnimate /t REG_SZ /d 1 /f | Out-Null
-        Write-Log "Revert: Visual effects set back to Windows default"
+        # Windows 11 defaults for the single effects
+        reg add "HKCU\Control Panel\Desktop" /v UserPreferencesMask /t REG_BINARY /d 9E1E078012000000 /f | Out-Null
+        reg add "HKCU\Control Panel\Desktop" /v DragFullWindows /t REG_SZ /d 1 /f | Out-Null
+        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ListviewAlphaSelect /t REG_DWORD /d 1 /f | Out-Null
+        reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v ListviewShadow /t REG_DWORD /d 1 /f | Out-Null
+        Write-Log "Revert: Visual effects set back to Windows default (takes full effect after signing out and in)"
     }
     "Disable Windows Search Indexing" = {
         Set-Service WSearch -StartupType Automatic -ErrorAction SilentlyContinue
@@ -2223,6 +2583,10 @@ $RevertActions = @{
         reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v EnableTransparency /t REG_DWORD /d 1 /f | Out-Null
         Write-Log "Revert: Transparency effects re-enabled"
     }
+    "Alt+Tab Without Browser Tabs" = {
+        reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v MultiTaskingAltTabFilter /f 2>$null
+        Write-Log "Revert: Alt+Tab shows browser tabs again (Windows default)"
+    }
 
     # == GAMING  --  IN-GAME BOOSTS ==========================================
     "Enable Game Mode" = {
@@ -2235,6 +2599,7 @@ $RevertActions = @{
     "Disable Xbox Game Bar" = {
         reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v AppCaptureEnabled /t REG_DWORD /d 1 /f | Out-Null
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR" /v AllowGameDVR /f 2>$null
+        reg delete "HKCU\Software\Microsoft\GameBar" /v UseNexusForGameBarEnabled /f 2>$null
         Write-Log "Revert: Xbox Game Bar re-enabled"
     }
     "CPU Priority for Games (Win32Priority)" = {
@@ -2468,6 +2833,8 @@ $RevertActions = @{
     }
     "Disable Recommended in Start Menu" = {
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\Explorer" /v HideRecommendedSection /f 2>$null
+        reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_TrackDocs /f 2>$null
+        reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v Start_IrisRecommendations /f 2>$null
         Write-Log "Revert: Recommended section in Start Menu re-enabled"
     }
     "Enable End Task in Taskbar" = {
@@ -2478,18 +2845,16 @@ $RevertActions = @{
         reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v EnableSnapAssistFlyout /t REG_DWORD /d 1 /f | Out-Null
         Write-Log "Revert: Snap Layout hover menu re-enabled"
     }
+    "Disable Dynamic Lighting" = {
+        reg add "HKCU\Software\Microsoft\Lighting" /v AmbientLightingEnabled /t REG_DWORD /d 1 /f | Out-Null
+        Write-Log "Revert: Dynamic Lighting re-enabled (Windows default)"
+    }
 
     # == AUDIO ============================================================
     "Disable Audio Enhancements" = {
-        $renderPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
-        if (Test-Path $renderPath) {
-            Get-ChildItem $renderPath | ForEach-Object {
-                $fxPath = Join-Path $_.PSPath "FxProperties"
-                Set-ItemProperty -Path $fxPath -Name "{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5" `
-                    -Value 0 -Type DWord -ErrorAction SilentlyContinue
-            }
-        }
-        Write-Log "Revert: Audio Enhancements re-enabled"
+        $n = 0
+        foreach ($id in @(Get-AudioRenderIds)) { if ((Set-AudioFx $id 0) -eq 0) { $n++ } }
+        Write-Log "Revert: Audio Enhancements re-enabled on $n playback device(s) (Windows audio API)"
     }
     "Optimize MMCSS Audio Profile" = {
         $audioPath = "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Audio"
@@ -2553,6 +2918,14 @@ $RevertActions = @{
         Set-PowerAllSchemes "2a737441-1930-4402-8d77-b2bebba308a3" "48e6b7a6-50f5-4782-a5d4-53bb8f07e226" 1
         Write-Log "Revert: USB Selective Suspend re-enabled (all power schemes)"
     }
+    "Disable USB 3 Link Power Management" = {
+        # The Windows default from the setting's own definition (2 = moderate power savings on
+        # 26H2 in Balanced, High performance and Power saver); 2 if it can't be read
+        $def = Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\2a737441-1930-4402-8d77-b2bebba308a3\d4e98f31-5ffe-4ce1-be31-1b38b384c009\DefaultPowerSchemeValues\381b4222-f694-41f0-9685-ff5bb260df2e" "ACSettingIndex"
+        if ($null -eq $def) { $def = 2 }
+        Set-PowerAllSchemes "2a737441-1930-4402-8d77-b2bebba308a3" "d4e98f31-5ffe-4ce1-be31-1b38b384c009" ([int]$def)
+        Write-Log "Revert: USB 3 link power management back to the Windows default ($def, all power schemes)"
+    }
     "Disable PCI-E Link State Power Management" = {
         Set-PowerAllSchemes "SUB_PCIEXPRESS" "ASPM" 2
         Write-Log "Revert: PCI-E ASPM set back to Moderate (all power schemes)"
@@ -2568,6 +2941,10 @@ $RevertActions = @{
     "Disable Sleep (System)" = {
         Set-PowerAllSchemes "SUB_SLEEP" "STANDBYIDLE" 3600 1800
         Write-Log "Revert: System Sleep restored (60 min AC / 30 min DC, all power schemes)"
+    }
+    "Disable Wake Timers" = {
+        Set-PowerAllSchemes "SUB_SLEEP" "RTCWAKE" 1 0          # Windows default: on (AC) / off (battery)
+        Write-Log "Revert: wake timers allowed again (AC on / battery off, all power schemes)"
     }
     "CPU Minimum Processor State = 100%" = {
         Set-PowerAllSchemes "SUB_PROCESSOR" "PROCTHROTTLEMIN" 5
@@ -2617,16 +2994,46 @@ $CheckFunctions = @{
         $cdm = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
         ((Get-RegVal $cdm "SilentInstalledAppsEnabled") -eq 0) -and ((Get-RegVal $cdm "OemPreInstalledAppsEnabled") -eq 0) -and ((Get-RegVal $cdm "PreInstalledAppsEnabled") -eq 0)
     }
+    "Disable Tips, Ads & Suggestions" = {
+        $cdm = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+        $adv = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+        $want = @(foreach ($v in 'SoftLandingEnabled', 'FeatureManagementEnabled', 'PreInstalledAppsEverEnabled', 'RotatingLockScreenOverlayEnabled', 'SystemPaneSuggestionsEnabled',
+                'SubscribedContent-310093Enabled', 'SubscribedContent-338387Enabled', 'SubscribedContent-338389Enabled', 'SubscribedContent-338393Enabled',
+                'SubscribedContent-353694Enabled', 'SubscribedContent-353696Enabled') { , @($cdm, $v) })
+        $want += , @("HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement", "ScoobeSystemSettingEnabled")
+        $want += , @($adv, "Start_AccountNotifications")
+        $want += , @($adv, "ShowSyncProviderNotifications")
+        $want += , @("HKCU:\Software\Microsoft\Windows\CurrentVersion\SystemSettings\AccountNotifications", "EnableAccountNotifications")
+        # count what isn't 0 -- "not set" is the Windows default (on) and counts too
+        $bad = 0
+        foreach ($w in $want) { $v = Get-RegVal $w[0] $w[1]; if (($null -eq $v) -or ($v -ne 0)) { $bad++ } }
+        $bad -eq 0
+    }
+    "Stop OneDrive Folder Backup" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\OneDrive" "KFMBlockOptIn") -eq 1 }
     "Disable Get Started & Copilot Sign-in Screens" = { if (-not (Test-EnterpriseEdition)) { return $null }; ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableGetStarted") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableCopilotPinScreen") -eq 1) }
 
     # PRIVACY
     "Disable Power Throttling" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling" "PowerThrottlingOff") -eq 1 }
-    "Disable Bing in Windows Search" = { (Get-RegVal "HKCU:\SOFTWARE\Policies\Microsoft\Windows\Explorer" "DisableSearchBoxSuggestions") -eq 1 }
+    "Disable Bing in Windows Search" = {
+        $ss = "HKCU:\Software\Microsoft\Windows\CurrentVersion\SearchSettings"
+        ((Get-RegVal "HKCU:\SOFTWARE\Policies\Microsoft\Windows\Explorer" "DisableSearchBoxSuggestions") -eq 1) -and
+        ((Get-RegVal $ss "IsDynamicSearchBoxEnabled") -eq 0) -and ((Get-RegVal $ss "IsMSACloudSearchEnabled") -eq 0) -and ((Get-RegVal $ss "IsAADCloudSearchEnabled") -eq 0)
+    }
     "Process Count Reduction (Svchost)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control" "SvcHostSplitThresholdInKB") -gt 380000 }
+    "Disable Startup App Delay" = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize" "StartupDelayInMSec") -eq 0 }
+    "Block Background Apps (Policy)" = { if (Test-HomeEdition) { return $null }; (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" "LetAppsRunInBackground") -eq 2 }
+
+    # WINDOWS UPDATE
+    "Exclude Drivers from Windows Update" = { if (Test-HomeEdition) { return $null }; (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" "ExcludeWUDriversInQualityUpdate") -eq 1 }
+    "Hold Feature Updates (Stay on Current Version)" = {
+        if (Test-HomeEdition) { return $null }
+        $wu = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+        ((Get-RegVal $wu "TargetReleaseVersion") -eq 1) -and [bool](Get-RegVal $wu "TargetReleaseVersionInfo") -and [bool](Get-RegVal $wu "ProductVersion")
+    }
 
     # CTT ESSENTIALS
     "Prevent Device Companion Apps" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Device Metadata" "PreventDeviceMetadataFromNetwork") -eq 1 }
-    "Disable Consumer Features" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableWindowsConsumerFeatures") -eq 1 }
+    "Disable Consumer Features" = { if (-not (Test-EnterpriseEdition)) { return $null }; (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableWindowsConsumerFeatures") -eq 1 }
     "Disable Windows Platform Binary Table (WPBT)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" "DisableWpbtExecution") -eq 1 }
     # Apply puts a Deny ACE for Everyone (SID S-1-1-0) on store.db. SDDL writes
     # Everyone as the locale-independent alias WD, so this works on every language.
@@ -2672,6 +3079,22 @@ $CheckFunctions = @{
         if (-not $st.Count) { return $null }
         @($st | Where-Object { $_ -ne 'Disabled' }).Count -eq 0
     }
+    "Disable Input & Speech Data Collection" = {
+        # the parts every edition reads; the Pro-only feedback policy is extra
+        $want = @(
+            @("HKCU:\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy", "HasAccepted", 0),
+            @("HKCU:\Software\Microsoft\InputPersonalization", "RestrictImplicitTextCollection", 1),
+            @("HKCU:\Software\Microsoft\InputPersonalization", "RestrictImplicitInkCollection", 1),
+            @("HKCU:\Software\Microsoft\InputPersonalization\TrainedDataStore", "HarvestContacts", 0),
+            @("HKCU:\Software\Microsoft\Input\TIPC", "Enabled", 0),
+            @("HKCU:\Software\Microsoft\Windows\CurrentVersion\Privacy", "TailoredExperiencesWithDiagnosticDataEnabled", 0),
+            @("HKCU:\Software\Microsoft\Siuf\Rules", "NumberOfSIUFInPeriod", 0),
+            @("HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "Start_TrackProgs", 0),
+            @("HKCU:\Control Panel\International\User Profile", "HttpAcceptLanguageOptOut", 1))
+        # count deviations -- a missing value ($null) is a deviation too, never "done"
+        @($want | Where-Object { $v = Get-RegVal $_[0] $_[1]; ($null -eq $v) -or ($v -ne $_[2]) }).Count -eq 0
+    }
+    "Disable Remote Assistance" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance" "fAllowToGetHelp") -eq 0 }
 
     # PERFORMANCE
     "Ultimate Performance Plan"          = { $g = Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "UltimatePerfGuid"; $a = (powercfg /getactivescheme 2>$null) -join " "; ($g -and $a -match [regex]::Escape($g)) -or ($a -match "Ultimate Performance|Ultimative Leistung") }
@@ -2685,7 +3108,14 @@ $CheckFunctions = @{
     }
     "Allow Global Timer Resolution (Windows 11)"         = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" "GlobalTimerResolutionRequests") -eq 1 }
     "Disable Prefetch & Superfetch"      = { (($s=Get-Service SysMain -EA SilentlyContinue) -and ($s.StartType -eq "Disabled" -or $s.Status -eq "Stopped")) }
-    "Optimize Visual Effects (Performance Mode)" = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" "VisualFXSetting") -eq 2 }
+    "Optimize Visual Effects (Performance Mode)" = {
+        $adv = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+        $m = @(Get-RegVal "HKCU:\Control Panel\Desktop" "UserPreferencesMask")
+        ((Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" "VisualFXSetting") -eq 2) -and
+        ((Get-RegVal $adv "TaskbarAnimations") -eq 0) -and ((Get-RegVal "HKCU:\Control Panel\Desktop\WindowMetrics" "MinAnimate") -eq "0") -and
+        ((Get-RegVal "HKCU:\Control Panel\Desktop" "DragFullWindows") -eq "0") -and ((Get-RegVal $adv "ListviewAlphaSelect") -eq 0) -and ((Get-RegVal $adv "ListviewShadow") -eq 0) -and
+        ($m.Count -ge 4) -and ($m[0] -eq 0x90) -and ($m[1] -eq 0x12) -and ($m[2] -eq 0x03) -and ($m[3] -eq 0x80)
+    }
     "Disable Windows Search Indexing"    = { (($s=Get-Service WSearch -EA SilentlyContinue) -and $s.StartType -eq "Disabled") }
 
     # MOUSE & UI
@@ -2693,10 +3123,11 @@ $CheckFunctions = @{
     "Disable Sticky Keys"                = { (Get-RegVal "HKCU:\Control Panel\Accessibility\StickyKeys" "Flags") -eq "506" }
     "Enable Dark Mode"                   = { (Get-RegVal "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" "AppsUseLightTheme") -eq 0 }
     "Disable Transparency Effects"       = { (Get-RegVal "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize" "EnableTransparency") -eq 0 }
+    "Alt+Tab Without Browser Tabs"       = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "MultiTaskingAltTabFilter") -eq 3 }
 
     # GAMING IN-GAME
     "Enable Game Mode"                   = { (Get-RegVal "HKCU:\Software\Microsoft\GameBar" "AutoGameModeEnabled") -ne 0 }   # no value = Windows default = on
-    "Disable Xbox Game Bar"              = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR" "AppCaptureEnabled") -eq 0 }
+    "Disable Xbox Game Bar"              = { ((Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR" "AppCaptureEnabled") -eq 0) -and ((Get-RegVal "HKCU:\Software\Microsoft\GameBar" "UseNexusForGameBarEnabled") -eq 0) }
     "CPU Priority for Games (Win32Priority)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation") -eq 26 }
     "MMCSS Gaming Profile (High Priority)" = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" "Scheduling Category") -eq "High" }
     "Disable Fullscreen Optimizations"   = { (Get-RegVal "HKCU:\System\GameConfigStore" "GameDVR_FSEBehaviorMode") -eq 2 }
@@ -2798,19 +3229,22 @@ $CheckFunctions = @{
         # TaskbarDa (User Choice Protection Driver), so the policy is what counts there.
         ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Dsh" "AllowNewsAndInterests") -eq 0) -or ((Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarDa") -eq 0)
     }
-    "Disable Recommended in Start Menu"  = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer" "HideRecommendedSection") -eq 1 }
+    "Disable Recommended in Start Menu"  = {
+        $adv = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+        ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer" "HideRecommendedSection") -eq 1) -and ((Get-RegVal $adv "Start_TrackDocs") -eq 0) -and ((Get-RegVal $adv "Start_IrisRecommendations") -eq 0)
+    }
     "Enable End Task in Taskbar"         = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings" "TaskbarEndTask") -eq 1 }
     "Disable Snap Layout Hover Menu"     = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "EnableSnapAssistFlyout") -eq 0 }
+    "Disable Dynamic Lighting"           = { (Get-RegVal "HKCU:\Software\Microsoft\Lighting" "AmbientLightingEnabled") -eq 0 }
 
     # AUDIO
     "Disable Audio Enhancements"         = {
-        $rp = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
-        if (-not (Test-Path $rp)) { return $null }
-        # The Apply writes to every playback device that is there -- active only if every one has it
-        $devs = @(Get-ChildItem $rp -EA SilentlyContinue | Where-Object { ([int64](Get-RegVal $_.PSPath "DeviceState") -band 0xF) -ne 4 })
-        if (-not $devs.Count) { return $null }
-        $off = @($devs | Where-Object { (Get-RegVal (Join-Path $_.PSPath "FxProperties") "{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5") -eq 1 })
-        $off.Count -eq $devs.Count
+        # The same devices the Apply writes to (active + unplugged, as Windows sees them),
+        # read through the audio service. Count the deviations: 0 (on), -1 (not set = Windows
+        # default, on) and -2 (unreadable) all count -- never "-not (...)", a 0 would pass.
+        $ids = @(Get-AudioRenderIds)
+        if (-not $ids.Count) { return $null }
+        @($ids | Where-Object { (Get-AudioFx $_) -ne 1 }).Count -eq 0
     }
     "Optimize MMCSS Audio Profile"       = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Audio" "Latency Sensitive") -eq "True" }
     "Set Audio Service High Priority"    = { (Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "SR_AudioPriority") -eq 1 }
@@ -2850,10 +3284,12 @@ $CheckFunctions = @{
     # Read ONLY the current AC index (see Get-PowerValueAC) -- searching the whole
     # powercfg output would also hit its static Minimum/Maximum-possible lines.
     "Disable USB Selective Suspend"      = { $v = Get-PowerValueAC "2a737441-1930-4402-8d77-b2bebba308a3" "48e6b7a6-50f5-4782-a5d4-53bb8f07e226"; if ($null -eq $v) { $null } else { $v -eq "00000000" } }
+    "Disable USB 3 Link Power Management" = { $v = Get-PowerValueAC "2a737441-1930-4402-8d77-b2bebba308a3" "d4e98f31-5ffe-4ce1-be31-1b38b384c009" -Hidden; if ($null -eq $v) { $null } else { $v -eq "00000000" } }
     "Disable PCI-E Link State Power Management" = { $v = Get-PowerValueAC "SUB_PCIEXPRESS" "ASPM"; if ($null -eq $v) { $null } else { $v -eq "00000000" } }
     "Disable Hard Disk Sleep"            = { $v = Get-PowerValueAC "SUB_DISK" "DISKIDLE"; if ($null -eq $v) { $null } else { $v -eq "00000000" } }
     "Set Display Sleep = 15 Minutes"     = { $v = Get-PowerValueAC "SUB_VIDEO" "VIDEOIDLE"; if ($null -eq $v) { $null } else { $v -eq "00000384" } }
     "Disable Sleep (System)"             = { $v = Get-PowerValueAC "SUB_SLEEP" "STANDBYIDLE"; if ($null -eq $v) { $null } else { $v -eq "00000000" } }
+    "Disable Wake Timers"                = { $v = Get-PowerValueAC "SUB_SLEEP" "RTCWAKE"; if ($null -eq $v) { $null } else { $v -eq "00000000" } }
     "CPU Minimum Processor State = 100%" = { $v = Get-PowerValueAC "SUB_PROCESSOR" "PROCTHROTTLEMIN"; if ($null -eq $v) { $null } else { $v -eq "00000064" } }
     "CPU Maximum Processor State = 100%" = { $v = Get-PowerValueAC "SUB_PROCESSOR" "PROCTHROTTLEMAX"; if ($null -eq $v) { $null } else { $v -eq "00000064" } }
 }
@@ -2968,10 +3404,13 @@ function Get-UIString {
 
 $TweakDescEN = @{
     "Disable Power Throttling"            = "Prevents Windows from throttling processes for energy savings (EcoQoS). Useful for games with multiple processes -- background game processes are no longer throttled."
-    "Disable Bing in Windows Search"      = "Disables Bing integration in Windows Search. Start menu searches only locally -- faster, no data exchange with Microsoft on every search."
+    "Disable Bing in Windows Search" = "Disables Bing integration in Windows Search. Start menu searches only locally -- faster, no data exchange with Microsoft on every search. Also off: search highlights (changing pictures and topics in the search box) and cloud content search in OneDrive, Outlook and Bing for Microsoft and work/school accounts (Settings > Privacy > Search permissions)."
     "Process Count Reduction (Svchost)"   = "Sets the Svchost split threshold to your RAM size. Windows combines services into fewer separate processes -- noticeably reduces background process count. WARNING: reduces process isolation -- if one service crashes it can take down others in the same host (audio, network etc.). Reboot recommended."
+    "Block Background Apps (Policy)" = "Pro and up only: an official policy stops Store apps (e.g. WhatsApp, Phone Link, Mail, Weather) from running in the background -- saves RAM and background load. WARNING: their notifications (e.g. new WhatsApp messages or texts through Phone Link) only arrive while the app is open. Regular programs (Steam, Discord, driver tools) are not affected. Windows Home doesn't read the policy -- greyed out there."
+    "Exclude Drivers from Windows Update" = "Pro and up only: Windows Update no longer installs drivers (official policy 'Do not include drivers with Windows Updates'). Stops Windows from replacing, say, your freshly installed graphics driver with an older one. You then get drivers from the maker yourself (NVIDIA App, AMD Software, the board's website). Security and feature updates keep coming. No effect on Home -- greyed out there."
+    "Hold Feature Updates (Stay on Current Version)" = "Pro and up only: keeps Windows on the installed version (e.g. 26H2) -- the next big feature update is not installed automatically. Monthly security updates keep coming. The version is read when you apply, never hard-coded. Important: every Windows version only gets updates for a limited time (Home and Pro 24 months) -- revert in time so you are not left without security updates. No effect on Home -- greyed out there."
     "Prevent Device Companion Apps"       = "Stops Windows from downloading device metadata from the network and auto-installing or suggesting companion apps for connected devices. Saves background traffic and unwanted app installs."
-    "Disable Consumer Features"           = "Sets the official 'Turn off Microsoft consumer experiences' policy (1:1 from WinUtil). Note: according to Microsoft, Windows only honours it on Enterprise and Education. On Home and Pro, 'Stop Auto-Installed Suggested Apps' (Windows tab, Bloatware) stops suggested apps from being installed automatically."
+    "Disable Consumer Features" = "Enterprise / Education only: sets the official 'Turn off Microsoft consumer experiences' policy (1:1 from WinUtil). According to Microsoft, Home and Pro don't read it -- greyed out there; on those editions 'Stop Auto-Installed Suggested Apps' (Windows tab, Bloatware) stops the silent installs of suggested apps."
     "Disable Windows Platform Binary Table (WPBT)" = "Disables execution of the Windows Platform Binary Table, preventing motherboard/OEM firmware from silently injecting programs into Windows at every boot. Pure security tweak."
     "Disable Store Recommended Search Results" = "Locks the Microsoft Store's store.db via file permissions so the Store stops showing recommended/sponsored search results. Fully reversible."
     "Enable Start Menu Previous Layout"   = "Enables the previous Start menu layout on supported Windows 11 builds via a feature override. Only affects builds that know this feature flag -- otherwise no effect."
@@ -2984,12 +3423,14 @@ $TweakDescEN = @{
     "Num Lock on Startup"                         = "Enables NumLock automatically at system startup and on the login screen. Handy if you want to use the numpad right away."
     "Disable Lock Screen"                         = "Disables the lock screen. On start/wake it goes straight to the login field -- saves a click or swipe."
     "Enable Long Paths"                           = "Enables paths longer than 260 characters. Helpful for deep folder structures, game mods, Node projects etc. -- prevents 'path too long' errors."
-    "Remove Xbox Apps"                            = "Removes Xbox Game Bar, Identity Provider and TCUI. These apps run in the background consuming resources even without an Xbox."
+    "Remove Xbox Apps" = "Removes Xbox Game Bar, Identity Provider and TCUI. These apps run in the background consuming resources even without an Xbox. WARNING: afterwards the Xbox sign-in for Game Pass and Microsoft Store games (Xbox Identity Provider), Xbox mode and Game Bar recordings are missing until you reinstall the apps from the Microsoft Store. Steam, Epic and other games keep working."
     "Remove Copilot"                              = "Disables and removes Windows Copilot AI assistant. Prevents Copilot from running in the background and sending data."
     "Remove OneDrive"                             = "Completely uninstalls OneDrive including autostart and Explorer integration. Local files remain untouched."
     "Remove Windows Recall"                       = "Disables AND removes Windows Recall  --  the AI feature that takes screenshots of your activity. Uses Microsoft's official policies: snapshots off + Recall component removed from the system (existing snapshots are deleted). Restart required."
     "Remove Other Bloatware"                      = "Removes pre-installed apps: Candy Crush, TikTok, Disney+, Facebook, Solitaire, Clipchamp, ToDo, Paint3D and more."
     "Stop Auto-Installed Suggested Apps"          = "Stops Windows from silently installing suggested apps and games (e.g. Candy Crush, TikTok), including the ones planned by the PC maker and Microsoft. Works on every edition including Home and Pro. Apps already installed stay -- use 'Remove Other Bloatware' for those."
+    "Disable Tips, Ads & Suggestions" = "Turns off the ads, tips and suggestions Windows sprinkles everywhere: tip notifications, the 'finish setting up' pages and the welcome page after updates, suggestions in Settings and Start, account notices (Microsoft 365, OneDrive backup) in Start and Settings, and sync-provider ads in File Explorer. Windows Spotlight pictures on the lock screen stay, only the tips on them go -- the tweak deliberately leaves the master switch 'ContentDeliveryAllowed' alone, because it is not documented whether it also turns Spotlight off. Works on every edition. Recommendations in Start: 'Disable Recommended in Start Menu'."
+    "Stop OneDrive Folder Backup" = "Uses the official OneDrive policy to stop OneDrive from moving Desktop, Documents and Pictures into the cloud ('folder backup') -- not even after asking during setup. Works on every edition. Folders that are already backed up stay in OneDrive; you get them back in OneDrive under Settings > Sync and backup. Without OneDrive installed nothing visible changes, but the policy applies if OneDrive comes back."
     "Disable Get Started & Copilot Sign-in Screens" = "Enterprise / Education only: the 'Get Started' app no longer launches automatically, and the Microsoft 365 Copilot setup promotion at sign-in is gone (that second policy only exists in Insider builds so far). According to Microsoft, Home and Pro ignore both policies -- there the tweak changes nothing and its status stays grey. Copilot itself stays usable."
     "Disable Telemetry & Data Collection"         = "Disables all Windows telemetry services (DiagTrack, dmwappushservice). Windows stops sending usage data to Microsoft."
     "Disable Activity History"                    = "Disables Windows Timeline/Activity History. Windows stops tracking which apps and files you open."
@@ -2999,19 +3440,23 @@ $TweakDescEN = @{
     "Disable AI in Paint & Notepad"               = "Disables the AI features in Paint (Cocreator, Image Creator, Generative Fill) and in Notepad (Copilot rewrite/summarize) via Microsoft's official policies. Both apps keep working normally."
     "Disable Location Tracking"                   = "Disables the Windows location service system-wide. Apps can no longer request your location."
     "Block Telemetry Hosts (hosts file)"          = "Adds Microsoft telemetry servers to the Windows hosts file, blocking them even if telemetry services are still running. Note: Microsoft Defender reports such entries as 'HostsFileHijack' and may remove them again - the status shows it if that happens."
-    "Disable Scheduled Telemetry Tasks"           = "Disables all scheduled Windows tasks that collect and send telemetry data (e.g. Compatibility Appraiser, CEIP)."
+    "Disable Scheduled Telemetry Tasks" = "Disables the scheduled Windows tasks that collect and send telemetry and usage data: the compatibility appraiser, the Customer Experience Improvement Program (CEIP), disk diagnostics, feedback prompts, the upload of collected error reports and the power-efficiency analysis. Tasks this Windows doesn't have are skipped."
+    "Disable Input & Speech Data Collection" = "Turns off data collection for input and speech, as under Settings > Privacy: online speech recognition, inking & typing personalization (Windows no longer learns from your typing, handwriting and contacts), 'improve inking and typing', tailored experiences with diagnostic data and feedback prompts (frequency 'Never', from Pro also by policy). Websites can no longer read your language list, and Windows stops tracking which apps you start -- so 'Most used' in Start stays empty. Dictation with Win+H can be limited without online speech recognition. Works on every edition."
+    "Disable Remote Assistance" = "Turns off Windows Remote Assistance (System Properties > Remote: 'Allow Remote Assistance connections to this computer'). Nobody can connect to your PC through an invitation any more. Remote Desktop, the Quick Assist app and tools like AnyDesk or TeamViewer are not affected. Works on every edition."
     "Ultimate Performance Plan"                   = "Activates the 'Ultimate Performance' power plan and sets it to always-on: Windows stops throttling CPU cores AND the PC no longer sleeps -- display, disks and system stay on (no timeout). Maximum performance at all times. Increases power consumption."
     "Disable HPET (High Precision Event Timer)"   = "Disables the High Precision Event Timer. Can reduce system latency and improve gaming performance on some systems with lower frame times."
     "Allow Global Timer Resolution (Windows 11)"                  = "Since Windows 10 2004 a raised timer resolution only applies to the program that requests it - on Windows 11 not even while that program is minimized. This restores the old system-wide behavior. It is the prerequisite for timer tools such as TimerResolution or ISLC; it does NOT set a resolution by itself - games request their ~1 ms anyway. Restart required."
     "Disable Prefetch & Superfetch"               = "Disables Prefetch and SysMain (Superfetch). Recommended for SSDs  --  not for HDDs. Reduces background disk writes and RAM usage."
-    "Optimize Visual Effects (Performance Mode)"  = "Turns off all Windows animations and visual effects. Windows responds noticeably faster, especially useful for gaming on weaker systems."
+    "Optimize Visual Effects (Performance Mode)" = "Turns off the Windows animations and visual effects like 'Adjust for best performance' (System Properties > Performance Options): window, menu and taskbar animations, fades, shadows under windows and the mouse pointer, window contents while dragging, the translucent selection rectangle and icon label shadows. Font smoothing (ClearType) stays on so text stays sharp. Takes full effect after signing out and in again. Windows feels noticeably snappier, especially on weaker systems."
+    "Disable Startup App Delay" = "Windows starts autostart programs a few seconds after you sign in. With this tweak they start right away -- Discord, Steam and co. are there sooner, the desktop is a little slower in the first seconds instead. Not officially documented, but confirmed by users up to Windows 11 26H2; a big Windows update can remove the value (the drift check reports it). Works on every edition."
     "Disable Windows Search Indexing"             = "Disables the Windows Search Indexer (WSearch). Reduces constant background disk activity. Search still works but slower without index."
     "Disable Mouse Acceleration"                  = "Disables mouse acceleration (Enhance Pointer Precision). Essential for FPS games: mouse movement maps 1:1 without dynamic amplification."
     "Disable Sticky Keys"                         = "Disables the Sticky Keys dialog (triggered by pressing Shift 5 times). Prevents unwanted interruptions mid-game."
     "Enable Dark Mode"                            = "Enables dark mode for Windows and apps system-wide. Easier on the eyes during long gaming sessions, especially at night."
     "Disable Transparency Effects"                = "Disables transparency effects in taskbar and Start menu. Saves GPU resources and slightly reduces RAM usage."
+    "Alt+Tab Without Browser Tabs" = "Alt+Tab shows windows only, no single Edge tabs any more (Settings > System > Multitasking > 'Show tabs from apps when snapping or pressing Alt+Tab': don't show tabs). Works on every edition."
     "Enable Game Mode"                            = "Enables Windows Game Mode. Windows prioritizes CPU/GPU resources for the active game and suppresses Windows Update restarts while gaming."
-    "Disable Xbox Game Bar"                       = "Disables the Xbox Game Bar (Win+G overlay). Prevents the Game Bar from running in the background consuming resources. Game Mode remains unaffected."
+    "Disable Xbox Game Bar" = "Disables the Xbox Game Bar (Win+G overlay). Prevents the Game Bar from running in the background consuming resources. The Xbox button on a controller no longer opens the Game Bar. Game Mode remains unaffected."
     "CPU Priority for Games (Win32Priority)"      = "Sets Win32PrioritySeparation to 26. Windows gives active games significantly more CPU time and reduces background process priority."
     "MMCSS Gaming Profile (High Priority)"        = "Sets Multimedia Class Scheduler (MMCSS) profiles for games to High Priority. Better audio and timer interrupt handling while gaming."
     "Disable Fullscreen Optimizations"            = "Disables Windows Fullscreen Optimizations globally. Forces true exclusive fullscreen for lower input lag in games."
@@ -3052,10 +3497,11 @@ $TweakDescEN = @{
     "Restore Classic Right-Click Menu"            = "WIN11: Restores the Windows 10 classic right-click menu. No more 'Show more options' click needed to access common options."
     "Left-Align Taskbar"                          = "WIN11: Moves taskbar icons to the left like Windows 10. Windows 11 centers icons by default. Takes effect after Explorer restart."
     "Disable Widgets"                             = "WIN11: Disables the Widgets panel (Weather, News, Stocks). Widgets run as an MSN browser process in the background consuming RAM."
-    "Disable Recommended in Start Menu"           = "WIN11: Removes the 'Recommended' section from the Start menu. More space for pinned apps and a cleaner layout."
+    "Disable Recommended in Start Menu" = "WIN11: Empties the 'Recommended' section in Start on every edition: no recently opened files and no tips or app recommendations (this also clears 'Recent' in File Explorer and the taskbar jump lists). Hiding the section completely takes a policy -- according to Microsoft from Pro up; on Home the empty section stays."
     "Enable End Task in Taskbar"                  = "WIN11: Enables 'End Task' directly in the taskbar right-click menu. Kill unresponsive processes without opening Task Manager."
     "Disable Snap Layout Hover Menu"              = "WIN11: Disables the Snap Layout popup when hovering over the maximize button. Prevents accidental snapping while gaming."
-    "Disable Audio Enhancements"                  = "Disables all Windows audio effects (Bass Boost, Surround, EQ) for all playback devices. Reduces audio latency and audiodg.exe CPU load."
+    "Disable Dynamic Lighting" = "WIN11: Turns off Windows Dynamic Lighting (Settings > Personalization > Dynamic Lighting). Otherwise Windows takes control of RGB keyboards, mice and lighting and can fight the maker's software (iCUE, Armoury Crate, G HUB, SignalRGB) -- effects flicker or get overwritten. Leave it on if you control RGB through Windows only."
+    "Disable Audio Enhancements" = "Turns off audio enhancements (Bass Boost, surround, equalizer, loudness equalization) for all connected playback devices -- through the Windows audio interface, like the Sound control panel. Windows 11 blocks the direct registry route, so older versions of this tweak changed nothing. Reduces audio latency and audiodg.exe CPU load. Devices you connect later: apply again (the drift check reports them)."
     "Optimize MMCSS Audio Profile"                = "Optimizes Multimedia Class Scheduler profile for audio. Sets Latency Sensitive with High scheduling priority. Reduces audio stuttering under CPU load."
     "Set Audio Service High Priority"             = "Increases system priority for audio processing. Sets SystemResponsiveness to 0. Prevents audio dropouts when other processes load the CPU."
     "Disable Windows Sound Scheme"                = "Disables all Windows system sounds (startup, errors, notifications). No unexpected sound interruptions during gaming or streaming."
@@ -3063,10 +3509,12 @@ $TweakDescEN = @{
     "AMD: Shader Cache (Unlimited)"               = "AMD only: Maximizes AMD Shader Cache size. Prevents cache eviction and reduces shader recompilation. Reduces stutter in OpenGL/Vulkan titles."
     "AMD: Anti-Lag (Low Latency Mode)"            = "AMD only: Enables AMD Anti-Lag via registry. Reduces the gap between CPU input and GPU output  --  similar to NVIDIA Reflex. Effective on AMD RX 5000+."
     "Disable USB Selective Suspend"               = "Disables USB Selective Suspend globally. Windows no longer puts USB devices to sleep. Prevents disconnections with USB mice, headsets and controllers under load."
+    "Disable USB 3 Link Power Management" = "Turns off the power-saving states of USB 3 links (U1/U2) in every power plan. The link to USB 3 devices (headset DACs, capture cards, external SSDs, VR headsets) no longer has to wake up first -- helps against dropouts and short stutters. Complements 'Disable USB Selective Suspend' (that one puts whole devices to sleep, this one only the link). Windows hides this setting in Power Options. Slightly higher power use."
     "Disable PCI-E Link State Power Management"   = "Disables PCI-E ASPM. Prevents the GPU from putting its PCI Express connection into power saving mode. Reduces GPU latency spikes under load."
     "Disable Hard Disk Sleep"                     = "Sets disk sleep timeout to never (0). Prevents the known stuttering after inactivity when an HDD/SSD wakes from sleep."
     "Set Display Sleep = 15 Minutes"              = "Sets monitor sleep timer to 15 minutes (AC) and 5 minutes (battery). Prevents monitor from turning off mid-game while still saving power on breaks."
     "Disable Sleep (System)"                      = "Completely disables system sleep mode. The PC never sleeps after inactivity. Recommended for desktop PCs running downloads or servers in the background."
+    "Disable Wake Timers" = "Scheduled tasks (e.g. restarts after Windows updates and automatic maintenance) can no longer wake the PC from sleep -- no more PC that starts up by itself at night. Waking by mouse, keyboard or network (Wake-on-LAN) still works. Applies to every power plan; only matters if the PC goes to sleep."
     "CPU Minimum Processor State = 100%"          = "Sets minimum CPU state to 100%. CPU always runs at full clock speed without throttling. Eliminates the brief ramp-up delay from idle  --  important for consistent FPS."
     "CPU Maximum Processor State = 100%"          = "Sets maximum CPU state to 100%. Ensures Windows never artificially caps the CPU. Relevant on laptops and systems with aggressive thermal policies."
 }
@@ -3786,7 +4234,9 @@ $Script:RestartTweaks = @("Remove Windows Recall", "Disable HPET (High Precision
     "Process Count Reduction (Svchost)", "Enable MSI Mode (Message Signaled Interrupts)", "Enable Hardware-Accelerated GPU Scheduling (HAGS)",
     "Disable Write-Cache Buffer Flushing", "Optimize NVMe Queue Depth", "Disable Windows Platform Binary Table (WPBT)", "Disable Memory Compression",
     "Disable Energy-Efficient Ethernet", "Disable Interrupt Moderation")
-$Script:EnterpriseOnly = @("Disable Get Started & Copilot Sign-in Screens")
+$Script:EnterpriseOnly = @("Disable Get Started & Copilot Sign-in Screens", "Disable Consumer Features")
+# Policies Windows reads from Pro upwards (Policy CSP: Pro / Enterprise / Education) -- greyed out on Home
+$Script:ProOnly = @("Block Background Apps (Policy)", "Exclude Drivers from Windows Update", "Hold Feature Updates (Stay on Current Version)")
 $Script:AppRemovals = @("Remove Xbox Apps", "Remove Copilot", "Remove OneDrive", "Remove Windows Recall", "Remove Other Bloatware")
 
 function Get-TweakDesc($Tweak) {
@@ -3802,6 +4252,7 @@ function New-TweakRow {
     $isWrongGPU  = ($Tweak.Group -eq "AMD") -and (-not $IsAMD)
     # Policies Windows only reads on Enterprise / Education -- not selectable on Home / Pro
     $isEntOnly   = ($Script:EnterpriseOnly -contains $name) -and (-not (Test-EnterpriseEdition))
+    $isProOnly   = ($Script:ProOnly -contains $name) -and (Test-HomeEdition)
 
     $card = New-Object Windows.Controls.Border
     $card.Background = Brush $U.CARD; $card.BorderBrush = Brush $U.BORDER; $card.BorderThickness = Th 1
@@ -3831,6 +4282,7 @@ function New-TweakRow {
     if ($Script:RestartTweaks -contains $name) { $badges.Children.Add((New-Badge 'restart' $U.AMBER (Mix-Hex $U.CARD $U.AMBER 0.14) 0xE7BA)) | Out-Null }
     if ($isWrongGPU)  { $badges.Children.Add((New-Badge 'AMD only' $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
     if ($isEntOnly)   { $badges.Children.Add((New-Badge 'Enterprise only' $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
+    if ($isProOnly)   { $badges.Children.Add((New-Badge 'Pro and up' $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
     if ($isWin11Only) { $badges.Children.Add((New-Badge 'Windows 11 only' $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
     if ($name -eq 'Optimize NVMe Queue Depth' -and -not $HasNVMe) { $badges.Children.Add((New-Badge 'no NVMe found' $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
     if ($Script:OneTimeNames -contains $name) { $badges.Children.Add((New-Badge 'one-time' $U.TEXT2 $U.CARD2 0xE72C)) | Out-Null }
@@ -3838,7 +4290,7 @@ function New-TweakRow {
     $badges.Children.Add($active) | Out-Null
     [Windows.Controls.Grid]::SetColumn($badges, 3); $grid.Children.Add($badges) | Out-Null
 
-    if ($isWin11Only -or $isWrongGPU -or $isEntOnly) { $cb.IsEnabled = $false; $card.Opacity = 0.55 }
+    if ($isWin11Only -or $isWrongGPU -or $isEntOnly -or $isProOnly) { $cb.IsEnabled = $false; $card.Opacity = 0.55 }
     $card.Child = $grid
 
     $CheckBoxMap[$name]           = $cb
@@ -4845,6 +5297,33 @@ function Get-BaselineSummary {
     } else { 'created after the first Apply' }
 }
 
+# Memory integrity (HVCI) and drive encryption of C: -- read only, never switched by the tool.
+# Win32_DeviceGuard is readable without admin; SecurityServicesRunning contains 2 = HVCI.
+# The shell's BitLocker property needs no admin either: 1 on, 2 off, 3 encrypting,
+# 4 decrypting, 5 suspended, 6 on (locked).
+function Get-SecurityStatus {
+    $hv = try { @((Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction Stop).SecurityServicesRunning) } catch { $null }
+    $mi = if ($null -eq $hv) {
+        @{ Value = 'not readable'; Warn = $false; Hint = 'Windows Security > Device security > Core isolation shows it.' }
+    } elseif ($hv -contains 2) {
+        @{ Value = 'on'; Warn = $true; Hint = 'Protects against malicious drivers; in some games it costs a few percent. Switch it in Windows Security > Device security > Core isolation -- your call.' }
+    } else {
+        @{ Value = 'off'; Warn = $false; Hint = 'Windows updates (KB5127936 and later) can switch it on -- worth a look after big updates.' }
+    }
+    $bl = try { [int](New-Object -ComObject Shell.Application).NameSpace('C:').Self.ExtendedProperty('System.Volume.BitLockerProtection') } catch { -1 }
+    $hint = 'Software encryption costs SSD speed on some drives. Keep the recovery key (account.microsoft.com/devices/recoverykey). Settings > Privacy & security > Device encryption.'
+    $dr = switch ($bl) {
+        { $_ -in 1, 6 } { @{ Value = 'encrypted (BitLocker / device encryption)'; Warn = $true; Hint = $hint } }
+        3 { @{ Value = 'encrypting right now'; Warn = $true; Hint = $hint } }
+        4 { @{ Value = 'decrypting right now'; Warn = $false; Hint = 'Leave the PC on until it is done.' } }
+        5 { @{ Value = 'encrypted, protection paused'; Warn = $true; Hint = $hint } }
+        2 { @{ Value = 'not encrypted'; Warn = $false; Hint = 'Since 24H2 a clean install often encrypts the drive by itself -- this one is not.' } }
+        default { @{ Value = 'unknown'; Warn = $false; Hint = 'Settings > Privacy & security > Device encryption shows it.' } }
+    }
+    @(([pscustomobject]@{ Label = 'Memory integrity'; Value = $mi.Value; Warn = $mi.Warn; Hint = $mi.Hint }),
+      ([pscustomobject]@{ Label = 'Drive C:'; Value = $dr.Value; Warn = $dr.Warn; Hint = $dr.Hint }))
+}
+
 function New-HwCard([int]$Glyph, [string]$Color, [string]$Label, [string]$Value, [string]$Sub) {
     $v = New-VStack @((New-HStack @((New-Icon $Glyph 14 $Color @(0, 0, 8, 0)), (New-Text $Label 11.5 $Script:UI.DIM)) @(0, 0, 0, 8)),
                       (New-Text $Value 14 $Script:UI.TEXT 'SemiBold' -Wrap), (New-Text $Sub 11.5 $Script:UI.DIM 'Normal' -Wrap -Margin 0, 4, 0, 0))
@@ -4899,6 +5378,12 @@ function Build-DashboardPage {
             (New-Text "   $($m.CurrentHorizontalResolution) x $($m.CurrentVerticalResolution) @ $($m.CurrentRefreshRate) Hz" 12.5 $U.TEXT2),
             (New-Text $adv 12.5 $(if ($atMax) { $U.DIM } else { $U.AMBER }))) @(0, 3, 0, 0))) | Out-Null
         $mi++
+    }
+    # Two Windows security features that cost performance -- shown only, never switched here
+    foreach ($s in @(Get-SecurityStatus)) {
+        $mon.Children.Add((New-HStack @((New-Icon 0xE72E 13 $U.SLATE @(0, 0, 10, 0)), (New-Text $s.Label 12.5 $U.TEXT 'SemiBold'),
+            (New-Text "   $($s.Value)" 12.5 $(if ($s.Warn) { $U.AMBER } else { $U.TEXT2 }))) @(0, 6, 0, 0))) | Out-Null
+        $mon.Children.Add((New-Text ($s.Hint -replace '\s+--\s+', $Script:EmDash) 11.5 $U.DIM 'Normal' -Wrap -Margin 23, 1, 0, 0)) | Out-Null
     }
     $scoreBody = New-VStack @(
         (New-CardTitle 'Optimization score' $U.RED $verifyBtn),
@@ -5120,8 +5605,8 @@ function Build-PresetsPage {
 
     $defs = @(
         @{ Name = 'Minimal';    Color = $U.GREEN; Fg = '#ffffff'; Desc = 'Safe basics only: privacy, gaming priority, network latency. No app removal, nothing you would miss. Ideal first run.' }
-        @{ Name = 'Balanced';   Color = $U.AMBER; Fg = '#1a1205'; Desc = 'Minimal + Ultimate Performance, HPET / timer, GPU and audio tweaks, light debloat (Copilot, Recall, Xbox) and the Windows AI switches. The recommended all-round setup.' }
-        @{ Name = 'Aggressive'; Color = $U.RED;   Fg = '#ffffff'; Desc = 'Everything: + OneDrive removal, no hibernation, no memory compression. For experienced users -- removed apps need System Restore.' }
+        @{ Name = 'Balanced';   Color = $U.AMBER; Fg = '#1a1205'; Desc = 'Minimal + Ultimate Performance, HPET / timer, GPU and audio tweaks, light debloat (Copilot, Recall, tips & ads) and the Windows AI and privacy switches. The recommended all-round setup.' }
+        @{ Name = 'Aggressive'; Color = $U.RED;   Fg = '#ffffff'; Desc = 'Everything: + Xbox / OneDrive removal, no background Store apps, no drivers from Windows Update, no hibernation, no memory compression. For experienced users -- removed apps need System Restore.' }
     )
     $grid = New-Object Windows.Controls.Grid; $grid.Margin = Th 0, 0, -14, 0
     foreach ($i in 0..2) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $grid.ColumnDefinitions.Add($cd) }
@@ -5275,12 +5760,12 @@ $Script:PresetMinimal = @(
     "Disable Delivery Optimization (P2P Windows Update)"
 )
 $Script:PresetBalanced = $Script:PresetMinimal + @(
-    "Remove Xbox Apps","Remove Copilot","Remove Windows Recall","Remove Other Bloatware",
-    "Stop Auto-Installed Suggested Apps","Disable Get Started & Copilot Sign-in Screens",
+    "Remove Copilot","Remove Windows Recall","Remove Other Bloatware",
+    "Stop Auto-Installed Suggested Apps","Disable Tips, Ads & Suggestions","Stop OneDrive Folder Backup","Disable Get Started & Copilot Sign-in Screens",
     "Disable Click to Do & Settings Agent (AI)","Disable AI in Paint & Notepad",
-    "Block Telemetry Hosts (hosts file)",
+    "Block Telemetry Hosts (hosts file)","Disable Input & Speech Data Collection","Disable Remote Assistance",
     "Ultimate Performance Plan","Disable HPET (High Precision Event Timer)","Allow Global Timer Resolution (Windows 11)",
-    "Disable Prefetch & Superfetch","Optimize Visual Effects (Performance Mode)","Disable Bing in Windows Search",
+    "Disable Prefetch & Superfetch","Optimize Visual Effects (Performance Mode)","Disable Startup App Delay","Disable Bing in Windows Search",
     "Disable Store Recommended Search Results","Disable File Explorer Automatic Folder Discovery",
     "Disable Xbox Game Bar","Disable Windows Update during Gaming","Disable Background App Throttling",
     "Enable MSI Mode (Message Signaled Interrupts)","Enable Hardware-Accelerated GPU Scheduling (HAGS)","Increase GPU Timeout Tolerance (TDR)",
@@ -5291,10 +5776,10 @@ $Script:PresetBalanced = $Script:PresetMinimal + @(
     "Restore Classic Right-Click Menu","Left-Align Taskbar","Disable Widgets","Disable Recommended in Start Menu","Enable End Task in Taskbar","Disable Snap Layout Hover Menu",
     "Show Hidden Files","Num Lock on Startup","Enable Long Paths",
     "Optimize PageFile (System Managed)","Enable SSD TRIM","Disable Scheduled Defragmentation","Optimize NVMe Queue Depth",
-    "Disable USB Selective Suspend","Disable PCI-E Link State Power Management","Disable Hard Disk Sleep","CPU Minimum Processor State = 100%","CPU Maximum Processor State = 100%"
+    "Disable USB Selective Suspend","Disable USB 3 Link Power Management","Disable PCI-E Link State Power Management","Disable Hard Disk Sleep","Disable Wake Timers","CPU Minimum Processor State = 100%","CPU Maximum Processor State = 100%"
 )
 $Script:PresetAggressive = $Script:PresetBalanced + @(
-    "Remove OneDrive",
+    "Remove Xbox Apps","Remove OneDrive","Block Background Apps (Policy)","Exclude Drivers from Windows Update",
     "Disable Windows Search Indexing","Process Count Reduction (Svchost)","Disable Interrupt Moderation",
     "Disable Memory Compression","Disable Write-Cache Buffer Flushing","Disable Hibernation","Clear PageFile on Shutdown",
     "Disable Reserved Storage","Disable Storage Sense","Disable Lock Screen","Enable Start Menu Previous Layout",
@@ -5306,6 +5791,8 @@ $Script:PresetAggressive = $Script:PresetBalanced + @(
 # sets on its own plan -- the display would sleep again despite the Ultimate
 # plan promising otherwise. Both remain selectable manually; the Apply handler
 # warns when the two are combined.
+# Also in no preset: 'Hold Feature Updates' (a choice with an end date -- revert it in
+# time), 'Alt+Tab Without Browser Tabs' and 'Disable Dynamic Lighting' (taste / RGB setup).
 
 function Set-Preset {
     param([string[]]$Names, [string]$Label)
@@ -5394,7 +5881,7 @@ function Update-AllDots([string]$Label) {
 # -----------------------------------------
 $BtnSelectAll.Add_Click({
     # Only what is shown (the open tab, or the search hits) and selectable on this PC --
-    # never greyed-out tweaks (Windows 11 only, AMD only, Enterprise only).
+    # never greyed-out tweaks (Windows 11 only, AMD only, Enterprise only, Pro and up).
     $shown = @($Script:Cats | Where-Object { $_.Panel.Visibility -eq 'Visible' } | ForEach-Object { $_.Key })
     $cfBefore = $CheckBoxMap["Set DNS to Cloudflare (1.1.1.1)"].IsChecked -eq $true
     $n = 0

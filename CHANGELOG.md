@@ -6,6 +6,31 @@ All notable changes to GameOptimizerPro (the PowerShell edition), newest first. 
 
 ---
 
+## [1.2.4] — 2026-11-12
+
+Three fixes and twelve new tweaks from a comparison with Winhance — each one checked against the code, the fresh Windows 11 26H2 PC and Microsoft's documentation (including which editions read a policy).
+
+- **Disable Audio Enhancements works again** — Windows 11 refuses direct writes to the audio endpoint store (tested on 26H2 with a test value), so the old tweak changed nothing. It now goes through the Windows audio interface like the Sound control panel, reads every value back, counts only real successes and reports a refusal as an error. Only devices that are there (active or unplugged) count, not the ones Windows only remembers.
+- **Remove Xbox Apps** — the description warns that the Xbox sign-in for Game Pass and Store games, Xbox mode and Game Bar recordings are gone until the apps come back from the Store; it moved from *Balanced* to *Aggressive*.
+- **Optimize Visual Effects** — also switches off the single effects (shadows, window contents while dragging, the translucent selection rectangle, icon shadows) like *Adjust for best performance*; ClearType stays on. Full effect after signing out and in.
+- **12 new tweaks** — *Disable Tips, Ads & Suggestions*, *Stop OneDrive Folder Backup*, *Disable Input & Speech Data Collection*, *Disable Remote Assistance*, *Disable Startup App Delay*, *Block Background Apps (Policy)*, *Exclude Drivers from Windows Update*, *Hold Feature Updates (Stay on Current Version)*, *Alt+Tab Without Browser Tabs*, *Disable Dynamic Lighting*, *Disable USB 3 Link Power Management* and *Disable Wake Timers*. Now **114 tweaks**.
+- **More in existing tweaks** — telemetry tasks: feedback prompts, the error-report upload queue and the power-efficiency analysis; Bing search: search highlights and cloud content search; Recommended in Start: recent files and recommendations off on every edition; Xbox Game Bar: the controller's Xbox button.
+- **Greyed out by edition** — policies Windows Home doesn't read are marked *Pro and up*; *Disable Consumer Features* is *Enterprise only* now, as Microsoft documents it.
+- **Dashboard** — shows memory integrity and the encryption of drive C: (both cost performance), read only.
+
+<details>
+<summary><b>Development log — 1.2.4</b></summary>
+
+- **Checked on the real PC (read only)** — every target: scheduled tasks (*PI\Sqm-Tasks* is gone on 26H2 and is skipped), power settings (USB 3 link power management is hidden in Power Options and only shows with `powercfg /qh`), registry values and permissions, the audio devices through the audio API (three devices; one active device still had its enhancements on).
+- **Microsoft docs, edition column** — *ExcludeWUDriversInQualityUpdate*, *TargetReleaseVersion* / *ProductVersion*, *LetAppsRunInBackground* and *DoNotShowFeedbackNotifications* are read from Pro up; *AllowWindowsConsumerFeatures* only on Enterprise / Education; *HideRecommendedSection* lists Pro.
+- **Not built, with reasons** — *NoAutoRebootWithLoggedOnUsers* (a legacy policy Microsoft lists as not applicable to Windows 11, and the Windows Update tweak already switches automatic installs off); Wi-Fi power saving on AC (Windows already ships *Maximum performance* there); voice activation for apps (the setting doesn't exist on 26H2); *ContentDeliveryAllowed* / *SubscribedContentEnabled* (not documented whether they also turn off the Spotlight pictures); the software installer and the app-removal list are left for a round of their own.
+- **Status checks count deviations** — a value that is missing or changed back is never "done" (the 0-is-falsy trap).
+- **Tests** — the test PCs now model the audio API (incl. a device that refuses), hidden power settings, binary registry values and Windows Home; new scenarios for every fix and new tweak; static checks, unit tests and the real window offscreen; the real system unchanged.
+
+</details>
+
+---
+
 ## [1.2.3] — 2026-10-29
 
 Checked on a fresh Windows 11 26H2 (build 26300): tweaks that no longer do anything are gone, and four status checks read the right thing again.
