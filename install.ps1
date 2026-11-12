@@ -7,11 +7,11 @@ $dest = "$env:TEMP\GameOptimizerPro.ps1"
 # integrity check against corruption/tampering in transit -- it does not
 # replace reading the source, but lets users verify what they're about
 # to run with Admin rights without having to read the whole script by hand.
-$ExpectedHash = "502B548799C3490C9D8EDBA30215B28974A90ADD317F5F7E6FDE7E15C2DA7B43"
+$ExpectedHash = "11ABF776AAFE446D0EA92DC3870D3F404D220DB628A2F3D4A37D787FEA728CA3"
 
 # Keep this in sync with $Script:AppVersion in GameOptimizerPro.ps1 (used for
 # display only -- integrity is enforced by $ExpectedHash above, not this string).
-$ScriptVersion = "1.2.4"
+$ScriptVersion = "1.2.5"
 
 Write-Host ""
 Write-Host "  GameOptimizerPro v$ScriptVersion Installer" -ForegroundColor Red
@@ -34,25 +34,34 @@ try {
 }
 
 # --- INTEGRITY CHECK (SHA256) ---
+# A mismatch never runs. GitHub's file cache can serve an older script for a few
+# minutes right after a release (the installer is already new) -- so download once
+# more past the cache before giving up.
 $actualHash = (Get-FileHash -Path $dest -Algorithm SHA256).Hash
+if ($actualHash -ne $ExpectedHash) {
+    Write-Host "  Checksum differs -- downloading once more past GitHub's cache..." -ForegroundColor DarkGray
+    try {
+        $fresh = "${url}?nocache=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+        Invoke-WebRequest -Uri $fresh -OutFile $dest -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache" }
+        $actualHash = (Get-FileHash -Path $dest -Algorithm SHA256).Hash
+    } catch { }
+}
 Write-Host "  SHA256: $actualHash" -ForegroundColor DarkGray
 if ($actualHash -ne $ExpectedHash) {
+    Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
     Write-Host ""
-    Write-Host "  [WARNING] Checksum mismatch!" -ForegroundColor Red
+    Write-Host "  [ERROR] Checksum mismatch -- nothing was started." -ForegroundColor Red
     Write-Host "  Expected: $ExpectedHash" -ForegroundColor Gray
     Write-Host "  Actual:   $actualHash" -ForegroundColor Gray
-    Write-Host "  The downloaded file does not match the published checksum in CHECKSUMS.txt." -ForegroundColor Gray
-    Write-Host "  This can mean the script was updated since this installer was published," -ForegroundColor Gray
-    Write-Host "  or that the download was corrupted/tampered with." -ForegroundColor Gray
+    Write-Host "  The downloaded file does not match the published checksum in CHECKSUMS.txt" -ForegroundColor Gray
+    Write-Host "  (a release a few minutes old, a broken download, or a changed file)." -ForegroundColor Gray
+    Write-Host "  Wait a few minutes and run the installer again, or download the script from the" -ForegroundColor Gray
+    Write-Host "  Releases page and compare its hash with CHECKSUMS.txt yourself." -ForegroundColor Gray
     Write-Host ""
-    $proceed = Read-Host "  Type YES to run it anyway, or press Enter to abort"
-    if ($proceed -ne "YES") {
-        Write-Host "  Aborted." -ForegroundColor Yellow
-        exit
-    }
-} else {
-    Write-Host "  Checksum verified OK." -ForegroundColor Green
+    Read-Host "  Press Enter to exit"
+    exit
 }
+Write-Host "  Checksum verified OK." -ForegroundColor Green
 
 # Make sure the file is UTF-8 WITH a BOM: Windows PowerShell 5.1 reads BOM-less
 # scripts as ANSI. For the published file this rewrite is byte-identical, so the

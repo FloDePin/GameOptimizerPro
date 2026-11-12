@@ -6,6 +6,32 @@ All notable changes to GameOptimizerPro (the PowerShell edition), newest first. 
 
 ---
 
+## [1.2.5] — 2026-11-12
+
+Two more audits, checked against the code — what holds is fixed, plus a few things that make the tool nicer to live with.
+
+- **The installer never runs a file with the wrong checksum** — before, typing "YES" started it anyway. Right after a release GitHub's cache can still serve the old script for a few minutes, so the installer first downloads once more past the cache, then stops with a clear message.
+- **DNS revert brings back what you had** — *Set DNS to Cloudflare / Google* remember the adapter's own DNS servers (a Pi-hole, a company DNS) and the revert writes exactly those back, or switches to automatic if that was the setting. An adapter where you added a server of your own next to Cloudflare / Google is left alone.
+- **Registry backups can remove what was new** — each backup now also has `_remove-new-keys.reg` for keys that didn't exist yet; the Backups page says honestly what a double-click restores. Only the newest 20 backups are kept (each one is around 40 MB), and only the newest 20 logs.
+- **Revert selected** — sets only the ticked tweaks back to the Windows default, not everything.
+- **Your own selection** — save the ticked tweaks to a text file on the Presets page and tick them again later or on another PC.
+- **Disk Cleanup doesn't freeze the window** — cleanmgr and DISM (often 5–15 minutes) run in the background, the status bar counts the seconds.
+- **Dashboard** — also shows virtualization-based security (VBS), which can keep running with memory integrity off.
+- **Smaller fixes** — *Revert all* no longer restarts Explorer for a classic right-click menu that was never set; Startup Manager and Services update their rows right after Enable / Disable; both windows open over the app instead of behind it; the drift check at start no longer runs every check twice; the status of *Disable Input & Speech Data Collection* also covers the feedback policy on Pro.
+
+<details>
+<summary><b>Development log — 1.2.5</b></summary>
+
+- **Audit 1 (1.2.4)** — all three points confirmed: installer override, DNS revert on mixed lists, backups without the missing keys.
+- **Audit 2** — written for the old 1.3; its bugs were fixed in 1.2.2 except the Explorer restart. Of its nine extra points one was outdated (the test harness already allows `Out-String`) and one didn't apply (the tests folder isn't published, no user name is in the repo); the rest is in.
+- **Suggestions not built** — AMD ReBAR detection through `KMD_RebarControlMode`: that value is a driver preset that is 1 after every install, whatever the BIOS says. Measuring the BAR size through WMI doesn't work either: on the RTX 4080 it reports 16 / 32 MB windows while `nvidia-smi` shows the 16 GB BAR.
+- **Tested on the real PC (read only)** — the new backup with its missing-keys file and the cleanup to 20 folders, run against the live registry into a test folder.
+- **Tests** — new scenarios for the DNS restore (Pi-hole, switching providers, a mixed list, automatic), the Explorer restart and Disk Cleanup; static checks now 0 findings; the real window offscreen with the new buttons; the real system unchanged.
+
+</details>
+
+---
+
 ## [1.2.4] — 2026-11-12
 
 Three fixes and twelve new tweaks from a comparison with Winhance — each one checked against the code, the fresh Windows 11 26H2 PC and Microsoft's documentation (including which editions read a policy).

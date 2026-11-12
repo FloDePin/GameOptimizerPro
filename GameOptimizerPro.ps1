@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.2.4
+    1.2.5
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.2.4"
+$Script:AppVersion = "1.2.5"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -184,21 +184,76 @@ function Get-NicParams([string]$Setting) {
     }
 }
 
-# DNS revert: back to automatic (DHCP) only on adapters that use this provider's servers,
-# so a DNS set up by the user (Pi-hole, router, company network) is left alone.
+# The servers of both DNS tweaks (Cloudflare, Google; IPv4 + IPv6)
+function Get-ProviderDns { @('1.1.1.1', '1.0.0.1', '2606:4700:4700::1111', '2606:4700:4700::1001', '8.8.8.8', '8.8.4.4', '2001:4860:4860::8888', '2001:4860:4860::8844') }
+
+# Static DNS servers of an adapter (IPv4 + IPv6) as Windows stores them; empty = automatic (DHCP).
+# DhcpNameServer is what the router hands out -- that one must not be restored as a static value.
+function Get-StaticDns([string]$Guid) {
+    $v4 = "$(Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$Guid" 'NameServer')"
+    $v6 = "$(Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces\$Guid" 'NameServer')"
+    @(@($v4 -split '[,\s]+') + @($v6 -split '[,\s]+') | Where-Object { $_ })
+}
+
+# What each adapter had before a DNS tweak changed it ("guid|server,server", an empty list =
+# automatic), so a revert brings back a Pi-hole or company DNS instead of switching to automatic.
+function Read-DnsOriginal {
+    $m = @{}
+    try { foreach ($l in @(Get-Content $Script:DnsOriginalFile -ErrorAction Stop)) { $p = "$l".Split('|'); if ($p.Count -eq 2 -and $p[0]) { $m[$p[0]] = @($p[1].Split(',') | Where-Object { $_ }) } } } catch { }
+    $m
+}
+function Save-DnsOriginal($Map) {
+    try {
+        New-Item -ItemType Directory -Path (Split-Path $Script:DnsOriginalFile) -Force -ErrorAction Stop | Out-Null
+        Set-Content -Path $Script:DnsOriginalFile -Value @($Map.Keys | Sort-Object | ForEach-Object { "$_|$(@($Map[$_]) -join ',')" }) -Encoding ASCII -ErrorAction Stop
+    } catch { Write-Log "DNS: the previous DNS servers could not be saved -- $_" }
+}
+
+function Set-ProviderDns([string]$Provider, [string[]]$Servers) {
+    $orig = Read-DnsOriginal; $changed = $false
+    $ok = 0; $fail = 0
+    foreach ($a in @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" })) {
+        # remember the adapter's own setting once -- not again when switching between the two providers
+        $g = "$($a.InterfaceGuid)"
+        if ($g -and -not $orig.ContainsKey($g)) {
+            $st = @(Get-StaticDns $g)
+            if (-not @($st | Where-Object { (Get-ProviderDns) -contains $_ }).Count) { $orig[$g] = $st; $changed = $true }
+        }
+        try {
+            Set-DnsClientServerAddress -InterfaceIndex $a.InterfaceIndex -ServerAddresses $Servers -ErrorAction Stop
+            $ok++
+        } catch {
+            $fail++
+            Write-Log "WARNING: DNS ($Provider) failed on '$($a.Name)': $_"
+        }
+    }
+    if ($changed) { Save-DnsOriginal $orig }
+    Write-Log "DNS set to $Provider (IPv4 + IPv6) -- $ok adapter(s) OK, $fail failed"
+}
+
+# DNS revert, only on adapters that use nothing but this provider's servers: back to what the
+# adapter had before (saved servers, or automatic). An adapter with a server of the user's own
+# next to the provider's (Pi-hole, router, company network) is left exactly as it is.
 function Reset-ProviderDns([string]$Provider, [string[]]$Servers) {
-    $n = 0
+    $orig = Read-DnsOriginal
+    $n = 0; $kept = 0; $auto = 0
     foreach ($a in @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" })) {
         $cur = @(Get-DnsClientServerAddress -InterfaceIndex $a.InterfaceIndex -ErrorAction SilentlyContinue | ForEach-Object { $_.ServerAddresses })
         if (-not @($cur | Where-Object { $Servers -contains $_ }).Count) { continue }
+        if (@($cur | Where-Object { $Servers -notcontains $_ }).Count) { $kept++; Write-Log "Revert: '$($a.Name)' also uses DNS servers of its own -- left as it is"; continue }
+        $g = "$($a.InterfaceGuid)"
+        $back = @(if ($g -and $orig.ContainsKey($g)) { $orig[$g] })
         Set-DnsClientServerAddress -InterfaceIndex $a.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
+        if ($back.Count) { Set-DnsClientServerAddress -InterfaceIndex $a.InterfaceIndex -ServerAddresses $back -ErrorAction SilentlyContinue } else { $auto++ }
+        if ($g) { $orig.Remove($g) }
         $n++
     }
     if ($n) {
-        ipconfig /renew 2>$null | Out-Null   # pick up the router's DNS again
+        Save-DnsOriginal $orig
+        if ($auto) { ipconfig /renew 2>$null | Out-Null }   # pick up the router's DNS again
         Clear-DnsClientCache -ErrorAction SilentlyContinue
     }
-    Write-Log "Revert: $Provider DNS reset to automatic on $n adapter(s) -- other DNS settings untouched"
+    Write-Log "Revert: $Provider DNS -- $n adapter(s) back to their previous DNS ($auto automatic), $kept with servers of their own left alone"
 }
 
 # Connected adapters the network status checks look at. Physical ones only when there
@@ -344,7 +399,7 @@ namespace GOPAudio {
       var k = Key(fmtid, pid);
       PROPVARIANT pv;
       if (pc.GetPropertyValue(id, fx ? 1 : 0, ref k, out pv) != 0) return -2;
-      long r = (pv.vt == 19 || pv.vt == 18) ? (long)pv.uintVal : -1;
+      long r = (pv.vt == 19 || pv.vt == 18 || pv.vt == 3) ? (long)pv.uintVal : -1;   // VT_UI4, VT_UI2, VT_I4
       PropVariantClear(ref pv);
       return r;
     }
@@ -458,6 +513,8 @@ Set-Splash "Loading tweak definitions ..." 15
 # LOGGING
 # -----------------------------------------
 $LogFile = "$env:TEMP\GameOptimizerPro_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+# One log per start -- keep the newest 20, the older ones go
+try { Get-ChildItem -Path "$env:TEMP\GameOptimizerPro_*.log" -File -ErrorAction Stop | Sort-Object Name -Descending | Select-Object -Skip 20 | Remove-Item -Force -ErrorAction SilentlyContinue } catch { }
 function Write-Log {
     param([string]$Message)
     $entry = "[$(Get-Date -Format 'HH:mm:ss')] $Message"
@@ -505,6 +562,7 @@ function Format-FreedMB { param([int64]$Bytes) return ([math]::Round($Bytes / 1M
 # a always-available, tweak-specific fallback independent of VSS.
 # -----------------------------------------
 $Script:RegistryBackupRoot = "$env:LOCALAPPDATA\GameOptimizerPro\RegistryBackups"
+$Script:DnsOriginalFile = "$env:LOCALAPPDATA\GameOptimizerPro\dns_original.txt"   # see Set-ProviderDns
 
 $Script:RegistryBackupKeys = @(
     "HKCU\AppEvents\Schemes",
@@ -622,7 +680,13 @@ function Backup-Registry {
 
     $saved = 0
     $skipped = 0
+    $missing = @()
+    $hives = @{ HKCU = 'HKEY_CURRENT_USER'; HKLM = 'HKEY_LOCAL_MACHINE'; HKU = 'HKEY_USERS'; HKCR = 'HKEY_CLASSES_ROOT' }
     foreach ($key in $keys) {
+        $hv, $rest = $key -split '\\', 2
+        $full = if ($hives.ContainsKey($hv)) { "$($hives[$hv])\$rest" } else { $key }
+        # A key that isn't there can't be exported -- note it: a tweak may create it
+        if (-not (Test-Path -LiteralPath "Registry::$full")) { $missing += $full; $skipped++; continue }
         $base = $key -replace '[\\:\*\?"<>\|]', '_'
         $dest = Join-Path $backupDir "$base.reg"
         # two keys that only differ by '\' vs '_' must not overwrite each other
@@ -632,7 +696,22 @@ function Backup-Registry {
             if ($LASTEXITCODE -eq 0) { $saved++ } else { $skipped++ }
         } catch { $skipped++ }
     }
-    Write-Log "Registry backup ($Label): $saved keys saved, $skipped skipped (not present on this system) -> $backupDir"
+    # The exports put the saved values back when double-clicked, but can't delete a key a tweak
+    # created afterwards -- this file can (keys that didn't exist at backup time).
+    if ($missing.Count) {
+        $lines = @('Windows Registry Editor Version 5.00', '',
+            '; GameOptimizerPro -- keys that did NOT exist when this backup was made.',
+            '; Double-click to delete them again (only needed if a tweak created them).',
+            '; Values a tweak added to a key that already existed go away with that tweak''s revert.', '')
+        $lines += @($missing | ForEach-Object { "[-$_]" })
+        try { $lines | Set-Content -LiteralPath (Join-Path $backupDir '_remove-new-keys.reg') -Encoding Unicode -ErrorAction Stop } catch { }
+    }
+    Write-Log "Registry backup ($Label): $saved keys saved, $($missing.Count) not present yet (listed in _remove-new-keys.reg), $($skipped - $missing.Count) failed -> $backupDir"
+    # Keep the newest 20 backups -- each one can be tens of MB (the whole Control key)
+    try {
+        Get-ChildItem -LiteralPath $Script:RegistryBackupRoot -Directory -ErrorAction Stop | Sort-Object Name -Descending |
+            Select-Object -Skip 20 | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue; Write-Log "Old registry backup removed: $($_.Name)" }
+    } catch { }
     return $backupDir
 }
 
@@ -1262,13 +1341,14 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Run Disk Cleanup"
-        Desc     = "Fuehrt die Windows-Datentraegerbereinigung automatisch aus (cleanmgr /VERYLOWDISK) und raeumt zusaetzlich alte Windows-Update-Komponenten per DISM auf. Einmalige Aktion, kann einige Minuten dauern."
+        Desc     = "Fuehrt die Windows-Datentraegerbereinigung automatisch aus (cleanmgr /VERYLOWDISK) und raeumt zusaetzlich alte Windows-Update-Komponenten per DISM auf. Einmalige Aktion, kann 5-15 Minuten dauern - das Fenster bleibt dabei bedienbar, die Statusleiste zaehlt die Sekunden mit."
         Category = "Windows"
         Group    = "CTT Essentials"
         Action   = {
-            Start-Process -FilePath "cleanmgr.exe" -ArgumentList "/d C: /VERYLOWDISK" -Wait -ErrorAction SilentlyContinue
-            Start-Process -FilePath "Dism.exe" -ArgumentList "/online /Cleanup-Image /StartComponentCleanup /ResetBase" -Wait -ErrorAction SilentlyContinue
-            Write-Log "Disk Cleanup executed (cleanmgr + DISM component cleanup)"
+            # cleanmgr shows its result dialog at the end -- keep its window visible, or it waits forever
+            $c = Invoke-ProcessWithUi "cleanmgr.exe" "/d C: /VERYLOWDISK" "Disk Cleanup (cleanmgr)" 1800 -Visible
+            $d = Invoke-ProcessWithUi "Dism.exe" "/online /Cleanup-Image /StartComponentCleanup /ResetBase" "Component cleanup (DISM)" 3600
+            Write-Log "Disk Cleanup executed (cleanmgr exit $c, DISM exit $d$(if ($d -eq 3010) { ' -- restart needed' }))"
         }
     },
 
@@ -1593,42 +1673,20 @@ $AllTweaks = @(
     # == NETWORK / DNS ====================================================
     [PSCustomObject]@{
         Name     = "Set DNS to Cloudflare (1.1.1.1)"
-        Desc     = "Setzt den DNS-Server auf Cloudflare 1.1.1.1 / 1.0.0.1 (IPv4) plus die passenden IPv6-Server (2606:4700:4700::1111/::1001), damit auch IPv6-Anfragen ueber Cloudflare laufen. Einer der schnellsten und datenschutzfreundlichsten DNS-Anbieter weltweit."
+        Desc     = "Setzt den DNS-Server auf Cloudflare 1.1.1.1 / 1.0.0.1 (IPv4) plus die passenden IPv6-Server (2606:4700:4700::1111/::1001), damit auch IPv6-Anfragen ueber Cloudflare laufen. Einer der schnellsten und datenschutzfreundlichsten DNS-Anbieter weltweit. Revert bringt die DNS-Server zurueck, die vorher eingestellt waren (z.B. ein Pi-hole) - oder 'automatisch'."
         Category = "Network"
         Group    = "DNS"
         Action   = {
-            $adapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
-            $ok = 0; $fail = 0
-            foreach ($adapter in $adapters) {
-                try {
-                    Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses ("1.1.1.1","1.0.0.1","2606:4700:4700::1111","2606:4700:4700::1001") -ErrorAction Stop
-                    $ok++
-                } catch {
-                    $fail++
-                    Write-Log "WARNING: DNS (Cloudflare) failed on '$($adapter.Name)': $_"
-                }
-            }
-            Write-Log "DNS set to Cloudflare (1.1.1.1 + IPv6) -- $ok adapter(s) OK, $fail failed"
+            Set-ProviderDns 'Cloudflare' @('1.1.1.1', '1.0.0.1', '2606:4700:4700::1111', '2606:4700:4700::1001')
         }
     },
     [PSCustomObject]@{
         Name     = "Set DNS to Google (8.8.8.8)"
-        Desc     = "Setzt den DNS-Server auf Google 8.8.8.8 / 8.8.4.4 (IPv4) plus die passenden IPv6-Server (2001:4860:4860::8888/::8844), damit auch IPv6-Anfragen ueber Google laufen. Global verteilt, sehr schnell und zuverlaessig. Alternative zu Cloudflare."
+        Desc     = "Setzt den DNS-Server auf Google 8.8.8.8 / 8.8.4.4 (IPv4) plus die passenden IPv6-Server (2001:4860:4860::8888/::8844), damit auch IPv6-Anfragen ueber Google laufen. Global verteilt, sehr schnell und zuverlaessig. Alternative zu Cloudflare. Revert bringt die DNS-Server zurueck, die vorher eingestellt waren (z.B. ein Pi-hole) - oder 'automatisch'."
         Category = "Network"
         Group    = "DNS"
         Action   = {
-            $adapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
-            $ok = 0; $fail = 0
-            foreach ($adapter in $adapters) {
-                try {
-                    Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses ("8.8.8.8","8.8.4.4","2001:4860:4860::8888","2001:4860:4860::8844") -ErrorAction Stop
-                    $ok++
-                } catch {
-                    $fail++
-                    Write-Log "WARNING: DNS (Google) failed on '$($adapter.Name)': $_"
-                }
-            }
-            Write-Log "DNS set to Google (8.8.8.8 + IPv6) -- $ok adapter(s) OK, $fail failed"
+            Set-ProviderDns 'Google' @('8.8.8.8', '8.8.4.4', '2001:4860:4860::8888', '2001:4860:4860::8844')
         }
     },
     [PSCustomObject]@{
@@ -2818,6 +2876,8 @@ $RevertActions = @{
 
     # == WINDOWS 11 =====================================================
     "Restore Classic Right-Click Menu" = {
+        # Only when the tweak is in place -- otherwise "Revert all" restarts Explorer for nothing
+        if (-not (Test-Path "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}")) { Write-Log "Revert: classic right-click menu was not set -- nothing to do"; return }
         reg delete "HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}" /f 2>$null
         Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
         Write-Log "Revert: Win11 new right-click menu restored"
@@ -3080,7 +3140,7 @@ $CheckFunctions = @{
         @($st | Where-Object { $_ -ne 'Disabled' }).Count -eq 0
     }
     "Disable Input & Speech Data Collection" = {
-        # the parts every edition reads; the Pro-only feedback policy is extra
+        # what every edition reads, plus the feedback policy from Pro up (the Apply writes it there)
         $want = @(
             @("HKCU:\Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy", "HasAccepted", 0),
             @("HKCU:\Software\Microsoft\InputPersonalization", "RestrictImplicitTextCollection", 1),
@@ -3091,6 +3151,7 @@ $CheckFunctions = @{
             @("HKCU:\Software\Microsoft\Siuf\Rules", "NumberOfSIUFInPeriod", 0),
             @("HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "Start_TrackProgs", 0),
             @("HKCU:\Control Panel\International\User Profile", "HttpAcceptLanguageOptOut", 1))
+        if (-not (Test-HomeEdition)) { $want += , @("HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection", "DoNotShowFeedbackNotifications", 1) }
         # count deviations -- a missing value ($null) is a deviation too, never "done"
         @($want | Where-Object { $v = Get-RegVal $_[0] $_[1]; ($null -eq $v) -or ($v -ne $_[2]) }).Count -eq 0
     }
@@ -3415,7 +3476,7 @@ $TweakDescEN = @{
     "Disable Store Recommended Search Results" = "Locks the Microsoft Store's store.db via file permissions so the Store stops showing recommended/sponsored search results. Fully reversible."
     "Enable Start Menu Previous Layout"   = "Enables the previous Start menu layout on supported Windows 11 builds via a feature override. Only affects builds that know this feature flag -- otherwise no effect."
     "Disable File Explorer Automatic Folder Discovery" = "Sets every folder to 'General items' so Explorer stops auto-detecting folder types -- opens large folders noticeably faster. Sign out / restart required."
-    "Run Disk Cleanup"                    = "Runs Windows Disk Cleanup automatically (cleanmgr /VERYLOWDISK) and additionally cleans up old Windows Update components via DISM. One-time action, may take a few minutes."
+    "Run Disk Cleanup"                    = "Runs Windows Disk Cleanup automatically (cleanmgr /VERYLOWDISK) and additionally cleans up old Windows Update components via DISM. One-time action, can take 5-15 minutes -- the window stays usable and the status bar counts the seconds."
     "Show File Extensions"                        = "Shows file extensions in Explorer (e.g. .exe, .txt, .jpg). Important for security -- disguised files like 'photo.jpg.exe' become immediately visible."
     "Show Hidden Files"                           = "Shows hidden files and folders in Explorer. Useful for seeing AppData, config files and hidden folders."
     "Disable Reserved Storage"                    = "Disables the reserved storage Windows sets aside for updates (~7 GB). Frees that space on the system drive. Windows then manages updates dynamically."
@@ -3469,8 +3530,8 @@ $TweakDescEN = @{
     "Disable Nagle's Algorithm (TCPNoDelay)"      = "Disables Nagle's Algorithm on all network adapters. Nagle buffers small packets at the cost of latency. Disabling noticeably reduces ping in online games."
     "Disable Large Send Offload (LSO)"            = "Disables Large Send Offload on all active network adapters. Can reduce ping spikes on some systems in online games."
     "Disable Network Throttling Index"            = "Disables Windows network packet throttling under high CPU load. Gives the network stack the highest priority."
-    "Set DNS to Cloudflare (1.1.1.1)"            = "Sets DNS to Cloudflare 1.1.1.1 / 1.0.0.1 (IPv4) plus the matching IPv6 servers (2606:4700:4700::1111/::1001) so IPv6 lookups also go through Cloudflare. One of the fastest and most privacy-friendly DNS providers worldwide."
-    "Set DNS to Google (8.8.8.8)"                = "Sets DNS to Google 8.8.8.8 / 8.8.4.4 (IPv4) plus the matching IPv6 servers (2001:4860:4860::8888/::8844) so IPv6 lookups also go through Google. Globally distributed, fast and reliable. Alternative to Cloudflare."
+    "Set DNS to Cloudflare (1.1.1.1)"            = "Sets DNS to Cloudflare 1.1.1.1 / 1.0.0.1 (IPv4) plus the matching IPv6 servers (2606:4700:4700::1111/::1001) so IPv6 lookups also go through Cloudflare. One of the fastest and most privacy-friendly DNS providers worldwide. Revert brings back the DNS servers you had before (e.g. a Pi-hole) -- or automatic."
+    "Set DNS to Google (8.8.8.8)"                = "Sets DNS to Google 8.8.8.8 / 8.8.4.4 (IPv4) plus the matching IPv6 servers (2001:4860:4860::8888/::8844) so IPv6 lookups also go through Google. Globally distributed, fast and reliable. Alternative to Cloudflare. Revert brings back the DNS servers you had before (e.g. a Pi-hole) -- or automatic."
     "Flush DNS Cache"                             = "Clears the local DNS cache. Useful after DNS changes or connection issues. Fast and has no side effects."
     "Disable TCP Auto-Tuning"                     = "Disables automatic TCP receive window sizing. Can reduce latency spikes on some systems. May slightly reduce throughput on gigabit+ connections."
     "Optimize TCP Settings (ECN/SACK/Timestamps)" = "Optimizes advanced TCP settings: disables ECN, enables SACK, disables TCP Timestamps. Reduces overhead and improves stability in online games."
@@ -3841,6 +3902,12 @@ Set-Splash "Building the interface ..." 22
                                         <TextBlock Text="Apply selected" FontWeight="SemiBold"/>
                                     </StackPanel>
                                 </Button>
+                                <Button Name="BtnRevertSel" Style="{StaticResource GopBtn}" Margin="8,0,0,0" ToolTip="Sets only the ticked tweaks back to the Windows default">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE7A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Revert selected"/>
+                                    </StackPanel>
+                                </Button>
                                 <Button Name="BtnRevertAll" Style="{StaticResource GopBtn}" Background="#f59e0b" BorderBrush="#f59e0b" Foreground="#1a1205" Margin="8,0,0,0">
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="&#xE7A7;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13" Margin="0,0,7,0" VerticalAlignment="Center"/>
@@ -4018,6 +4085,7 @@ $BtnOpenBackups = $Window.FindName("BtnOpenBackups")
 $BtnServices    = $Window.FindName("BtnServices")
 $BtnVerify      = $Window.FindName("BtnVerify")
 $BtnRevertAll   = $Window.FindName("BtnRevertAll")
+$BtnRevertSel   = $Window.FindName("BtnRevertSel")
 $BtnStartup     = $Window.FindName("BtnStartup")
 $BtnLang        = $Window.FindName("BtnLang")
 $StatusText     = $Window.FindName("StatusText")
@@ -4622,7 +4690,7 @@ function Remove-FromBaseline([string[]]$Names) {
     try {
         $keep = @(Get-Content $Script:BaselineFile -ErrorAction Stop | Where-Object { $_ -and $_.Trim() -ne '' -and $Names -notcontains $_.Trim() })
         Set-Content -Path $Script:BaselineFile -Value $keep -Encoding UTF8
-        Write-Log "Baseline: re-apply declined, no longer tracking: $($Names -join ', ')"
+        Write-Log "Baseline: no longer tracking (re-apply declined or reverted): $($Names -join ', ')"
     } catch { Write-Log "Baseline update failed: $_" }
 }
 
@@ -5297,12 +5365,14 @@ function Get-BaselineSummary {
     } else { 'created after the first Apply' }
 }
 
-# Memory integrity (HVCI) and drive encryption of C: -- read only, never switched by the tool.
-# Win32_DeviceGuard is readable without admin; SecurityServicesRunning contains 2 = HVCI.
-# The shell's BitLocker property needs no admin either: 1 on, 2 off, 3 encrypting,
-# 4 decrypting, 5 suspended, 6 on (locked).
+# Memory integrity (HVCI), virtualization-based security and drive encryption of C: -- read
+# only, never switched by the tool. Win32_DeviceGuard is readable without admin:
+# SecurityServicesRunning contains 2 = HVCI; VirtualizationBasedSecurityStatus 0 off,
+# 1 enabled but not running, 2 running. The shell's BitLocker property needs no admin
+# either: 1 on, 2 off, 3 encrypting, 4 decrypting, 5 suspended, 6 on (locked).
 function Get-SecurityStatus {
-    $hv = try { @((Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction Stop).SecurityServicesRunning) } catch { $null }
+    $dg = try { Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction Stop } catch { $null }
+    $hv = if ($dg) { @($dg.SecurityServicesRunning) } else { $null }
     $mi = if ($null -eq $hv) {
         @{ Value = 'not readable'; Warn = $false; Hint = 'Windows Security > Device security > Core isolation shows it.' }
     } elseif ($hv -contains 2) {
@@ -5320,7 +5390,16 @@ function Get-SecurityStatus {
         2 { @{ Value = 'not encrypted'; Warn = $false; Hint = 'Since 24H2 a clean install often encrypts the drive by itself -- this one is not.' } }
         default { @{ Value = 'unknown'; Warn = $false; Hint = 'Settings > Privacy & security > Device encryption shows it.' } }
     }
+    # VBS can keep running with memory integrity off (Credential Guard, System Guard, a policy)
+    $vs = switch ($(if ($dg) { [int]$dg.VirtualizationBasedSecurityStatus } else { -1 })) {
+        2 { if ($hv -contains 2) { @{ Value = 'running (with memory integrity)'; Warn = $true; Hint = 'Comes with memory integrity -- see above.' } }
+            else { @{ Value = 'running, although memory integrity is off'; Warn = $true; Hint = 'Something else keeps the Windows hypervisor on (Credential Guard, System Guard, a policy); in CPU-heavy games that can still cost a little. System Information (msinfo32) lists what runs.' } } }
+        1 { @{ Value = 'enabled, not running'; Warn = $false; Hint = 'Switched on but not active -- usually CPU virtualization (SVM / VT-x) is off in the BIOS.' } }
+        0 { @{ Value = 'off'; Warn = $false; Hint = 'The Windows hypervisor security layer is not running.' } }
+        default { @{ Value = 'not readable'; Warn = $false; Hint = 'System Information (msinfo32) shows it under "Virtualization-based security".' } }
+    }
     @(([pscustomobject]@{ Label = 'Memory integrity'; Value = $mi.Value; Warn = $mi.Warn; Hint = $mi.Hint }),
+      ([pscustomobject]@{ Label = 'VBS'; Value = $vs.Value; Warn = $vs.Warn; Hint = $vs.Hint }),
       ([pscustomobject]@{ Label = 'Drive C:'; Value = $dr.Value; Warn = $dr.Warn; Hint = $dr.Hint }))
 }
 
@@ -5624,10 +5703,41 @@ function Build-PresetsPage {
         $body = New-VStack @((New-HStack @($dot, (New-VStack @((New-Text $name 15 $U.TEXT 'SemiBold'), $sub))) @(0, 0, 0, 10)), $bar, $desc, (New-HStack @($sel, $prev)))
         $card = New-Card $body @(0, 0, 14, 14); [Windows.Controls.Grid]::SetColumn($card, $col); $grid.Children.Add($card) | Out-Null
         $V.Cards[$name] = @{ Sub = $sub; Bar = $bar; Card = $card; Color = $d.Color }
-        Set-Variable -Name "BtnPreset$($name.Substring(0, 3))" -Value $sel -Scope Script
+        switch ($name) { 'Minimal' { $Script:BtnPresetMin = $sel } 'Balanced' { $Script:BtnPresetBal = $sel } 'Aggressive' { $Script:BtnPresetAgg = $sel } }
         $col++
     }
     $PresetsPanel.Children.Add($grid) | Out-Null
+
+    # ---- your own selection: save the ticked tweaks to a file, tick them again later or on another PC ----
+    $exp = New-Btn 'Save ticked tweaks ...' $U.CARD2 $U.TEXT 0xE74E -Margin 0, 0, 8, 0
+    $imp = New-Btn 'Load a list ...' $U.CARD2 $U.TEXT 0xE8E5 -Margin 0, 0, 0, 0
+    $exp.Add_Click({
+        $names = @($AllTweaks | Where-Object { $CheckBoxMap[$_.Name].IsChecked -eq $true } | ForEach-Object { $_.Name })
+        if (-not $names.Count) { Set-Status 'Nothing ticked -- tick the tweaks you want to keep in the list first.'; return }
+        $dlg = New-Object Microsoft.Win32.SaveFileDialog
+        $dlg.Filter = 'Text file (*.txt)|*.txt'; $dlg.FileName = "GameOptimizerPro-selection-$(Get-Date -Format 'yyyyMMdd').txt"
+        if (-not $dlg.ShowDialog($Window)) { return }
+        try {
+            @("# GameOptimizerPro v$($Script:AppVersion) -- ticked tweaks, one per line ($(Get-Date -Format 'yyyy-MM-dd'))") + $names | Set-Content -LiteralPath $dlg.FileName -Encoding UTF8 -ErrorAction Stop
+            Set-Status "$($names.Count) ticked tweaks saved to $($dlg.FileName)"; Write-Log "Selection exported: $($names.Count) tweaks -> $($dlg.FileName)"
+        } catch { Set-Status "Could not save the list: $($_.Exception.Message)" }
+    })
+    $imp.Add_Click({
+        $dlg = New-Object Microsoft.Win32.OpenFileDialog
+        $dlg.Filter = 'Text file (*.txt)|*.txt|All files (*.*)|*.*'
+        if (-not $dlg.ShowDialog($Window)) { return }
+        try { $lines = @(Get-Content -LiteralPath $dlg.FileName -Encoding UTF8 -ErrorAction Stop | ForEach-Object { "$_".Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') }) }
+        catch { Set-Status "Could not read the list: $($_.Exception.Message)"; return }
+        $unknown = @($lines | Where-Object { -not $CheckBoxMap.ContainsKey($_) })
+        Set-Preset $lines 'Custom list'
+        if ($unknown.Count) { $StatusText.Text += " $($unknown.Count) name(s) from the list don't exist in this version." }
+        Write-Log "Selection imported from $($dlg.FileName): $($lines.Count) names, $($unknown.Count) unknown"
+        Show-Preset-Result
+    })
+    $own = New-VStack @((New-CardTitle 'Your own selection' $U.VIOLET),
+        (New-Text 'Save the tweaks you ticked to a text file and tick them again later -- after a reinstall or on a second PC. Loading only ticks; nothing changes until you press Apply selected. Tweaks this PC cannot use are skipped.' 12.5 $U.DESC 'Normal' -Wrap -Margin 0, 0, 0, 12),
+        (New-HStack @($exp, $imp)))
+    $PresetsPanel.Children.Add((New-Card $own @(0, 0, 0, 14))) | Out-Null
 
     $PresetsPanel.Children.Add((New-SectionTitle 'Status by category' $U.WIN11 '' @(0, 4, 0, 10))) | Out-Null
     $cg = New-Object Windows.Controls.Grid; $cg.Margin = Th 0, 0, -12, 0
@@ -5718,7 +5828,7 @@ function Build-BackupsPage {
         $c = New-Card $v @(0, 0, 0, 0); $c.VerticalAlignment = 'Stretch'; $c
     }
     $b1 = New-Btn 'Open backup folder' $U.VIOLET '#120a24' 0xE838 -Bold; $b1.Add_Click({ Open-BackupFolder })
-    Add-Grid2 $grid (& $mk 'Registry backups' $U.VIOLET 'Before every Apply and Revert, every registry key a tweak touches is exported to .reg files. Double-click a .reg file to restore it.' @(
+    Add-Grid2 $grid (& $mk 'Registry backups' $U.VIOLET 'Before every Apply and Revert, every registry key a tweak touches is exported to .reg files. Double-click one to put the saved values back; _remove-new-keys.reg deletes keys that did not exist yet. Values a tweak added to an existing key go away with its revert. The newest 20 backups are kept.' @(
         (New-Text "$($bk.Count) backup(s)$($Script:Mid)last: $($bk.Last)" 12 $U.DIM 'Normal' -Wrap -Margin 0, 8, 0, 0),
         (New-Text $Script:RegistryBackupRoot 11.5 $U.MUTED 'Normal' -Wrap -Mono -Margin 0, 4, 0, 0)) $b1)
     $b2 = New-Btn 'Open log' $U.CARD2 $U.TEXT 0xE838; $b2.Add_Click({ Open-LogFile })
@@ -5834,7 +5944,7 @@ function Set-Status([string]$Text) {
 }
 function Set-Busy([bool]$On) {
     $Script:Busy = $On
-    foreach ($b in @($BtnApply, $BtnRevertAll, $BtnVerify, $BtnSelectAll, $BtnDeselect, $Script:BtnPresetMin, $Script:BtnPresetBal, $Script:BtnPresetAgg)) {
+    foreach ($b in @($BtnApply, $BtnRevertAll, $BtnRevertSel, $BtnVerify, $BtnSelectAll, $BtnDeselect, $Script:BtnPresetMin, $Script:BtnPresetBal, $Script:BtnPresetAgg)) {
         if ($b) { $b.IsEnabled = -not $On }
     }
 }
@@ -5864,6 +5974,23 @@ function New-RestorePoint([string]$Description) {
         if ($null -eq $oldFreq -or $oldFreq -eq 0) { Remove-ItemProperty -Path $srKey -Name "SystemRestorePointCreationFrequency" -ErrorAction SilentlyContinue }
         else { Set-ItemProperty -Path $srKey -Name "SystemRestorePointCreationFrequency" -Value $oldFreq -Type DWord -ErrorAction SilentlyContinue }
     }
+}
+# Long external tools (DISM /ResetBase can take 5-15 minutes) run hidden while the window
+# keeps answering and the status bar counts the seconds -- no "Not responding". Stops the
+# tool after $TimeoutSec and throws, so the Apply reports it. Returns the exit code.
+function Invoke-ProcessWithUi([string]$FilePath, [string]$Arguments, [string]$What, [int]$TimeoutSec = 1800, [switch]$Visible) {
+    $p = Start-Process -FilePath $FilePath -ArgumentList $Arguments -WindowStyle $(if ($Visible) { 'Normal' } else { 'Hidden' }) -PassThru -ErrorAction Stop
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while (-not $p.HasExited) {
+        if ($sw.Elapsed.TotalSeconds -gt $TimeoutSec) {
+            try { $p.Kill() } catch { }
+            throw "$What did not finish within $([int]($TimeoutSec / 60)) minutes and was stopped"
+        }
+        Set-Status ("$What ... {0} s" -f [int]$sw.Elapsed.TotalSeconds)
+        try { $Window.Dispatcher.Invoke([Action] {}, [System.Windows.Threading.DispatcherPriority]::Background) } catch { }
+        Start-Sleep -Milliseconds 200
+    }
+    $p.ExitCode
 }
 # Re-reads every tweak's status (dots, counts, $Script:CheckRaw) with a visible progress
 function Update-AllDots([string]$Label) {
@@ -6176,6 +6303,49 @@ $BtnRevertAll.Add_Click({
         [System.Windows.MessageBoxButton]::OK,
         [System.Windows.MessageBoxImage]::Information
     )
+    } finally { Set-Busy $false }
+})
+
+# Revert only the ticked tweaks -- e.g. Bing search back after a preset, without "Revert all"
+$BtnRevertSel.Add_Click({
+    if ($Script:Busy) { return }
+    $selected = @($AllTweaks | Where-Object { $CheckBoxMap[$_.Name].IsEnabled -and $CheckBoxMap[$_.Name].IsChecked -eq $true })
+    if (-not $selected.Count) { Set-Status "Tick the tweaks you want to set back first, then click 'Revert selected'."; return }
+    $names = @($selected | ForEach-Object { $_.Name })
+    $list = (@($names | Select-Object -First 15 | ForEach-Object { "  - $_" }) -join "`n") + $(if ($names.Count -gt 15) { "`n  ... and $($names.Count - 15) more" } else { '' })
+    $removals = @($names | Where-Object { $Script:AppRemovals -contains $_ })
+    $oneTime  = @($names | Where-Object { $Script:OneTimeNames -contains $_ })
+    $r = [System.Windows.MessageBox]::Show(
+        "Set $($names.Count) ticked tweak(s) back to the Windows default?`n`n$list" +
+        $(if ($removals.Count) { "`n`nRemoved apps don't come back this way -- only through System Restore:`n  - " + ($removals -join "`n  - ") } else { '' }) +
+        $(if ($oneTime.Count) { "`n`nOne-time actions (cleanups) have nothing to undo:`n  - " + ($oneTime -join "`n  - ") } else { '' }) +
+        "`n`nA registry backup is saved first.",
+        "GameOptimizerPro  --  Revert selected",
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Question)
+    if ($r -ne [System.Windows.MessageBoxResult]::Yes) { return }
+
+    Set-Busy $true
+    try {
+        Set-Status "Backing up registry..."
+        $Script:LastBackupDir = Backup-Registry -Label "PreRevertSelected"
+        $done = 0; $failed = @()
+        foreach ($t in $selected) {
+            if (-not $RevertActions.ContainsKey($t.Name)) { continue }
+            Set-Status "Reverting: $($t.Name) ..."
+            try { & $RevertActions[$t.Name]; $done++; Write-Log "Revert OK: $($t.Name)" }
+            catch { $failed += $t.Name; Write-Log "Revert FAILED: $($t.Name) -- $_" }
+            if ($Script:TweakDots.ContainsKey($t.Name)) { Update-TweakDot $Script:TweakDots[$t.Name] $t.Name | Out-Null }
+            $CheckBoxMap[$t.Name].IsChecked = $false
+        }
+        Update-Counts
+        # the next start must not offer them again as "reset by a Windows update"
+        Remove-FromBaseline $names
+        Set-Status "$done of $($names.Count) tweak(s) set back to the Windows default$(if ($failed.Count) { " -- $($failed.Count) failed, see the log" }). Log: $LogFile"
+        if ($failed.Count) {
+            [System.Windows.MessageBox]::Show("These could not be set back (details in the log):`n`n  - " + ($failed -join "`n  - ") + "`n`nLog: $LogFile",
+                "GameOptimizerPro  --  Revert selected", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning) | Out-Null
+        }
     } finally { Set-Busy $false }
 })
 
@@ -6575,6 +6745,7 @@ $BtnStartup.Add_Click({
             $count++
             Write-Log "Startup Manager: Disabled '$($item.Name)'"
         }
+        Build-StartupRows   # status, colours and the boot-delay column straight away, not only after Refresh
         $swStatus.Text = "$count " + (Get-UIString "sw_disabled_msg")
     })
 
@@ -6595,12 +6766,14 @@ $BtnStartup.Add_Click({
             $count++
             Write-Log "Startup Manager: Enabled '$($item.Name)'"
         }
+        Build-StartupRows
         $swStatus.Text = "$count " + (Get-UIString "sw_enabled_msg")
     })
 
     $swRefresh.Add_Click({ Build-StartupRows })
     $swClose.Add_Click({  $sw.Close() })
 
+    $sw.Owner = $Window; $sw.WindowStartupLocation = "CenterOwner"   # on the app's monitor, never behind it
     $sw.ShowDialog() | Out-Null
 })
 
@@ -6999,6 +7172,7 @@ $BtnServices.Add_Click({
             }
         }
         Save-SvcOriginal $orig
+        Build-ServiceRows   # status colour, dot and name straight away, not only after Refresh
         $svcStatus.Text = "$count " + (Get-UIString "svc_disabled_msg")
     })
 
@@ -7029,12 +7203,14 @@ $BtnServices.Add_Click({
             }
         }
         Save-SvcOriginal $orig
+        Build-ServiceRows
         $svcStatus.Text = "$count " + (Get-UIString "svc_enabled_msg")
     })
 
     $svcRefresh.Add_Click({ Build-ServiceRows })
     $svcClose.Add_Click({  $svcWin.Close() })
 
+    $svcWin.Owner = $Window; $svcWin.WindowStartupLocation = "CenterOwner"   # on the app's monitor, never behind it
     $svcWin.ShowDialog() | Out-Null
 })
 
@@ -7076,10 +7252,11 @@ try {
                     catch { Write-Log "Drift re-apply FAILED: $name -- $_" }
                 }
             }
-            Save-Baseline
-            # The list was built before the re-apply -- refresh those rows + counts
+            # The list was built before the re-apply -- refresh those rows + counts first, then the
+            # baseline from those results (every other check ran at startup already)
             foreach ($name in $drifted) { if ($Script:TweakDots.ContainsKey($name)) { Update-TweakDot $Script:TweakDots[$name] $name | Out-Null } }
             Update-Counts
+            Save-Baseline -FromState
             [System.Windows.MessageBox]::Show(
                 "Re-applied $reapplied tweak(s). A restart may be needed for some to take effect.",
                 "GameOptimizerPro",

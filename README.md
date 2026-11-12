@@ -24,7 +24,7 @@ Open **PowerShell** and paste:
 irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1 | iex
 ```
 
-The installer downloads the script, checks its SHA256 against [CHECKSUMS.txt](CHECKSUMS.txt) and starts it with administrator rights (Windows asks once). **Nothing changes until you click _Apply selected_** — and before that, a restore point and a registry backup are created.
+The installer downloads the script, checks its SHA256 against [CHECKSUMS.txt](CHECKSUMS.txt) and starts it with administrator rights (Windows asks once). **Nothing changes until you click _Apply selected_** — and before that, a registry backup is saved (plus a restore point whenever apps are removed).
 
 <details>
 <summary><b>Rather read the script before running it?</b></summary>
@@ -40,8 +40,8 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 ## ✨ Why GameOptimizerPro
 
-- ↩️ **Every setting can be undone** — each of the 114 tweaks has its own revert back to the Windows default. Only two kinds are one-way: app removals (they come back through System Restore) and the cleanups (deleted cache files stay deleted).
-- 🟢 **You see what is active** — 95 tweaks have a live status check read straight from Windows (registry, services, power plan), not from a list of what you once clicked.
+- ↩️ **Every setting can be undone** — each of the 114 tweaks has its own revert back to the Windows default — all at once (*Revert all*) or just the ones you tick (*Revert selected*). Only two kinds are one-way: app removals (they come back through System Restore) and the cleanups (deleted cache files stay deleted).
+- 🟢 **You see what is active** — 104 tweaks have a live status check read straight from Windows (registry, services, power plan), not from a list of what you once clicked.
 - 🔄 **Notices when Windows resets your tweaks** — updates like to switch things back. At start the app compares with your last Apply and offers to re-apply what was reverted.
 - 🛟 **Safety net before every change** — a `.reg` backup of every affected key before every Apply and Revert, plus a System Restore point whenever apps are removed.
 - 🧾 **Honest descriptions** — every tweak says what it does, what it costs and where Windows ignores it (e.g. policies that only work on Enterprise / Education).
@@ -150,10 +150,11 @@ A preset only ticks the boxes — you review the list and click **Apply selected
 - 🚀 **Startup Manager** — Run keys and startup folders, disable / enable the same way Task Manager does — nothing is deleted
 - ⚙️ **Services** — asks before touching critical services like Windows Update, BITS or the print spooler; *Enable* brings back the start type a service had before
 - 🗄️ **Backups & Log** — registry backups, System Restore, Revert all, log file
+- 💾 **Your own selection** — save the ticked tweaks to a text file (Presets page) and tick them again after a reinstall or on a second PC
 
 ## 🛡️ Safety
 
-- **Registry backup** before every Apply and Revert — the `.reg` files are kept in `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`. **A restore point** comes on top whenever an Apply removes apps
+- **Registry backup** before every Apply and Revert — the `.reg` files are kept in `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups` (the newest 20). Double-clicking one puts the saved values back; `_remove-new-keys.reg` deletes keys that did not exist yet. **A restore point** comes on top whenever an Apply removes apps
 - **Removed apps** (OneDrive, Xbox, …) are the one thing a revert can't reinstall — they come back via System Restore. Those tweaks are marked *removes app*
 - **SHA256 chain** — `install.ps1` only runs a script whose hash matches [CHECKSUMS.txt](CHECKSUMS.txt)
 - **No background process, no telemetry** — the check for reverted tweaks runs only when you start the app

@@ -24,7 +24,7 @@
 irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1 | iex
 ```
 
-Der Installer lädt das Skript, prüft seine SHA256-Prüfsumme gegen [CHECKSUMS.txt](CHECKSUMS.txt) und startet es mit Administratorrechten (Windows fragt einmal nach). **Geändert wird erst, wenn du auf _Apply selected_ klickst** — und vorher legt das Tool einen Wiederherstellungspunkt und ein Registry-Backup an.
+Der Installer lädt das Skript, prüft seine SHA256-Prüfsumme gegen [CHECKSUMS.txt](CHECKSUMS.txt) und startet es mit Administratorrechten (Windows fragt einmal nach). **Geändert wird erst, wenn du auf _Apply selected_ klickst** — und vorher speichert das Tool ein Registry-Backup (plus einen Wiederherstellungspunkt, sobald Apps entfernt werden).
 
 <details>
 <summary><b>Lieber erst das Skript lesen, bevor es läuft?</b></summary>
@@ -40,8 +40,8 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 ## ✨ Was GameOptimizerPro ausmacht
 
-- ↩️ **Jede Einstellung lässt sich rückgängig machen** — alle 114 Tweaks haben ein eigenes Revert zum Windows-Standard. Nur zwei Arten gehen in eine Richtung: App-Entfernungen (sie kommen über die Systemwiederherstellung zurück) und die Bereinigungen (gelöschte Cache-Dateien bleiben gelöscht).
-- 🟢 **Du siehst, was aktiv ist** — 95 Tweaks haben einen Live-Status, direkt aus Windows gelesen (Registry, Dienste, Energieplan), nicht aus einer Liste dessen, was du mal angeklickt hast.
+- ↩️ **Jede Einstellung lässt sich rückgängig machen** — alle 114 Tweaks haben ein eigenes Revert zum Windows-Standard — alle auf einmal (*Revert all*) oder nur die angehakten (*Revert selected*). Nur zwei Arten gehen in eine Richtung: App-Entfernungen (sie kommen über die Systemwiederherstellung zurück) und die Bereinigungen (gelöschte Cache-Dateien bleiben gelöscht).
+- 🟢 **Du siehst, was aktiv ist** — 104 Tweaks haben einen Live-Status, direkt aus Windows gelesen (Registry, Dienste, Energieplan), nicht aus einer Liste dessen, was du mal angeklickt hast.
 - 🔄 **Merkt, wenn Windows Tweaks zurücksetzt** — Updates stellen gern Dinge zurück. Beim Start vergleicht das Tool mit deinem letzten Apply und bietet an, Zurückgesetztes neu anzuwenden.
 - 🛟 **Sicherheitsnetz vor jeder Änderung** — ein `.reg`-Backup aller betroffenen Schlüssel vor jedem Apply und Revert, dazu ein Systemwiederherstellungspunkt, sobald Apps entfernt werden.
 - 🧾 **Ehrliche Beschreibungen** — jeder Tweak sagt, was er tut, was er kostet und wo Windows ihn ignoriert (z. B. Richtlinien, die nur auf Enterprise / Education wirken).
@@ -152,10 +152,11 @@ Ein Preset setzt nur die Haken — du prüfst die Liste und klickst selbst auf *
 - 🚀 **Autostart-Manager** — Run-Schlüssel und Autostart-Ordner, deaktivieren / aktivieren wie im Task-Manager, nichts wird gelöscht
 - ⚙️ **Dienste** — fragt nach, bevor kritische Dienste wie Windows Update, BITS oder die Druckwarteschlange angefasst werden; *Aktivieren* stellt die vorherige Starteinstellung wieder her
 - 🗄️ **Backups & Log** — Registry-Backups, Systemwiederherstellung, Revert all, Log-Datei
+- 💾 **Eigene Auswahl** — angehakte Tweaks als Textdatei speichern (Seite Presets) und nach einer Neuinstallation oder auf einem zweiten PC wieder anhaken
 
 ## 🛡️ Sicherheit
 
-- **Registry-Backup** vor jedem Apply und Revert — die `.reg`-Dateien liegen in `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups`. **Ein Wiederherstellungspunkt** kommt dazu, sobald ein Apply Apps entfernt
+- **Registry-Backup** vor jedem Apply und Revert — die `.reg`-Dateien liegen in `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups` (die neuesten 20). Ein Doppelklick schreibt die gesicherten Werte zurück; `_remove-new-keys.reg` löscht Schlüssel, die es vorher noch nicht gab. **Ein Wiederherstellungspunkt** kommt dazu, sobald ein Apply Apps entfernt
 - **Entfernte Apps** (OneDrive, Xbox, …) sind das Einzige, was ein Revert nicht neu installieren kann — sie kommen per Systemwiederherstellung zurück. Diese Tweaks sind mit *removes app* markiert
 - **SHA256-Kette** — `install.ps1` startet nur ein Skript, dessen Prüfsumme zu [CHECKSUMS.txt](CHECKSUMS.txt) passt
 - **Kein Hintergrundprozess, keine Telemetrie** — die Prüfung auf zurückgesetzte Tweaks läuft nur, wenn du das Tool startest
