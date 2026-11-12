@@ -10,7 +10,7 @@ All notable changes to GameOptimizerPro (the PowerShell edition), newest first. 
 
 Two more audits, checked against the code — what holds is fixed, plus a few things that make the tool nicer to live with.
 
-- **The installer never runs a file with the wrong checksum** — before, typing "YES" started it anyway. Right after a release GitHub's cache can still serve the old script for a few minutes, so the installer first downloads once more past the cache, then stops with a clear message.
+- **The installer never runs a file with the wrong checksum** — before, typing "YES" started it anyway. Right after a release GitHub keeps serving the previous script from `main` for up to 5 minutes, so the installer now downloads the copy of its own release tag (which never changes) and uses `main` only as a fallback; a mismatch stops with a clear message.
 - **DNS revert brings back what you had** — *Set DNS to Cloudflare / Google* remember the adapter's own DNS servers (a Pi-hole, a company DNS) and the revert writes exactly those back, or switches to automatic if that was the setting. An adapter where you added a server of your own next to Cloudflare / Google is left alone.
 - **Registry backups can remove what was new** — each backup now also has `_remove-new-keys.reg` for keys that didn't exist yet; the Backups page says honestly what a double-click restores. Only the newest 20 backups are kept (each one is around 40 MB), and only the newest 20 logs.
 - **Revert selected** — sets only the ticked tweaks back to the Windows default, not everything.
@@ -26,6 +26,7 @@ Two more audits, checked against the code — what holds is fixed, plus a few th
 - **Audit 2** — written for the old 1.3; its bugs were fixed in 1.2.2 except the Explorer restart. Of its nine extra points one was outdated (the test harness already allows `Out-String`) and one didn't apply (the tests folder isn't published, no user name is in the repo); the rest is in.
 - **Suggestions not built** — AMD ReBAR detection through `KMD_RebarControlMode`: that value is a driver preset that is 1 after every install, whatever the BIOS says. Measuring the BAR size through WMI doesn't work either: on the RTX 4080 it reports 16 / 32 MB windows while `nvidia-smi` shows the 16 GB BAR.
 - **Tested on the real PC (read only)** — the new backup with its missing-keys file and the cleanup to 20 folders, run against the live registry into a test folder.
+- **Found while releasing** — a query string does not get past GitHub's cache of `main` (same ETag, cache hit), so a "download again past the cache" retry would not help; the tag URL is fresh at once. Tested: with the tag the new script verifies; without one the fallback gets the cached old script and the installer stops.
 - **Tests** — new scenarios for the DNS restore (Pi-hole, switching providers, a mixed list, automatic), the Explorer restart and Disk Cleanup; static checks now 0 findings; the real window offscreen with the new buttons; the real system unchanged.
 
 </details>

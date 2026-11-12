@@ -1,5 +1,5 @@
 $ErrorActionPreference = "Stop"
-$url  = "https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/GameOptimizerPro.ps1"
+$repo = "https://raw.githubusercontent.com/FloDePin/GameOptimizerPro"
 $dest = "$env:TEMP\GameOptimizerPro.ps1"
 
 # SHA256 of the last known-good GameOptimizerPro.ps1 release. Bump this
@@ -19,33 +19,31 @@ Write-Host "  ---------------------------------" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  Downloading GameOptimizerPro v$ScriptVersion..." -ForegroundColor Cyan
 
-try {
-    # Without the progress bar: PowerShell 5.1 redraws it for every chunk, which
-    # makes the download several times slower.
-    $ProgressPreference = "SilentlyContinue"
-    Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
-    Write-Host "  Download complete!" -ForegroundColor Green
-} catch {
-    Write-Host "  [ERROR] Download failed: $_" -ForegroundColor Red
+# The copy of this installer's own release tag first: a tag never changes, so it always
+# matches $ExpectedHash. "main" is cached by GitHub for up to 5 minutes (a query string
+# doesn't get past that cache) and can hand out the previous script right after a
+# release -- it is only the fallback for the seconds before the tag exists.
+# Without the progress bar: PowerShell 5.1 redraws it for every chunk, which makes the
+# download several times slower.
+$ProgressPreference = "SilentlyContinue"
+$actualHash = $null; $lastError = $null
+foreach ($url in "$repo/v$ScriptVersion/GameOptimizerPro.ps1", "$repo/main/GameOptimizerPro.ps1") {
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+        $actualHash = (Get-FileHash -Path $dest -Algorithm SHA256).Hash
+        if ($actualHash -eq $ExpectedHash) { break }
+    } catch { $lastError = $_ }
+}
+if (-not $actualHash) {
+    Write-Host "  [ERROR] Download failed: $lastError" -ForegroundColor Red
     Write-Host "  Make sure you have internet access and the file exists on GitHub." -ForegroundColor Gray
     Write-Host ""
     Read-Host "  Press Enter to exit"
     exit
 }
+Write-Host "  Download complete!" -ForegroundColor Green
 
-# --- INTEGRITY CHECK (SHA256) ---
-# A mismatch never runs. GitHub's file cache can serve an older script for a few
-# minutes right after a release (the installer is already new) -- so download once
-# more past the cache before giving up.
-$actualHash = (Get-FileHash -Path $dest -Algorithm SHA256).Hash
-if ($actualHash -ne $ExpectedHash) {
-    Write-Host "  Checksum differs -- downloading once more past GitHub's cache..." -ForegroundColor DarkGray
-    try {
-        $fresh = "${url}?nocache=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
-        Invoke-WebRequest -Uri $fresh -OutFile $dest -UseBasicParsing -Headers @{ "Cache-Control" = "no-cache" }
-        $actualHash = (Get-FileHash -Path $dest -Algorithm SHA256).Hash
-    } catch { }
-}
+# --- INTEGRITY CHECK (SHA256) --- a mismatch never runs
 Write-Host "  SHA256: $actualHash" -ForegroundColor DarkGray
 if ($actualHash -ne $ExpectedHash) {
     Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
