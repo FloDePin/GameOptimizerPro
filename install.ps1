@@ -7,11 +7,11 @@ $dest = "$env:TEMP\GameOptimizerPro.ps1"
 # integrity check against corruption/tampering in transit -- it does not
 # replace reading the source, but lets users verify what they're about
 # to run with Admin rights without having to read the whole script by hand.
-$ExpectedHash = "11ABF776AAFE446D0EA92DC3870D3F404D220DB628A2F3D4A37D787FEA728CA3"
+$ExpectedHash = "9DA6D2E4F3C8CA73E124EA96A92AFCCA5158C97496C6A8D497DF07114562FF67"
 
-# Keep this in sync with $Script:AppVersion in GameOptimizerPro.ps1 (used for
-# display only -- integrity is enforced by $ExpectedHash above, not this string).
-$ScriptVersion = "1.2.5"
+# Keep this in sync with $Script:AppVersion in GameOptimizerPro.ps1. It also picks the
+# release tag the script is downloaded from (see below); integrity is $ExpectedHash.
+$ScriptVersion = "1.2.6"
 
 Write-Host ""
 Write-Host "  GameOptimizerPro v$ScriptVersion Installer" -ForegroundColor Red
@@ -61,15 +61,38 @@ if ($actualHash -ne $ExpectedHash) {
 }
 Write-Host "  Checksum verified OK." -ForegroundColor Green
 
-# Make sure the file is UTF-8 WITH a BOM: Windows PowerShell 5.1 reads BOM-less
-# scripts as ANSI. For the published file this rewrite is byte-identical, so the
-# file that runs is exactly the one whose hash was checked above.
-$raw = [System.IO.File]::ReadAllText($dest, [System.Text.Encoding]::UTF8)
-[System.IO.File]::WriteAllText($dest, $raw, (New-Object System.Text.UTF8Encoding($true)))
-Write-Host "  Encoding verified (UTF-8)." -ForegroundColor DarkGray
-
 Write-Host "  Launching as Administrator..." -ForegroundColor Yellow
 Write-Host ""
+
+# The elevated PowerShell reads the downloaded file ONCE, checks its SHA256 again and starts
+# exactly those bytes from a new folder only administrators can write to. So no other program
+# can swap the file in %TEMP% between the check above and the start with admin rights.
+# (The published file is UTF-8 with a BOM -- the hash proves these are its exact bytes.)
+$loader = @'
+try {
+    $bytes = [IO.File]::ReadAllBytes('__SRC__')
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $got = [BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', ''
+    if ($got -ne '__HASH__') { throw "the downloaded file changed after the check (SHA256 $got)" }
+    $root = Join-Path $env:SystemRoot 'Temp'
+    Get-ChildItem -LiteralPath $root -Directory -Filter 'GameOptimizerPro-*' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    $acl = New-Object Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in 'S-1-5-32-544', 'S-1-5-18') {
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier $sid), 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
+    }
+    $dir = Join-Path $root ('GameOptimizerPro-' + [guid]::NewGuid().ToString('N'))
+    [void][IO.Directory]::CreateDirectory($dir, $acl)
+    $file = Join-Path $dir 'GameOptimizerPro.ps1'
+    [IO.File]::WriteAllBytes($file, $bytes)
+    & $file
+} catch {
+    Add-Type -AssemblyName PresentationFramework
+    [void][System.Windows.MessageBox]::Show("GameOptimizerPro was not started: $($_.Exception.Message)", 'GameOptimizerPro', 'OK', 'Error')
+}
+'@
+$loader = $loader.Replace('__SRC__', $dest.Replace("'", "''")).Replace('__HASH__', $ExpectedHash)
+$psArgs = "-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand " + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($loader))
 
 # Check if already running as admin
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
@@ -80,7 +103,7 @@ $launched = $false
 if ($isAdmin) {
     # Already admin -- launch the GUI in its own hidden PowerShell process.
     try {
-        Start-Process powershell.exe -ArgumentList "-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dest`"" -WindowStyle Hidden
+        Start-Process powershell.exe -ArgumentList $psArgs -WindowStyle Hidden
         $launched = $true
     } catch {
         Write-Host "  [ERROR] Script launch failed: $_" -ForegroundColor Red
@@ -91,7 +114,7 @@ if ($isAdmin) {
     try {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName        = "powershell.exe"
-        $psi.Arguments       = "-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$dest`""
+        $psi.Arguments       = $psArgs
         $psi.Verb            = "runas"
         $psi.UseShellExecute = $true
         $psi.WindowStyle     = "Hidden"

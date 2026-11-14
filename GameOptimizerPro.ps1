@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.2.5
+    1.2.6
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.2.5"
+$Script:AppVersion = "1.2.6"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -212,12 +212,16 @@ function Save-DnsOriginal($Map) {
 function Set-ProviderDns([string]$Provider, [string[]]$Servers) {
     $orig = Read-DnsOriginal; $changed = $false
     $ok = 0; $fail = 0
-    foreach ($a in @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" })) {
-        # remember the adapter's own setting once -- not again when switching between the two providers
+    # The adapters the status check looks at: the physical ones when there are any. A VPN,
+    # Hyper-V or WSL adapter keeps its own DNS (company and VPN names resolve through it).
+    foreach ($a in @(Get-UpAdapters)) {
+        # remember the adapter's own setting once -- not again when switching between the two
+        # providers: automatic (empty) or any list with a server of its own (Pi-hole, router,
+        # 1.1.1.1 next to a Pi-hole). A list of provider servers only came from a provider tweak.
         $g = "$($a.InterfaceGuid)"
         if ($g -and -not $orig.ContainsKey($g)) {
             $st = @(Get-StaticDns $g)
-            if (-not @($st | Where-Object { (Get-ProviderDns) -contains $_ }).Count) { $orig[$g] = $st; $changed = $true }
+            if (-not $st.Count -or @($st | Where-Object { (Get-ProviderDns) -notcontains $_ }).Count) { $orig[$g] = $st; $changed = $true }
         }
         try {
             Set-DnsClientServerAddress -InterfaceIndex $a.InterfaceIndex -ServerAddresses $Servers -ErrorAction Stop
@@ -267,16 +271,30 @@ function Get-UpAdapters {
 
 # The apps "Remove Other Bloatware" removes -- the status check looks for the same list,
 # so a PC that never had Candy Crush (Windows 11 doesn't ship it) isn't reported as done.
+# 1.2.6: only what Windows or the PC maker put there. Apps people install themselves
+# (Spotify, Netflix, Disney+, Instagram, TikTok, Facebook, X), the Media Player, Films & TV
+# and "Get Help" (Windows' troubleshooters run in it) are no longer on the list.
 function Get-BloatPatterns {
     @(
-        "*king.com*", "*Facebook*", "*Spotify*", "*Disney*", "*TikTok*", "*Instagram*",
-        "*Netflix*", "*Twitter*", "*BubbleWitch*", "*MarchofEmpires*", "*CandyCrush*",
-        "*Microsoft.News*", "*Microsoft.BingWeather*", "*Microsoft.BingNews*",
-        "*Microsoft.MicrosoftSolitaireCollection*", "*Microsoft.ZuneMusic*",
-        "*Microsoft.ZuneVideo*", "*Microsoft.WindowsFeedbackHub*", "*Microsoft.Todos*",
-        "*Microsoft.Paint3D*", "*Microsoft.MixedReality*", "*Clipchamp*",
-        "*Microsoft.GetHelp*", "*Microsoft.Getstarted*", "*Microsoft.PowerAutomateDesktop*"
+        "king.com.*", "*CandyCrush*", "*BubbleWitch*", "*MarchofEmpires*",
+        "Microsoft.News", "Microsoft.BingNews", "Microsoft.BingWeather", "Microsoft.MicrosoftSolitaireCollection",
+        "Microsoft.WindowsFeedbackHub", "Microsoft.Todos", "Microsoft.MixedReality.Portal", "Clipchamp.Clipchamp",
+        "Microsoft.Getstarted", "Microsoft.PowerAutomateDesktop"
     )
+}
+
+# The installed packages "Remove Other Bloatware" would remove (shown before the Apply, used by
+# its status check). Windows' own system packages (NonRemovable) don't count.
+function Get-BloatApps {
+    $pats = Get-BloatPatterns
+    @(Get-AppxPackage -AllUsers -ErrorAction Stop | Where-Object { $n = $_.Name; -not $_.NonRemovable -and @($pats | Where-Object { $n -like $_ }).Count })
+}
+
+# The packages "Remove Xbox Apps" removes. Exact names: the old "*XboxTCUI*" never matched
+# Microsoft.Xbox.TCUI (dot in the name). The Xbox app itself (Microsoft.GamingApp) stays.
+function Get-XboxPatterns {
+    @("Microsoft.XboxApp", "Microsoft.XboxGameOverlay", "Microsoft.XboxGamingOverlay", "Microsoft.XboxIdentityProvider",
+      "Microsoft.XboxSpeechToTextOverlay", "Microsoft.Xbox.TCUI")
 }
 
 # The tasks "Disable Scheduled Telemetry Tasks" switches off -- Apply, Revert and the status
@@ -297,7 +315,11 @@ function Get-TelemetryTasks {
         "\Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload",
         "\Microsoft\Windows\Windows Error Reporting\QueueReporting",
         "\Microsoft\Windows\PI\Sqm-Tasks",
-        "\Microsoft\Windows\Power Efficiency Diagnostics\AnalyzeSystem"
+        "\Microsoft\Windows\Power Efficiency Diagnostics\AnalyzeSystem",
+        # 1.2.6: the compatibility-telemetry tasks WinUtil switches off as well
+        "\Microsoft\Windows\Application Experience\MareBackup",
+        "\Microsoft\Windows\Application Experience\PcaPatchDbTask",
+        "\Microsoft\Windows\Application Experience\StartupAppTask"
     )
 }
 
@@ -614,7 +636,19 @@ $Script:RegistryBackupKeys = @(
     "HKLM\SOFTWARE\Policies\Microsoft\OneDrive",
     "HKLM\SOFTWARE\Policies\Microsoft\Windows",
     "HKLM\SOFTWARE\Policies\WindowsNotepad",
-    "HKLM\SYSTEM\CurrentControlSet\Control",
+    # Only the parts of HKLM\SYSTEM\CurrentControlSet\Control the tweaks touch -- the whole
+    # key is ~35 MB per backup. Two values that sit directly in big keys are saved one by
+    # one ($Script:RegistryBackupValues), the AMD driver keys are added at backup time.
+    "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}",
+    "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e96c-e325-11ce-bfc1-08002be10318}",
+    "HKLM\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\8",
+    "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem",
+    "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers",
+    "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling",
+    "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl",
+    "HKLM\SYSTEM\CurrentControlSet\Control\Remote Assistance",
+    "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\kernel",
+    "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management",
     "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters",
     "HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak",
     "HKLM\SYSTEM\CurrentControlSet\Services\stornvme\Parameters\Device",
@@ -622,40 +656,68 @@ $Script:RegistryBackupKeys = @(
     "HKLM\SYSTEM\CurrentControlSet\Services\usbaudio2",
     "HKU\.DEFAULT\Control Panel\Keyboard"
 )
+# Single values in keys too big to export whole -- written to _values.reg ("name"=- when the
+# value didn't exist, so a double-click also removes what a tweak added)
+$Script:RegistryBackupValues = @(
+    @("HKLM\SYSTEM\CurrentControlSet\Control", "SvcHostSplitThresholdInKB"),
+    @("HKLM\SYSTEM\CurrentControlSet\Control\Session Manager", "DisableWpbtExecution")
+)
 
-# Values written by tweaks that were removed in 1.2.1 because Windows or the driver never
-# read them (five NVIDIA registry values, Spatial Sound, Audio Device Power Save, the
-# organisation-only Windows Backup policy), plus the restore-point frequency override
+# Values written by tweaks that were removed because Windows or the driver never read them
+# (1.2.1: five NVIDIA registry values, Spatial Sound, Audio Device Power Save, the
+# organisation-only Windows Backup policy; 1.2.3: Chat / Teams; 1.2.6: TCP settings, QoS
+# limit, NVMe queue depth, the Start menu override, two AMD values and the kernel value of
+# the old "Disable Background App Throttling"), plus the restore-point frequency override
 # older versions left at 0. Harmless, but Revert All promises a clean state -- so it
 # removes them. Returns how many values were removed.
 function Remove-RetiredTweakValues {
     $nv = "HKLM:\SYSTEM\CurrentControlSet\Services\nvlddmkm\Global\NVTweak"
+    $tcp = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters"
+    # key, value, and the value the old tweak wrote: only exactly that is removed, so an
+    # organisation's policy or a setting chosen by hand stays. $null = whatever it holds.
     $targets = @(
-        @($nv, 'NVLatency'), @($nv, 'ThreadedOptimization'), @($nv, 'PrerenderedFrames'),
-        @($nv, 'PowerMizerEnable'), @($nv, 'PowerMizerLevel'), @($nv, 'PowerMizerLevelAC'),
-        @("HKCU:\SOFTWARE\NVIDIA Corporation\Global\NVTweak", 'NvCplCacheShaderMaxSize'),
-        @("HKLM:\SYSTEM\CurrentControlSet\Services\usbaudio", 'DisableSelectiveSuspend'),
-        @("HKLM:\SYSTEM\CurrentControlSet\Services\usbaudio2", 'DisableSelectiveSuspend'),
-        @("HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync", 'EnableWindowsBackup'),
-        @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore", 'SystemRestorePointCreationFrequency'),
-        # 1.2.3: "Remove Chat Icon from Taskbar" and "Remove Microsoft Teams (Personal)" retired
-        @("HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", 'TaskbarMn'),
-        @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications", 'ConfigureChatAutoInstall')
+        @($nv, 'NVLatency', $null), @($nv, 'ThreadedOptimization', $null), @($nv, 'PrerenderedFrames', $null),
+        @($nv, 'PowerMizerEnable', $null), @($nv, 'PowerMizerLevel', $null), @($nv, 'PowerMizerLevelAC', $null),
+        @("HKCU:\SOFTWARE\NVIDIA Corporation\Global\NVTweak", 'NvCplCacheShaderMaxSize', $null),
+        @("HKLM:\SYSTEM\CurrentControlSet\Services\usbaudio", 'DisableSelectiveSuspend', $null),
+        @("HKLM:\SYSTEM\CurrentControlSet\Services\usbaudio2", 'DisableSelectiveSuspend', $null),
+        @("HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync", 'EnableWindowsBackup', 0),
+        @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore", 'SystemRestorePointCreationFrequency', 0),
+        @("HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", 'TaskbarMn', 0),
+        @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications", 'ConfigureChatAutoInstall', 0),
+        @($tcp, 'SackOpts', 1), @($tcp, 'TcpMaxDupAcks', 2),
+        @("HKLM:\SOFTWARE\Policies\Microsoft\Windows\Psched", 'NonBestEffortLimit', 0),
+        @("HKLM:\SYSTEM\CurrentControlSet\Services\stornvme\Parameters\Device", 'IdlePowerEnabled', 0),
+        @("HKLM:\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\8\3036241548", 'EnabledState', 1),
+        @("HKLM:\SOFTWARE\ATI Technologies\CBT", 'ShaderCacheSizePC', 4294967295),
+        @("HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel", 'DisableLowQosTimerResolution', 1)
     )
-    foreach ($k in @(Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render" -ErrorAction SilentlyContinue)) { $targets += , @($k.PSPath, 'SpatialAudioMode') }
-    foreach ($k in @(Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e96c-e325-11ce-bfc1-08002be10318}" -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' })) { $targets += , @($k.PSPath, 'PowerThrottlingOff') }
-    # These only when they hold exactly what the old code wrote -- an organisation's
-    # Windows Backup policy (1), a deliberately chosen frequency or a Chat button the
-    # user switched on stays untouched.
-    $onlyIf = @{ 'EnableWindowsBackup' = 0; 'SystemRestorePointCreationFrequency' = 0; 'TaskbarMn' = 0; 'ConfigureChatAutoInstall' = 0 }
+    foreach ($k in @(Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render" -ErrorAction SilentlyContinue)) { $targets += , @($k.PSPath, 'SpatialAudioMode', $null) }
+    foreach ($k in @(Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e96c-e325-11ce-bfc1-08002be10318}" -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' })) { $targets += , @($k.PSPath, 'PowerThrottlingOff', $null) }
+    foreach ($dk in @($NVMeDisks)) {
+        $dp = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($dk.PNPDeviceID)\Device Parameters"
+        $targets += , @("$dp\StorPort", 'QueueDepth', 32); $targets += , @("$dp\Interrupt Management\Affinity Policy", 'DevicePriority', 2)
+    }
+    foreach ($k in @(Get-AmdGpuKeys)) { $targets += , @($k.PSPath, 'KMD_EnableComputePreemption', 0); $targets += , @($k.PSPath, 'EnableAntiLag', 1) }
     $n = 0
     foreach ($tg in $targets) {
         $v = Get-RegVal $tg[0] $tg[1]
         if ($null -eq $v) { continue }
-        if ($onlyIf.ContainsKey($tg[1]) -and $v -ne $onlyIf[$tg[1]]) { continue }
+        if ($null -ne $tg[2]) {
+            $u = try { [int64]$v } catch { $null }
+            if ($null -ne $u -and $u -lt 0) { $u += 4294967296 }     # a DWORD above 0x7FFFFFFF reads as a negative number
+            if ($u -ne [int64]$tg[2]) { continue }
+        }
         Remove-ItemProperty -Path $tg[0] -Name $tg[1] -ErrorAction SilentlyContinue
         if ($null -eq (Get-RegVal $tg[0] $tg[1])) { $n++ }
     }
+    # The revert of the old "Optimize TCP Settings" switched ECN and TCP timestamps ON --
+    # Windows has both off. Only those two, and only when they are on.
+    try {
+        $ts = Get-NetTCPSetting -SettingName Internet -ErrorAction Stop
+        if ("$($ts.EcnCapability)" -eq 'Enabled') { netsh int tcp set global ecncapability=default 2>$null | Out-Null; $n++ }
+        if ("$($ts.Timestamps)" -eq 'Enabled') { netsh int tcp set global timestamps=default 2>$null | Out-Null; $n++ }
+    } catch { }
     if ($n) { Write-Log "Revert All: removed $n value(s) left behind by retired tweaks" }
     $n
 }
@@ -663,7 +725,9 @@ function Remove-RetiredTweakValues {
 function Backup-Registry {
     param([string]$Label = "Backup")
     $stamp     = Get-Date -Format 'yyyyMMdd_HHmmss'
-    $backupDir = Join-Path $Script:RegistryBackupRoot "${stamp}_$Label"
+    # "v1-" marks this app's backups: GameOptimizerPro v2 writes to the same folder with the
+    # same labels, and only our own are ever pruned below
+    $backupDir = Join-Path $Script:RegistryBackupRoot "${stamp}_v1-$Label"
     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
 
     # Per-device keys can't be listed statically (their path contains the PNP
@@ -677,6 +741,8 @@ function Backup-Registry {
             $keys += "HKLM\SYSTEM\CurrentControlSet\Enum\$id\Device Parameters"
         }
     } catch { }
+    # AMD driver keys (ULPS, values of retired AMD tweaks) -- not the whole display class (~4 MB)
+    try { foreach ($k in @(Get-AmdGpuKeys)) { $keys += ($k.Name -replace '^HKEY_LOCAL_MACHINE', 'HKLM') } } catch { }
 
     $saved = 0
     $skipped = 0
@@ -706,10 +772,31 @@ function Backup-Registry {
         $lines += @($missing | ForEach-Object { "[-$_]" })
         try { $lines | Set-Content -LiteralPath (Join-Path $backupDir '_remove-new-keys.reg') -Encoding Unicode -ErrorAction Stop } catch { }
     }
+    # Single values (see $Script:RegistryBackupValues): "name"=dword:... or "name"=- when absent
+    $vl = @('Windows Registry Editor Version 5.00', '', '; GameOptimizerPro -- single values (a double-click puts them back, "=-" removes one a tweak added).', '')
+    foreach ($bv in $Script:RegistryBackupValues) {
+        $hv, $rest = $bv[0] -split '\\', 2
+        $full = if ($hives.ContainsKey($hv)) { "$($hives[$hv])\$rest" } else { $bv[0] }
+        $line = '"{0}"=-' -f $bv[1]
+        try {
+            $rk = Get-Item -LiteralPath "Registry::$full" -ErrorAction Stop
+            $val = $rk.GetValue($bv[1], $null, 'DoNotExpandEnvironmentNames')
+            if ($null -ne $val) {
+                switch ("$($rk.GetValueKind($bv[1]))") {
+                    'DWord'  { $line = '"{0}"=dword:{1:x8}' -f $bv[1], [BitConverter]::ToUInt32([BitConverter]::GetBytes([int32]$val), 0) }
+                    'String' { $line = '"{0}"="{1}"' -f $bv[1], ("$val" -replace '\\', '\\' -replace '"', '\"') }
+                    default  { $line = $null }
+                }
+            }
+        } catch { }
+        if ($line) { $vl += "[$full]"; $vl += $line; $vl += '' }
+    }
+    try { $vl | Set-Content -LiteralPath (Join-Path $backupDir '_values.reg') -Encoding Unicode -ErrorAction Stop } catch { }
     Write-Log "Registry backup ($Label): $saved keys saved, $($missing.Count) not present yet (listed in _remove-new-keys.reg), $($skipped - $missing.Count) failed -> $backupDir"
-    # Keep the newest 20 backups -- each one can be tens of MB (the whole Control key)
+    # Keep the newest 20 of this app's backups. Older folders without the "v1-" mark (made
+    # before 1.2.6, or by v2 with the same labels) are never deleted here.
     try {
-        Get-ChildItem -LiteralPath $Script:RegistryBackupRoot -Directory -ErrorAction Stop | Sort-Object Name -Descending |
+        Get-ChildItem -LiteralPath $Script:RegistryBackupRoot -Directory -ErrorAction Stop | Where-Object { $_.Name -match '^\d{8}_\d{6}_v1-' } | Sort-Object Name -Descending |
             Select-Object -Skip 20 | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue; Write-Log "Old registry backup removed: $($_.Name)" }
     } catch { }
     return $backupDir
@@ -723,18 +810,65 @@ function Backup-Registry {
 # effect no matter which plan Windows activates next. GUIDs are parsed from
 # `powercfg /L` (we read the GUID, never the localized plan name -> locale-safe).
 # -----------------------------------------
+function Get-PowerSchemeGuids {
+    $guids = @(foreach ($line in (powercfg /L 2>$null)) {
+        if ($line -match '([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})') { $matches[1] }
+    })
+    if ($guids.Count -eq 0) { $guids = @('SCHEME_CURRENT') }
+    $guids
+}
 function Set-PowerAllSchemes {
     param([string]$Sub, [string]$Setting, [int]$AC, [int]$DC = $AC)
-    $guids = @()
-    foreach ($line in (powercfg /L 2>$null)) {
-        if ($line -match '([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})') { $guids += $matches[1] }
-    }
-    if ($guids.Count -eq 0) { $guids = @('SCHEME_CURRENT') }
-    foreach ($g in $guids) {
+    foreach ($g in (Get-PowerSchemeGuids)) {
         powercfg /SETACVALUEINDEX $g $Sub $Setting $AC 2>$null | Out-Null
         powercfg /SETDCVALUEINDEX $g $Sub $Setting $DC 2>$null | Out-Null
     }
     powercfg /SETACTIVE SCHEME_CURRENT 2>$null | Out-Null
+}
+
+# A copy of the Ultimate Performance template: ours (stored GUID) or any other -- the plan
+# keeps the template's name resource (powrprof.dll,-19) in every language
+function Test-UltimatePlan([string]$Guid) {
+    if ($Guid -and $Guid -eq (Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "UltimatePerfGuid")) { return $true }
+    "$(Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes\$Guid" 'FriendlyName')" -match 'powrprof\.dll,-19,|Ultimate Performance|Ultimative Leistung'
+}
+
+# REVERT of a power tweak: back to the Windows default of EACH plan, read from the setting's
+# own definition (PowerSettings\<group>\<setting>\DefaultPowerSchemeValues\<plan>). Until 1.2.5
+# the reverts wrote one fixed value to every plan -- PCIe "2" (maximum power savings), 30 min
+# disk sleep, a 5 % CPU minimum on High performance. A plan Windows has no defaults for gets
+# High performance's when it is an Ultimate copy, Balanced's otherwise. The four timeouts
+# the "Ultimate Performance Plan" tweak sets to "never" on its own plan are left to it.
+function Reset-PowerSetting([string]$Sub, [string]$Setting) {
+    $def  = "HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\$Sub\$Setting\DefaultPowerSchemeValues"
+    $bal  = '381b4222-f694-41f0-9685-ff5bb260df2e'; $high = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
+    $ult  = Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "UltimatePerfGuid"
+    $ultOwned = @('29f6c1db-86da-48c5-9fdb-f2b67b1f44da', '9d7815a6-7ee4-497e-8888-515a05f02364', '3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e', '6738e2c4-e8a5-4a42-b16a-e040e769756e')
+    # Windows 11 Balanced defaults, for when the definition can't be read
+    $fb = switch ($Setting) {
+        '6738e2c4-e8a5-4a42-b16a-e040e769756e' { @(1200, 600) }   # turn off hard disk after
+        '3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e' { @(600, 300) }    # turn off display after
+        '29f6c1db-86da-48c5-9fdb-f2b67b1f44da' { @(1800, 900) }   # sleep after
+        'bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d' { @(1, 0) }        # wake timers
+        'ee12f906-d277-404b-b6da-e5fa1a576df5' { @(1, 2) }        # PCI Express link state power management
+        '48e6b7a6-50f5-4782-a5d4-53bb8f07e226' { @(1, 1) }        # USB selective suspend
+        'd4e98f31-5ffe-4ce1-be31-1b38b384c009' { @(2, 2) }        # USB 3 link power management
+        '893dee8e-2bef-41e0-89c6-b55d0929964c' { @(5, 5) }        # minimum processor state
+        'bc5038f7-23e0-4960-96da-33abaf5935ec' { @(100, 100) }    # maximum processor state
+        default { throw "no Windows default known for power setting $Setting" }
+    }
+    $n = 0
+    foreach ($g in (Get-PowerSchemeGuids)) {
+        if ($ult -and $g -eq $ult -and $ultOwned -contains $Setting) { continue }
+        $src = if (Test-Path "$def\$g") { $g } elseif (Test-UltimatePlan $g) { $high } else { $bal }
+        $ac = Get-RegVal "$def\$src" 'ACSettingIndex'; $dc = Get-RegVal "$def\$src" 'DCSettingIndex'
+        if ($null -eq $ac) { $ac = $fb[0] }; if ($null -eq $dc) { $dc = $fb[1] }
+        powercfg /SETACVALUEINDEX $g $Sub $Setting $ac 2>$null | Out-Null
+        powercfg /SETDCVALUEINDEX $g $Sub $Setting $dc 2>$null | Out-Null
+        $n++
+    }
+    powercfg /SETACTIVE SCHEME_CURRENT 2>$null | Out-Null
+    $n
 }
 
 # -----------------------------------------
@@ -771,23 +905,24 @@ $AllTweaks = @(
     # == WINDOWS / BLOATWARE ==============================================
     [PSCustomObject]@{
         Name     = "Remove Xbox Apps"
-        Desc     = "Entfernt Xbox Game Bar, Xbox Identity Provider und Xbox TCUI. Diese Apps laufen im Hintergrund und verbrauchen Ressourcen - auch wenn du keine Xbox hast. ACHTUNG: Danach fehlen die Xbox-Anmeldung fuer Spiele aus Game Pass und dem Microsoft Store (Xbox Identity Provider), der Xbox-Modus und Aufnahmen mit der Game Bar - bis du die Apps aus dem Microsoft Store neu installierst. Steam-, Epic- und andere Spiele laufen normal weiter."
+        Desc     = "Entfernt die Xbox Game Bar, den Xbox Identity Provider, Xbox TCUI und das Sprach-Overlay (unter Windows 10 auch die alte Xbox-App). Diese Apps laufen im Hintergrund - auch wenn du keine Xbox hast. ACHTUNG: Danach fehlen die Xbox-Anmeldung für Spiele aus Game Pass und dem Microsoft Store (Xbox Identity Provider), der Xbox-Modus und Aufnahmen mit der Game Bar - bis du die Apps aus dem Microsoft Store neu installierst. Die Xbox-App selbst (Game Pass) bleibt. Steam-, Epic- und andere Spiele laufen normal weiter."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
-            $xboxApps = @("*XboxApp*","*XboxGameOverlay*","*XboxGamingOverlay*","*XboxIdentityProvider*","*XboxSpeechToTextOverlay*","*XboxTCUI*")
-            foreach ($app in $xboxApps) { Get-AppxPackage -AllUsers $app | Remove-AppxPackage -ErrorAction SilentlyContinue }
-            Write-Log "Xbox Apps removed"
+            # -AllUsers on both sides: installed for another account, the app stayed and the
+            # status check (which looks at every account) never turned green
+            foreach ($app in (Get-XboxPatterns)) { Get-AppxPackage -AllUsers $app | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue }
+            Write-Log "Xbox apps removed (Game Bar, Identity Provider, TCUI, speech overlay)"
         }
     },
     [PSCustomObject]@{
         Name     = "Remove Copilot"
-        Desc     = "Deaktiviert und entfernt Windows Copilot (KI-Assistent). Verhindert dass Copilot im Hintergrund laeuft und Daten sendet."
+        Desc     = "Deaktiviert und entfernt Windows Copilot (KI-Assistent). Verhindert dass Copilot im Hintergrund läuft und Daten sendet."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
             reg add "HKCU\Software\Policies\Microsoft\Windows\WindowsCopilot" /v TurnOffWindowsCopilot /t REG_DWORD /d 1 /f | Out-Null
-            Get-AppxPackage -AllUsers "*Copilot*" | Remove-AppxPackage -ErrorAction SilentlyContinue
+            Get-AppxPackage -AllUsers "*Copilot*" | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
             Write-Log "Copilot disabled"
         }
     },
@@ -801,7 +936,10 @@ $AllTweaks = @(
             Start-Sleep 1
             $onedrive = "$env:SYSTEMROOT\SysWOW64\OneDriveSetup.exe"
             if (!(Test-Path $onedrive)) { $onedrive = "$env:SYSTEMROOT\System32\OneDriveSetup.exe" }
-            if (Test-Path $onedrive) { & $onedrive /uninstall }
+            # Started with -Wait: called directly, the setup returns at once and the status check
+            # still found OneDrive. A machine-wide install (Program Files) needs /allusers.
+            $machine = @("$env:ProgramFiles\Microsoft OneDrive\OneDrive.exe", "${env:ProgramFiles(x86)}\Microsoft OneDrive\OneDrive.exe") | Where-Object { Test-Path $_ }
+            if (Test-Path $onedrive) { Start-Process -FilePath $onedrive -ArgumentList $(if ($machine) { '/uninstall /allusers' } else { '/uninstall' }) -Wait -WindowStyle Hidden }
             reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v OneDrive /f 2>$null
             # Remove the leftover OneDrive entry from the File Explorer sidebar (64-bit + 32-bit)
             reg delete "HKCR\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}" /f 2>$null
@@ -811,7 +949,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Remove Windows Recall"
-        Desc     = "Deaktiviert und entfernt Windows Recall - das KI-Feature, das Screenshots deiner Aktivitaeten macht und lokal speichert. Nutzt die offiziellen Microsoft-Richtlinien: Snapshots aus + Recall-Komponente vom System entfernt (vorhandene Snapshots werden geloescht). Neustart noetig."
+        Desc     = "Deaktiviert und entfernt Windows Recall - das KI-Feature, das Screenshots deiner Aktivitäten macht und lokal speichert. Nutzt die offiziellen Microsoft-Richtlinien: Snapshots aus + Recall-Komponente vom System entfernt (vorhandene Snapshots werden gelöscht). Neustart nötig."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
@@ -826,17 +964,17 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Remove Other Bloatware"
-        Desc     = "Entfernt vorinstallierte Apps wie: Candy Crush, TikTok, Disney+, Facebook, Instagram, Spotify, News, Weather, Solitaire, Clipchamp, ToDo, Paint3D und weitere Microsoft-Bloatware."
+        Desc     = "Entfernt vorinstallierte Apps, die Windows oder der PC-Hersteller mitbringt: Candy Crush und andere Werbe-Spiele, News, Wetter, Solitaire, Clipchamp, Microsoft To Do, Feedback-Hub, Tipps, Power Automate und das Mixed-Reality-Portal. Was davon auf deinem PC ist und entfernt wird, zeigt die Rückfrage vor dem Anwenden. Apps, die du selbst installiert hast (Spotify, Netflix, Instagram ...), der Media Player und 'Hilfe anfordern' bleiben. Zurück kommen die Apps über den Microsoft Store."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
-            foreach ($app in (Get-BloatPatterns)) { Get-AppxPackage -AllUsers $app | Remove-AppxPackage -ErrorAction SilentlyContinue }
+            foreach ($app in (Get-BloatPatterns)) { Get-AppxPackage -AllUsers $app | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue }
             Write-Log "Bloatware removed"
         }
     },
     [PSCustomObject]@{
         Name     = "Stop Auto-Installed Suggested Apps"
-        Desc     = "Verhindert, dass Windows vorgeschlagene Apps und Spiele (z.B. Candy Crush, TikTok) still nachinstalliert - auch die von Hersteller und Microsoft vorgesehenen. Wirkt auf allen Editionen inkl. Home und Pro. Bereits installierte Apps bleiben, dafuer gibt es 'Remove Other Bloatware'."
+        Desc     = "Verhindert, dass Windows vorgeschlagene Apps und Spiele (z.B. Candy Crush, TikTok) still nachinstalliert - auch die von Hersteller und Microsoft vorgesehenen. Wirkt auf allen Editionen inkl. Home und Pro. Bereits installierte Apps bleiben, dafür gibt es 'Remove Other Bloatware'."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
@@ -849,7 +987,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Tips, Ads & Suggestions"
-        Desc     = "Schaltet die Werbung, Tipps und Vorschlaege ab, die Windows ueberall einstreut: Tipp-Benachrichtigungen, die Seiten 'Einrichtung abschliessen' und die Willkommensseite nach Updates, Vorschlaege in den Einstellungen und im Start, Konto-Hinweise (Microsoft 365, OneDrive-Sicherung) im Start und in den Einstellungen sowie Werbung von Sync-Anbietern im Datei-Explorer. Die Bilder von Windows-Blickpunkt (Spotlight) auf dem Sperrbildschirm bleiben, nur die Tipps darauf verschwinden - den Hauptschalter 'ContentDeliveryAllowed' laesst der Tweak bewusst aus, weil nicht belegt ist, ob er Spotlight mit abschaltet. Wirkt auf allen Editionen. Empfehlungen im Startmenue: 'Disable Recommended in Start Menu'."
+        Desc     = "Schaltet die Werbung, Tipps und Vorschläge ab, die Windows überall einstreut: Tipp-Benachrichtigungen, die Seiten 'Einrichtung abschließen' und die Willkommensseite nach Updates, Vorschläge in den Einstellungen und im Start, Konto-Hinweise (Microsoft 365, OneDrive-Sicherung) im Start und in den Einstellungen sowie Werbung von Sync-Anbietern im Datei-Explorer. Die Bilder von Windows-Blickpunkt (Spotlight) auf dem Sperrbildschirm bleiben, nur die Tipps darauf verschwinden - den Hauptschalter 'ContentDeliveryAllowed' lässt der Tweak bewusst aus, weil nicht belegt ist, ob er Spotlight mit abschaltet. Wirkt auf allen Editionen. Empfehlungen im Startmenü: 'Disable Recommended in Start Menu'."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
@@ -868,7 +1006,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Stop OneDrive Folder Backup"
-        Desc     = "Verhindert per offizieller OneDrive-Richtlinie, dass OneDrive die Ordner Desktop, Dokumente und Bilder in die Cloud verschiebt ('Ordnersicherung') - auch nicht nach Nachfrage beim Einrichten. Wirkt auf allen Editionen. Schon gesicherte Ordner bleiben in OneDrive; zurueckholen geht in OneDrive unter Einstellungen > Synchronisierung und Sicherung. Ohne installiertes OneDrive aendert sich nichts Sichtbares, die Richtlinie greift aber, falls OneDrive zurueckkommt."
+        Desc     = "Verhindert per offizieller OneDrive-Richtlinie, dass OneDrive die Ordner Desktop, Dokumente und Bilder in die Cloud verschiebt ('Ordnersicherung') - auch nicht nach Nachfrage beim Einrichten. Wirkt auf allen Editionen. Schon gesicherte Ordner bleiben in OneDrive; zurückholen geht in OneDrive unter Einstellungen > Synchronisierung und Sicherung. Ohne installiertes OneDrive ändert sich nichts Sichtbares, die Richtlinie greift aber, falls OneDrive zurückkommt."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
@@ -878,7 +1016,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Get Started & Copilot Sign-in Screens"
-        Desc     = "Nur Windows Enterprise / Education: Die 'Get Started'-App startet nicht mehr automatisch, und die Einrichtungs-Werbung fuer Microsoft 365 Copilot bei der Anmeldung entfaellt (diese zweite Richtlinie gibt es bisher nur in Insider-Builds). Home und Pro werten beide Richtlinien laut Microsoft nicht aus -- dort aendert der Tweak nichts und der Status bleibt grau. Copilot selbst bleibt nutzbar."
+        Desc     = "Nur Windows Enterprise / Education: Die 'Get Started'-App startet nicht mehr automatisch, und die Einrichtungs-Werbung für Microsoft 365 Copilot bei der Anmeldung entfällt (diese zweite Richtlinie gibt es bisher nur in Insider-Builds). Home und Pro werten beide Richtlinien laut Microsoft nicht aus -- dort ändert der Tweak nichts und der Status bleibt grau. Copilot selbst bleibt nutzbar."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
@@ -892,7 +1030,7 @@ $AllTweaks = @(
     # == WINDOWS / PRIVACY ================================================
     [PSCustomObject]@{
         Name     = "Disable Telemetry & Data Collection"
-        Desc     = "Deaktiviert alle Windows-Telemetriedienste (DiagTrack, dmwappushservice). Windows sendet dann keine Nutzungsdaten mehr an Microsoft. Empfohlen fuer alle Nutzer."
+        Desc     = "Deaktiviert alle Windows-Telemetriedienste (DiagTrack, dmwappushservice). Windows sendet dann keine Nutzungsdaten mehr an Microsoft. Empfohlen für alle Nutzer."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -907,7 +1045,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Activity History"
-        Desc     = "Deaktiviert die Windows Aktivitaetsverlauf-Funktion (Timeline). Windows speichert dann nicht mehr welche Apps und Dateien du geoeffnet hast."
+        Desc     = "Deaktiviert die Windows Aktivitätsverlauf-Funktion (Timeline). Windows speichert dann nicht mehr welche Apps und Dateien du geöffnet hast."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -918,7 +1056,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Advertising ID"
-        Desc     = "Deaktiviert die Werbe-ID die Windows jedem Nutzer zuweist. Apps koennen dich dann nicht mehr geraeteuebergreifend tracken um personalisierte Werbung zu schalten."
+        Desc     = "Deaktiviert die Werbe-ID die Windows jedem Nutzer zuweist. Apps können dich dann nicht mehr geräteübergreifend tracken um personalisierte Werbung zu schalten."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -929,7 +1067,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Text & Image Generation (AI)"
-        Desc     = "Deaktiviert die geraeteweite Text- und Bildgenerierung (on-device generative KI) fuer alle Apps per Gruppenrichtlinie (Force Deny). Betrifft nur die lokale KI auf dem Geraet, nicht Cloud-KI-Dienste."
+        Desc     = "Deaktiviert die geräteweite Text- und Bildgenerierung (on-device generative KI) für alle Apps per Gruppenrichtlinie (Force Deny). Betrifft nur die lokale KI auf dem Gerät, nicht Cloud-KI-Dienste."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -953,7 +1091,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable AI in Paint & Notepad"
-        Desc     = "Deaktiviert die KI-Funktionen in Paint (Cocreator, Image Creator, generatives Fuellen) und in Notepad (Umschreiben/Zusammenfassen per Copilot) ueber die offiziellen Microsoft-Richtlinien. Beide Apps bleiben ganz normal nutzbar."
+        Desc     = "Deaktiviert die KI-Funktionen in Paint (Cocreator, Image Creator, generatives Füllen) und in Notepad (Umschreiben/Zusammenfassen per Copilot) über die offiziellen Microsoft-Richtlinien. Beide Apps bleiben ganz normal nutzbar."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -967,7 +1105,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Location Tracking"
-        Desc     = "Deaktiviert den Windows Standortdienst systemweit. Apps koennen deinen Standort nicht mehr abfragen - gut fuer Datenschutz und leicht besser fuer Performance."
+        Desc     = "Deaktiviert den Windows Standortdienst systemweit. Apps können deinen Standort nicht mehr abfragen - gut für Datenschutz und leicht besser für Performance."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -979,7 +1117,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Block Telemetry Hosts (hosts file)"
-        Desc     = "Fuegt Microsoft Telemetrie-Server in die Windows hosts-Datei ein und blockt sie. Damit koennen diese Server nicht mehr erreicht werden - auch wenn Telemetry-Services laufen sollten. Hinweis: Microsoft Defender meldet solche Eintraege als 'HostsFileHijack' und kann sie wieder entfernen - der Status zeigt das dann an."
+        Desc     = "Fügt Microsoft Telemetrie-Server in die Windows hosts-Datei ein und blockt sie. Damit können diese Server nicht mehr erreicht werden - auch wenn Telemetry-Services laufen sollten. Hinweis: Microsoft Defender meldet solche Einträge als 'HostsFileHijack' und kann sie wieder entfernen - der Status zeigt das dann an."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -1014,7 +1152,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Scheduled Telemetry Tasks"
-        Desc     = "Deaktiviert die geplanten Windows-Aufgaben, die Telemetrie- und Nutzungsdaten sammeln und senden: Kompatibilitaets-Appraiser, Programm zur Verbesserung der Benutzerfreundlichkeit (CEIP), Datentraeger-Diagnose, Feedback-Abfragen, das Hochladen gesammelter Fehlerberichte und die Energieeffizienz-Analyse. Aufgaben, die es auf diesem Windows nicht gibt, werden uebersprungen."
+        Desc     = "Deaktiviert die geplanten Windows-Aufgaben, die Telemetrie- und Nutzungsdaten sammeln und senden: Kompatibilitäts-Appraiser und die übrigen Kompatibilitäts-Aufgaben (MareBackup, PcaPatchDbTask, StartupAppTask), Programm zur Verbesserung der Benutzerfreundlichkeit (CEIP), Datenträger-Diagnose, Feedback-Abfragen, das Hochladen gesammelter Fehlerberichte und die Energieeffizienz-Analyse. Aufgaben, die es auf diesem Windows nicht gibt, werden übersprungen. Ein großes Windows-Update kann einzelne wieder einschalten - die Drift-Prüfung meldet das."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -1025,7 +1163,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Input & Speech Data Collection"
-        Desc     = "Schaltet die Datensammlung bei Eingabe und Sprache ab, wie unter Einstellungen > Datenschutz: Online-Spracherkennung, Freihand- und Eingabe-Personalisierung (Windows lernt nicht mehr aus deinem Tippen, Schreiben und deinen Kontakten), 'Freihand- und Eingabeerkennung verbessern', massgeschneiderte Erfahrungen mit Diagnosedaten und Feedback-Abfragen (Haeufigkeit 'Nie', ab Pro zusaetzlich per Richtlinie). Websites koennen deine Sprachliste nicht mehr lesen, und Windows merkt sich nicht mehr, welche Apps du startest - dadurch bleibt 'Meistverwendet' im Startmenue leer. Diktieren mit Win+H kann ohne Online-Spracherkennung eingeschraenkt sein. Wirkt auf allen Editionen."
+        Desc     = "Schaltet die Datensammlung bei Eingabe und Sprache ab, wie unter Einstellungen > Datenschutz: Online-Spracherkennung, Freihand- und Eingabe-Personalisierung (Windows lernt nicht mehr aus deinem Tippen, Schreiben und deinen Kontakten), 'Freihand- und Eingabeerkennung verbessern', maßgeschneiderte Erfahrungen mit Diagnosedaten und Feedback-Abfragen (Häufigkeit 'Nie', ab Pro zusätzlich per Richtlinie). Websites können deine Sprachliste nicht mehr lesen, und Windows merkt sich nicht mehr, welche Apps du startest - dadurch bleibt 'Meistverwendet' im Startmenü leer. Diktieren mit Win+H kann ohne Online-Spracherkennung eingeschränkt sein. Wirkt auf allen Editionen."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -1045,7 +1183,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Remote Assistance"
-        Desc     = "Schaltet die Windows-Remoteunterstuetzung ab (Systemeigenschaften > Remote: 'Remoteunterstuetzungsverbindungen mit diesem Computer zulassen'). Niemand kann sich dann per Einladung auf deinen PC schalten. Remotedesktop, die App 'Remotehilfe' (Quick Assist) und Programme wie AnyDesk oder TeamViewer sind nicht betroffen. Wirkt auf allen Editionen."
+        Desc     = "Schaltet die Windows-Remoteunterstützung ab (Systemeigenschaften > Remote: 'Remoteunterstützungsverbindungen mit diesem Computer zulassen'). Niemand kann sich dann per Einladung auf deinen PC schalten. Remotedesktop, die App 'Remotehilfe' (Quick Assist) und Programme wie AnyDesk oder TeamViewer sind nicht betroffen. Wirkt auf allen Editionen."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -1057,7 +1195,7 @@ $AllTweaks = @(
     # == WINDOWS / PERFORMANCE ============================================
     [PSCustomObject]@{
         Name     = "Ultimate Performance Plan"
-        Desc     = "Aktiviert den 'Ultimative Leistung' Energiesparplan und stellt ihn auf 'immer an': die CPU drosselt nicht mehr runter UND der PC geht nicht mehr in den Ruhemodus - Monitor, Festplatten und System bleiben an (kein Timeout). Maximale Performance zu jeder Zeit. Erhoeht den Stromverbrauch."
+        Desc     = "Aktiviert den 'Ultimative Leistung' Energiesparplan und stellt ihn auf 'immer an': die CPU drosselt nicht mehr runter UND der PC geht nicht mehr in den Ruhemodus - Monitor, Festplatten und System bleiben an (kein Timeout). Maximale Performance zu jeder Zeit. Erhöht den Stromverbrauch."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -1106,7 +1244,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable HPET (High Precision Event Timer)"
-        Desc     = "Deaktiviert den High Precision Event Timer. Kann die System-Latenz reduzieren und Gaming-Performance verbessern. Auf manchen Systemen sorgt dies fuer niedrigere Frame-Zeiten."
+        Desc     = "Deaktiviert den High Precision Event Timer. Kann die System-Latenz reduzieren und Gaming-Performance verbessern. Auf manchen Systemen sorgt dies für niedrigere Frame-Zeiten."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -1122,7 +1260,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Allow Global Timer Resolution (Windows 11)"
-        Desc     = "Seit Windows 10 2004 gilt eine erhoehte Timer-Aufloesung nur noch fuer das Programm, das sie anfordert - unter Windows 11 nicht einmal, solange es minimiert ist. Das stellt das alte, systemweite Verhalten wieder her. Voraussetzung fuer Timer-Tools wie TimerResolution oder ISLC; stellt selbst KEINE Aufloesung ein - Spiele fordern ihre ca. 1 ms ohnehin selbst an. Neustart noetig."
+        Desc     = "Seit Windows 10 2004 gilt eine erhöhte Timer-Auflösung nur noch für das Programm, das sie anfordert - unter Windows 11 nicht einmal, solange es minimiert ist. Das stellt das alte, systemweite Verhalten wieder her. Voraussetzung für Timer-Tools wie TimerResolution oder ISLC; stellt selbst KEINE Auflösung ein - Spiele fordern ihre ca. 1 ms ohnehin selbst an. Neustart nötig."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -1145,7 +1283,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Optimize Visual Effects (Performance Mode)"
-        Desc     = "Schaltet die Windows-Animationen und visuellen Effekte aus wie 'Fuer optimale Leistung anpassen' (Systemeigenschaften > Leistungsoptionen): Fenster-, Menue- und Taskleisten-Animationen, Ein- und Ausblenden, Schatten unter Fenstern und Mauszeiger, Fensterinhalt beim Ziehen, durchsichtiges Auswahlrechteck und Symbolschatten. Die Kantenglaettung der Schrift (ClearType) bleibt an, damit Text scharf bleibt. Vollstaendig wirksam nach Ab- und wieder Anmelden. Windows reagiert dadurch spuerbar direkter - besonders auf schwaecheren Systemen."
+        Desc     = "Schaltet die Windows-Animationen und visuellen Effekte aus wie 'Fuer optimale Leistung anpassen' (Systemeigenschaften > Leistungsoptionen): Fenster-, Menü- und Taskleisten-Animationen, Ein- und Ausblenden, Schatten unter Fenstern und Mauszeiger, Fensterinhalt beim Ziehen, durchsichtiges Auswahlrechteck und Symbolschatten. Die Kantenglättung der Schrift (ClearType) bleibt an, damit Text scharf bleibt. Vollständig wirksam nach Ab- und wieder Anmelden. Windows reagiert dadurch spürbar direkter - besonders auf schwächeren Systemen."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -1164,7 +1302,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Startup App Delay"
-        Desc     = "Windows startet Autostart-Programme nach der Anmeldung erst mit einigen Sekunden Verzoegerung. Mit diesem Tweak starten sie sofort - Discord, Steam und Co. sind schneller da, dafuer ist der Desktop in den ersten Sekunden etwas traeger. Nicht offiziell dokumentiert, aber bis Windows 11 26H2 von Nutzern bestaetigt; ein grosses Windows-Update kann den Wert entfernen (die Drift-Pruefung meldet das). Wirkt auf allen Editionen."
+        Desc     = "Windows startet Autostart-Programme nach der Anmeldung erst mit einigen Sekunden Verzögerung. Mit diesem Tweak starten sie sofort - Discord, Steam und Co. sind schneller da, dafür ist der Desktop in den ersten Sekunden etwas träger. Nicht offiziell dokumentiert, aber bis Windows 11 26H2 von Nutzern bestätigt; ein großes Windows-Update kann den Wert entfernen (die Drift-Prüfung meldet das). Wirkt auf allen Editionen."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -1174,7 +1312,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Windows Search Indexing"
-        Desc     = "Deaktiviert den Windows Search Indexer (WSearch). Reduziert staendige Festplattenzugriffe im Hintergrund. Suche in Explorer funktioniert weiterhin, aber langsamer ohne Index."
+        Desc     = "Deaktiviert den Windows Search Indexer (WSearch). Reduziert ständige Festplattenzugriffe im Hintergrund. Suche in Explorer funktioniert weiterhin, aber langsamer ohne Index."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -1188,7 +1326,7 @@ $AllTweaks = @(
 
     [PSCustomObject]@{
         Name     = "Disable Power Throttling"
-        Desc     = "Verhindert dass Windows Prozesse zur Energieeinsparung drosselt (EcoQoS). Nuetzlich bei Spielen mit mehreren Prozessen -- Hintergrundprozesse des Spiels werden nicht mehr gedrosselt."
+        Desc     = "Verhindert dass Windows Prozesse zur Energieeinsparung drosselt (EcoQoS). Nützlich bei Spielen mit mehreren Prozessen -- Hintergrundprozesse des Spiels werden nicht mehr gedrosselt."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -1198,7 +1336,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Bing in Windows Search"
-        Desc     = "Deaktiviert die Bing-Integration in der Windows-Suche. Das Startmenue sucht nur noch lokal -- schneller, kein Datenaustausch mit Microsoft bei jeder Suche. Ausserdem aus: die Suchhighlights (wechselnde Bilder und Themen im Suchfeld) und die Cloud-Inhaltssuche in OneDrive, Outlook und Bing fuer Microsoft- und Arbeits-/Schulkonten (Einstellungen > Datenschutz > Suchberechtigungen)."
+        Desc     = "Deaktiviert die Bing-Integration in der Windows-Suche. Das Startmenü sucht nur noch lokal -- schneller, kein Datenaustausch mit Microsoft bei jeder Suche. Außerdem aus: die Suchhighlights (wechselnde Bilder und Themen im Suchfeld) und die Cloud-Inhaltssuche in OneDrive, Outlook und Bing für Microsoft- und Arbeits-/Schulkonten (Einstellungen > Datenschutz > Suchberechtigungen)."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -1214,7 +1352,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Process Count Reduction (Svchost)"
-        Desc     = "Setzt den Svchost-Split-Schwellwert auf die RAM-Groesse. Windows teilt Dienste in weniger separate Prozesse auf -- reduziert Hintergrundprozesse spuerbar. WARNUNG: Reduziert die Prozess-Isolation -- stuerzt ein Dienst ab, kann er andere im selben Host (Audio, Netzwerk etc.) mitreissen. Reboot empfohlen."
+        Desc     = "Setzt den Svchost-Split-Schwellwert auf die RAM-Größe. Windows teilt Dienste in weniger separate Prozesse auf -- reduziert Hintergrundprozesse spürbar. WARNUNG: Reduziert die Prozess-Isolation -- stürzt ein Dienst ab, kann er andere im selben Host (Audio, Netzwerk etc.) mitreißen. Reboot empfohlen."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -1225,7 +1363,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Block Background Apps (Policy)"
-        Desc     = "Nur ab Windows Pro: Store-Apps (z.B. WhatsApp, Smartphone-Link, Mail, Wetter) duerfen per offizieller Richtlinie nicht mehr im Hintergrund laufen - spart RAM und Hintergrundlast. ACHTUNG: Ihre Benachrichtigungen (z.B. neue WhatsApp-Nachrichten oder SMS ueber Smartphone-Link) kommen dann erst, wenn die App offen ist. Normale Programme (Steam, Discord, Treiber-Tools) sind nicht betroffen. Unter Home wertet Windows die Richtlinie nicht aus - dort ist der Tweak ausgegraut."
+        Desc     = "Nur ab Windows Pro: Store-Apps (z.B. WhatsApp, Smartphone-Link, Mail, Wetter) dürfen per offizieller Richtlinie nicht mehr im Hintergrund laufen - spart RAM und Hintergrundlast. ACHTUNG: Ihre Benachrichtigungen (z.B. neue WhatsApp-Nachrichten oder SMS über Smartphone-Link) kommen dann erst, wenn die App offen ist. Normale Programme (Steam, Discord, Treiber-Tools) sind nicht betroffen. Unter Home wertet Windows die Richtlinie nicht aus - dort ist der Tweak ausgegraut."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -1234,11 +1372,21 @@ $AllTweaks = @(
             Write-Log "Store apps blocked from running in the background (LetAppsRunInBackground = Force Deny)"
         }
     },
+    [PSCustomObject]@{
+        Name     = "Stop Background Apps (All Editions)"
+        Desc     = "Store-Apps (z.B. WhatsApp, Smartphone-Link, Mail, Wetter) dürfen für dein Benutzerkonto nicht mehr im Hintergrund laufen - der alte Schalter 'Apps im Hintergrund ausführen', den Windows 11 nicht mehr anzeigt (dort gibt es sonst nur die Einstellung pro App). Wirkt auf allen Editionen, auch Home; ab Pro geht dasselbe per Richtlinie mit 'Block Background Apps (Policy)'. ACHTUNG: Benachrichtigungen dieser Apps (z.B. neue WhatsApp-Nachrichten) kommen erst, wenn die App offen ist. Normale Programme (Steam, Discord, Treiber-Tools) sind nicht betroffen. Wirkt nach Ab- und Anmelden."
+        Category = "Windows"
+        Group    = "Performance"
+        Action   = {
+            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" /v GlobalUserDisabled /t REG_DWORD /d 1 /f | Out-Null
+            Write-Log "Store apps stopped from running in the background (this user account)"
+        }
+    },
 
     # == WINDOWS / WINDOWS UPDATE ===========================================
     [PSCustomObject]@{
         Name     = "Exclude Drivers from Windows Update"
-        Desc     = "Nur ab Windows Pro: Windows Update installiert keine Treiber mehr (offizielle Richtlinie 'Treiber nicht in Windows-Updates einschliessen'). Verhindert, dass Windows z.B. deinen frisch installierten Grafiktreiber durch eine aeltere Version ersetzt. Treiber holst du dann selbst beim Hersteller (NVIDIA App, AMD Software, Mainboard-Seite). Sicherheits- und Funktionsupdates kommen weiter. Unter Home wirkungslos - dort ausgegraut."
+        Desc     = "Nur ab Windows Pro: Windows Update installiert keine Treiber mehr (offizielle Richtlinie 'Treiber nicht in Windows-Updates einschließen'). Verhindert, dass Windows z.B. deinen frisch installierten Grafiktreiber durch eine ältere Version ersetzt. Treiber holst du dann selbst beim Hersteller (NVIDIA App, AMD Software, Mainboard-Seite). Sicherheits- und Funktionsupdates kommen weiter. Unter Home wirkungslos - dort ausgegraut."
         Category = "Windows"
         Group    = "Windows Update"
         Action   = {
@@ -1249,7 +1397,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Hold Feature Updates (Stay on Current Version)"
-        Desc     = "Nur ab Windows Pro: Haelt Windows auf der installierten Version fest (z.B. 26H2) - das naechste grosse Funktionsupdate wird nicht automatisch installiert. Die monatlichen Sicherheitsupdates kommen weiter. Die Version wird beim Anwenden ausgelesen, nicht fest eingetragen. Wichtig: Jede Windows-Version bekommt nur begrenzt Updates (Home und Pro 24 Monate) - rechtzeitig zuruecksetzen, damit du nicht ohne Sicherheitsupdates dastehst. Unter Home wirkungslos - dort ausgegraut."
+        Desc     = "Nur ab Windows Pro: Hält Windows auf der installierten Version fest (z.B. 26H2) - das nächste große Funktionsupdate wird nicht automatisch installiert. Die monatlichen Sicherheitsupdates kommen weiter. Die Version wird beim Anwenden ausgelesen, nicht fest eingetragen. Wichtig: Jede Windows-Version bekommt nur begrenzt Updates (Home und Pro 24 Monate) - rechtzeitig zurücksetzen, damit du nicht ohne Sicherheitsupdates dastehst. Unter Home wirkungslos - dort ausgegraut."
         Category = "Windows"
         Group    = "Windows Update"
         Action   = {
@@ -1265,11 +1413,25 @@ $AllTweaks = @(
             Write-Log "Feature updates held at $prod $ver (security updates continue)"
         }
     },
+    [PSCustomObject]@{
+        Name     = "Disable Automatic Windows Updates"
+        Desc     = "Windows lädt und installiert Updates nicht mehr von selbst - auch keine Sicherheitsupdates. Sie kommen nur noch, wenn du unter Einstellungen > Windows Update selbst auf 'Nach Updates suchen' klickst. Dazu Nutzungszeiten von 8 bis 2 Uhr (in dieser Zeit kein automatischer Neustart). Verhindert Downloads und Neustarts beim Spielen, aber: Wer nicht regelmäßig selbst nach Updates sucht, bleibt ohne Sicherheitsupdates. Wer nur keine Neustarts beim Spielen will, stellt besser nur die Nutzungszeiten ein (Einstellungen > Windows Update > Erweiterte Optionen). In keinem Preset."
+        Category = "Windows"
+        Group    = "Windows Update"
+        Action   = {
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f | Out-Null
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v AUOptions /t REG_DWORD /d 2 /f | Out-Null
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v SetActiveHours /t REG_DWORD /d 1 /f | Out-Null
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v ActiveHoursStart /t REG_DWORD /d 8 /f | Out-Null
+            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v ActiveHoursEnd /t REG_DWORD /d 2 /f | Out-Null
+            Write-Log "Automatic Windows Updates disabled (updates only when you check yourself, active hours 8-2)"
+        }
+    },
 
     # == WINDOWS / CTT ESSENTIALS (parity with Chris Titus Tech WinUtil) ===
     [PSCustomObject]@{
         Name     = "Prevent Device Companion Apps"
-        Desc     = "Verhindert, dass Windows Geraete-Metadaten aus dem Netzwerk laedt und automatisch Companion-Apps fuer angeschlossene Geraete installiert oder vorschlaegt. Spart Hintergrund-Traffic und ungewollte App-Installationen."
+        Desc     = "Verhindert, dass Windows Geräte-Metadaten aus dem Netzwerk lädt und automatisch Companion-Apps für angeschlossene Geräte installiert oder vorschlägt. Spart Hintergrund-Traffic und ungewollte App-Installationen."
         Category = "Windows"
         Group    = "CTT Essentials"
         Action   = {
@@ -1290,7 +1452,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Windows Platform Binary Table (WPBT)"
-        Desc     = "Deaktiviert die Ausfuehrung der Windows Platform Binary Table. Verhindert, dass Mainboard-/OEM-Firmware bei jedem Start heimlich Programme in Windows einschleust. Reiner Sicherheits-Tweak."
+        Desc     = "Deaktiviert die Ausführung der Windows Platform Binary Table. Verhindert, dass Mainboard-/OEM-Firmware bei jedem Start heimlich Programme in Windows einschleust. Reiner Sicherheits-Tweak."
         Category = "Windows"
         Group    = "CTT Essentials"
         Action   = {
@@ -1300,7 +1462,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Store Recommended Search Results"
-        Desc     = "Sperrt die store.db der Microsoft Store App per Dateiberechtigung. Der Store zeigt dann keine empfohlenen/gesponserten Suchergebnisse mehr an. Vollstaendig reversibel."
+        Desc     = "Sperrt die store.db der Microsoft Store App per Dateiberechtigung. Der Store zeigt dann keine empfohlenen/gesponserten Suchergebnisse mehr an. Vollständig reversibel."
         Category = "Windows"
         Group    = "CTT Essentials"
         Action   = {
@@ -1314,18 +1476,8 @@ $AllTweaks = @(
         }
     },
     [PSCustomObject]@{
-        Name     = "Enable Start Menu Previous Layout"
-        Desc     = "Aktiviert auf unterstuetzten Windows 11 Builds das vorherige Startmenue-Layout ueber ein Feature-Override. Wirkt nur auf Builds, die dieses Feature-Flag kennen -- sonst ohne Effekt."
-        Category = "Windows"
-        Group    = "CTT Essentials"
-        Action   = {
-            reg add "HKLM\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\8\3036241548" /v EnabledState /t REG_DWORD /d 1 /f | Out-Null
-            Write-Log "Start Menu previous layout enabled (feature override)"
-        }
-    },
-    [PSCustomObject]@{
         Name     = "Disable File Explorer Automatic Folder Discovery"
-        Desc     = "Setzt alle Ordner auf 'Allgemeine Elemente'. Der Explorer verschwendet dann keine Zeit mehr damit, Ordnertypen automatisch zu erkennen -- oeffnet grosse Ordner deutlich schneller. Abmelden/Neustart noetig."
+        Desc     = "Setzt alle Ordner auf 'Allgemeine Elemente'. Der Explorer verschwendet dann keine Zeit mehr damit, Ordnertypen automatisch zu erkennen -- öffnet große Ordner deutlich schneller. Abmelden/Neustart nötig."
         Category = "Windows"
         Group    = "CTT Essentials"
         Action   = {
@@ -1341,7 +1493,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Run Disk Cleanup"
-        Desc     = "Fuehrt die Windows-Datentraegerbereinigung automatisch aus (cleanmgr /VERYLOWDISK) und raeumt zusaetzlich alte Windows-Update-Komponenten per DISM auf. Einmalige Aktion, kann 5-15 Minuten dauern - das Fenster bleibt dabei bedienbar, die Statusleiste zaehlt die Sekunden mit."
+        Desc     = "Führt die Windows-Datenträgerbereinigung automatisch aus (cleanmgr /VERYLOWDISK) und räumt zusätzlich alte Windows-Update-Komponenten per DISM auf. Einmalige Aktion, kann 5-15 Minuten dauern - das Fenster bleibt dabei bedienbar, die Statusleiste zählt die Sekunden mit."
         Category = "Windows"
         Group    = "CTT Essentials"
         Action   = {
@@ -1355,7 +1507,7 @@ $AllTweaks = @(
     # == WINDOWS / QUALITY OF LIFE (CTT WinUtil parity) ===================
     [PSCustomObject]@{
         Name     = "Show File Extensions"
-        Desc     = "Blendet Dateiendungen im Explorer ein (z.B. .exe, .txt, .jpg). Wichtig fuer Sicherheit -- getarnte Dateien wie 'foto.jpg.exe' werden so sofort erkennbar."
+        Desc     = "Blendet Dateiendungen im Explorer ein (z.B. .exe, .txt, .jpg). Wichtig für Sicherheit -- getarnte Dateien wie 'foto.jpg.exe' werden so sofort erkennbar."
         Category = "Windows"
         Group    = "Quality of Life"
         Action   = {
@@ -1365,7 +1517,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Show Hidden Files"
-        Desc     = "Zeigt versteckte Dateien und Ordner im Explorer an. Nuetzlich um AppData, Config-Dateien und versteckte Ordner zu sehen."
+        Desc     = "Zeigt versteckte Dateien und Ordner im Explorer an. Nützlich um AppData, Config-Dateien und versteckte Ordner zu sehen."
         Category = "Windows"
         Group    = "Quality of Life"
         Action   = {
@@ -1375,7 +1527,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Reserved Storage"
-        Desc     = "Deaktiviert den reservierten Speicher, den Windows fuer Updates zuruecklegt (~7 GB). Gibt den Platz auf der Systemplatte frei. Windows verwaltet Updates danach dynamisch."
+        Desc     = "Deaktiviert den reservierten Speicher, den Windows für Updates zurücklegt (~7 GB). Gibt den Platz auf der Systemplatte frei. Windows verwaltet Updates danach dynamisch."
         Category = "Windows"
         Group    = "Quality of Life"
         Action   = {
@@ -1385,7 +1537,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Storage Sense"
-        Desc     = "Deaktiviert Storage Sense (automatische Speicherbereinigung). Windows loescht dann nicht mehr eigenmaechtig temporaere Dateien oder Papierkorb-Inhalte -- du behaeltst die volle Kontrolle."
+        Desc     = "Deaktiviert Storage Sense (automatische Speicherbereinigung). Windows löscht dann nicht mehr eigenmächtig temporäre Dateien oder Papierkorb-Inhalte -- du behältst die volle Kontrolle."
         Category = "Windows"
         Group    = "Quality of Life"
         Action   = {
@@ -1416,7 +1568,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Enable Long Paths"
-        Desc     = "Aktiviert Pfade laenger als 260 Zeichen. Hilfreich bei tiefen Ordnerstrukturen, Game-Mods, Node-Projekten usw. -- verhindert 'Pfad zu lang'-Fehler."
+        Desc     = "Aktiviert Pfade länger als 260 Zeichen. Hilfreich bei tiefen Ordnerstrukturen, Game-Mods, Node-Projekten usw. -- verhindert 'Pfad zu lang'-Fehler."
         Category = "Windows"
         Group    = "Quality of Life"
         Action   = {
@@ -1426,7 +1578,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Mouse Acceleration"
-        Desc     = "Deaktiviert die Mausbeschleunigung (Enhance Pointer Precision). Wichtig fuer FPS-Spiele: Deine Mausbewegung wird 1:1 uebertragen ohne dynamische Verstaerkung."
+        Desc     = "Deaktiviert die Mausbeschleunigung (Enhance Pointer Precision). Wichtig für FPS-Spiele: Deine Mausbewegung wird 1:1 übertragen ohne dynamische Verstärkung."
         Category = "Windows"
         Group    = "Mouse & UI"
         Action   = {
@@ -1438,7 +1590,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Sticky Keys"
-        Desc     = "Deaktiviert den Sticky Keys Dialog (der beim 5x Shift-Druecken aufpoppt). Verhindert ungewollte Unterbrechungen mitten im Spiel."
+        Desc     = "Deaktiviert den Sticky Keys Dialog (der beim 5x Shift-Drücken aufpoppt). Verhindert ungewollte Unterbrechungen mitten im Spiel."
         Category = "Windows"
         Group    = "Mouse & UI"
         Action   = {
@@ -1450,7 +1602,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Enable Dark Mode"
-        Desc     = "Aktiviert den dunklen Modus fuer Windows und Apps systemweit. Schont die Augen bei langen Sessions - besonders nachts beim Gaming."
+        Desc     = "Aktiviert den dunklen Modus für Windows und Apps systemweit. Schont die Augen bei langen Sessions - besonders nachts beim Gaming."
         Category = "Windows"
         Group    = "Mouse & UI"
         Action   = {
@@ -1461,7 +1613,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Transparency Effects"
-        Desc     = "Deaktiviert die Transparenz-Effekte in Taskleiste und Startmenue. Spart GPU-Ressourcen und reduziert leicht den RAM-Verbrauch."
+        Desc     = "Deaktiviert die Transparenz-Effekte in Taskleiste und Startmenü. Spart GPU-Ressourcen und reduziert leicht den RAM-Verbrauch."
         Category = "Windows"
         Group    = "Mouse & UI"
         Action   = {
@@ -1483,7 +1635,7 @@ $AllTweaks = @(
     # == GAMING / IN-GAME BOOSTS ==========================================
     [PSCustomObject]@{
         Name     = "Enable Game Mode"
-        Desc     = "Aktiviert den Windows Game Mode. Windows priorisiert dann CPU/GPU-Ressourcen fuer das aktive Spiel und unterdrueckt Windows Update Neustarts waehrend du spielst."
+        Desc     = "Aktiviert den Windows Game Mode. Windows priorisiert dann CPU/GPU-Ressourcen für das aktive Spiel und unterdrückt Windows Update Neustarts während du spielst."
         Category = "Gaming"
         Group    = "In-Game Boosts"
         Action   = {
@@ -1494,7 +1646,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Xbox Game Bar"
-        Desc     = "Deaktiviert die Xbox Game Bar (Win+G Overlay). Verhindert dass die Game Bar im Hintergrund laeuft und Ressourcen verbraucht. Die Xbox-Taste am Controller oeffnet die Game Bar nicht mehr. Game Mode bleibt davon unberuehrt."
+        Desc     = "Deaktiviert die Xbox Game Bar (Win+G Overlay). Verhindert dass die Game Bar im Hintergrund läuft und Ressourcen verbraucht. Die Xbox-Taste am Controller öffnet die Game Bar nicht mehr. Game Mode bleibt davon unberührt."
         Category = "Gaming"
         Group    = "In-Game Boosts"
         Action   = {
@@ -1516,7 +1668,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "MMCSS Gaming Profile (High Priority)"
-        Desc     = "Setzt die Multimedia Class Scheduler Service (MMCSS) Profile fuer Spiele auf High Priority. Windows priorisiert dann Audio und Timer-Interrupts fuer besseres Gaming-Erlebnis."
+        Desc     = "Setzt die Multimedia Class Scheduler Service (MMCSS) Profile für Spiele auf High Priority. Windows priorisiert dann Audio und Timer-Interrupts für besseres Gaming-Erlebnis."
         Category = "Gaming"
         Group    = "In-Game Boosts"
         Action   = {
@@ -1528,7 +1680,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Fullscreen Optimizations"
-        Desc     = "Deaktiviert die Windows Fullscreen Optimizations global. Manche Spiele laufen im 'Borderless Windowed' statt echtem Fullscreen - dieser Tweak erzwingt echtes Fullscreen fuer niedrigeren Input-Lag."
+        Desc     = "Deaktiviert die Windows Fullscreen Optimizations global. Manche Spiele laufen im 'Borderless Windowed' statt echtem Fullscreen - dieser Tweak erzwingt echtes Fullscreen für niedrigeren Input-Lag."
         Category = "Gaming"
         Group    = "In-Game Boosts"
         Action   = {
@@ -1538,36 +1690,11 @@ $AllTweaks = @(
             Write-Log "Fullscreen Optimizations disabled"
         }
     },
-    [PSCustomObject]@{
-        Name     = "Disable Windows Update during Gaming"
-        Desc     = "Deaktiviert automatische Windows Update Downloads und Installationen dauerhaft via Registry. Windows fragt weiterhin nach Updates, installiert sie aber nicht mehr automatisch im Hintergrund. Verhindert unerwuenschte Reboots und Performance-Einbrueche waehrend des Gamings. Manuelles Update ueber Windows Update bleibt jederzeit moeglich."
-        Category = "Gaming"
-        Group    = "In-Game Boosts"
-        Action   = {
-            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f | Out-Null
-            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v AUOptions /t REG_DWORD /d 2 /f | Out-Null
-            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v SetActiveHours /t REG_DWORD /d 1 /f | Out-Null
-            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v ActiveHoursStart /t REG_DWORD /d 8 /f | Out-Null
-            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v ActiveHoursEnd /t REG_DWORD /d 2 /f | Out-Null
-            Write-Log "Windows Update during Gaming disabled"
-        }
-    },
-    [PSCustomObject]@{
-        Name     = "Disable Background App Throttling"
-        Desc     = "Deaktiviert das Windows-interne CPU-Throttling fuer Hintergrundprozesse. Verhindert dass Windows heimlich die CPU-Zeit fuer Spiele reduziert wenn Hintergrundprozesse aktiv sind. Wichtig bei CPU-intensiven Spielen."
-        Category = "Gaming"
-        Group    = "In-Game Boosts"
-        Action   = {
-            reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" /v DisableLowQosTimerResolution /t REG_DWORD /d 1 /f | Out-Null
-            reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" /v GlobalUserDisabled /t REG_DWORD /d 1 /f | Out-Null
-            Write-Log "Background App Throttling disabled"
-        }
-    },
 
     # == GAMING / GPU & DRIVER ============================================
     [PSCustomObject]@{
         Name     = "Enable MSI Mode (Message Signaled Interrupts)"
-        Desc     = "Aktiviert MSI-Modus (Message Signaled Interrupts) fuer die primaere GPU. Reduziert Interrupt-Latenz erheblich. Standard-Windows nutzt Line-Based Interrupts - MSI ist moderner und schneller. Reboot empfohlen."
+        Desc     = "Aktiviert MSI-Modus (Message Signaled Interrupts) für die primäre GPU. Reduziert Interrupt-Latenz erheblich. Standard-Windows nutzt Line-Based Interrupts - MSI ist moderner und schneller. Reboot empfohlen."
         Category = "Gaming"
         Group    = "GPU & Driver"
         Action   = {
@@ -1582,17 +1709,22 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Enable Hardware-Accelerated GPU Scheduling (HAGS)"
-        Desc     = "Aktiviert HAGS - Windows uebergibt GPU-Scheduling direkt an die Hardware statt Software. Reduziert CPU-Overhead und leicht den Input-Lag. Erfordert NVIDIA RTX 2000+ oder AMD RX 5000+ und Windows 10 2004+."
+        Desc     = "Aktiviert HAGS - Windows übergibt das GPU-Scheduling direkt an die Hardware statt an die Software. Reduziert CPU-Overhead und leicht den Input-Lag. Erfordert NVIDIA RTX 2000+ oder AMD RX 5000+ und Windows 10 2004+. Auf aktuellen Windows-11-PCs meist schon an; DLSS Frame Generation braucht es. Revert stellt den Zustand von vorher wieder her."
         Category = "Gaming"
         Group    = "GPU & Driver"
         Action   = {
+            # Remember what was set before (once), so the revert puts exactly that back (0 = no value)
+            if ($null -eq (Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "HwSchModeBefore")) {
+                $cur = Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" "HwSchMode"
+                reg add "HKLM\SOFTWARE\GameOptimizerPro" /v HwSchModeBefore /t REG_DWORD /d $(if ($null -eq $cur) { 0 } else { [int]$cur }) /f | Out-Null
+            }
             reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 2 /f | Out-Null
             Write-Log "HAGS enabled"
         }
     },
     [PSCustomObject]@{
         Name     = "Clear Shader Cache"
-        Desc     = "Leert den NVIDIA bzw. AMD Shader-Cache auf der Festplatte. Erzwingt beim naechsten Spielstart eine frische Kompilierung der Shader. Sinnvoll nach Treiberupdates oder bei Grafikfehlern."
+        Desc     = "Leert den NVIDIA bzw. AMD Shader-Cache auf der Festplatte. Erzwingt beim nächsten Spielstart eine frische Kompilierung der Shader. Sinnvoll nach Treiberupdates oder bei Grafikfehlern."
         Category = "Gaming"
         Group    = "GPU & Driver"
         Action   = {
@@ -1613,7 +1745,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Increase GPU Timeout Tolerance (TDR)"
-        Desc     = "Erhoeht die GPU-Timeout-Toleranz (TDR-Delay von 2s auf 10s). Windows setzt den Grafiktreiber dann nicht mehr vorschnell zurueck, wenn die GPU unter Volllast kurz nicht antwortet -- reduziert Blackscreens/Treiber-Resets in fordernden Spielen und beim Uebertakten. Hinweis: erhoeht nicht die FPS, sondern die Stabilitaet."
+        Desc     = "Erhöht die GPU-Timeout-Toleranz (TDR-Delay von 2s auf 10s). Windows setzt den Grafiktreiber dann nicht mehr vorschnell zurück, wenn die GPU unter Volllast kurz nicht antwortet -- reduziert Blackscreens/Treiber-Resets in fordernden Spielen und beim Übertakten. Hinweis: erhoeht nicht die FPS, sondern die Stabilität."
         Category = "Gaming"
         Group    = "GPU & Driver"
         Action   = {
@@ -1630,7 +1762,7 @@ $AllTweaks = @(
     # == NETWORK / LATENCY ================================================
     [PSCustomObject]@{
         Name     = "Disable Nagle's Algorithm (TCPNoDelay)"
-        Desc     = "Deaktiviert Nagles Algorithmus auf allen Netzwerkadaptern. Nagle buendelt kleine Datenpakete um Effizienz zu steigern - auf Kosten von Latenz. Deaktivieren senkt Ping in Online-Spielen spuerbar."
+        Desc     = "Deaktiviert Nagles Algorithmus auf allen Netzwerkadaptern. Nagle bündelt kleine Datenpakete um Effizienz zu steigern - auf Kosten von Latenz. Deaktivieren senkt Ping in Online-Spielen spürbar."
         Category = "Network"
         Group    = "Latency"
         Action   = {
@@ -1645,7 +1777,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Large Send Offload (LSO)"
-        Desc     = "Deaktiviert Large Send Offload auf allen aktiven Netzwerkadaptern. LSO kann auf manchen Systemen zu Ping-Spikes fuehren. Deaktivieren hilft bei instabilem Ping in Online-Spielen."
+        Desc     = "Deaktiviert Large Send Offload auf allen aktiven Netzwerkadaptern. LSO kann auf manchen Systemen zu Ping-Spikes führen. Deaktivieren hilft bei instabilem Ping in Online-Spielen."
         Category = "Network"
         Group    = "Latency"
         Action   = {
@@ -1658,12 +1790,13 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Network Throttling Index"
-        Desc     = "Deaktiviert den Windows Network Throttling Index der Netzwerkpakete bei hoher CPU-Last drosselt. Besonders wirksam bei latenzsensitvem Gaming wenn CPU ausgelastet ist. Gibt dem Netzwerk-Stack hoechste Prioritaet."
+        Desc     = "Deaktiviert den Windows Network Throttling Index, der Netzwerkpakete bei hoher CPU-Last drosselt. Besonders wirksam bei latenzsensitivem Gaming, wenn die CPU ausgelastet ist. Setzt dazu SystemResponsiveness auf 10 (der kleinste Wert, den Windows annimmt; kleinere Werte behandelt Windows wie 20)."
         Category = "Network"
         Group    = "Latency"
         Action   = {
             reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 0xffffffff /f | Out-Null
-            reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 0 /f | Out-Null
+            # 10, not 0: Windows treats values below 10 as 20 (= its default) -- Microsoft, MMCSS docs
+            reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 10 /f | Out-Null
             # Ownership marker for the shared SystemResponsiveness value (see reverts)
             reg add "HKLM\SOFTWARE\GameOptimizerPro" /v SR_NetworkThrottle /t REG_DWORD /d 1 /f | Out-Null
             Write-Log "Network Throttling Index disabled"
@@ -1673,7 +1806,7 @@ $AllTweaks = @(
     # == NETWORK / DNS ====================================================
     [PSCustomObject]@{
         Name     = "Set DNS to Cloudflare (1.1.1.1)"
-        Desc     = "Setzt den DNS-Server auf Cloudflare 1.1.1.1 / 1.0.0.1 (IPv4) plus die passenden IPv6-Server (2606:4700:4700::1111/::1001), damit auch IPv6-Anfragen ueber Cloudflare laufen. Einer der schnellsten und datenschutzfreundlichsten DNS-Anbieter weltweit. Revert bringt die DNS-Server zurueck, die vorher eingestellt waren (z.B. ein Pi-hole) - oder 'automatisch'."
+        Desc     = "Setzt den DNS-Server auf Cloudflare 1.1.1.1 / 1.0.0.1 (IPv4) plus die passenden IPv6-Server (2606:4700:4700::1111/::1001), damit auch IPv6-Anfragen über Cloudflare laufen. Einer der schnellsten und datenschutzfreundlichsten DNS-Anbieter weltweit. Revert bringt die DNS-Server zurück, die vorher eingestellt waren (z.B. ein Pi-hole) - oder 'automatisch'."
         Category = "Network"
         Group    = "DNS"
         Action   = {
@@ -1682,7 +1815,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Set DNS to Google (8.8.8.8)"
-        Desc     = "Setzt den DNS-Server auf Google 8.8.8.8 / 8.8.4.4 (IPv4) plus die passenden IPv6-Server (2001:4860:4860::8888/::8844), damit auch IPv6-Anfragen ueber Google laufen. Global verteilt, sehr schnell und zuverlaessig. Alternative zu Cloudflare. Revert bringt die DNS-Server zurueck, die vorher eingestellt waren (z.B. ein Pi-hole) - oder 'automatisch'."
+        Desc     = "Setzt den DNS-Server auf Google 8.8.8.8 / 8.8.4.4 (IPv4) plus die passenden IPv6-Server (2001:4860:4860::8888/::8844), damit auch IPv6-Anfragen über Google laufen. Global verteilt, sehr schnell und zuverlässig. Alternative zu Cloudflare. Revert bringt die DNS-Server zurück, die vorher eingestellt waren (z.B. ein Pi-hole) - oder 'automatisch'."
         Category = "Network"
         Group    = "DNS"
         Action   = {
@@ -1691,7 +1824,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Flush DNS Cache"
-        Desc     = "Leert den lokalen DNS-Cache. Sinnvoll nach DNS-Aenderungen oder bei Verbindungsproblemen. Schnell und ohne Nebenwirkungen."
+        Desc     = "Leert den lokalen DNS-Cache. Sinnvoll nach DNS-Änderungen oder bei Verbindungsproblemen. Schnell und ohne Nebenwirkungen."
         Category = "Network"
         Group    = "DNS"
         Action   = {
@@ -1703,7 +1836,7 @@ $AllTweaks = @(
     # == NETWORK / TCP ====================================================
     [PSCustomObject]@{
         Name     = "Disable TCP Auto-Tuning"
-        Desc     = "Deaktiviert die automatische TCP-Empfangsfenstergroeesse. Kann auf manchen Systemen Latenz-Spikes reduzieren. Bei Highspeed-Internet (1 Gbit+) kann dies den Durchsatz leicht verringern."
+        Desc     = "Schaltet die automatische Größe des TCP-Empfangsfensters ab - es bleibt dann bei 64 KB. ACHTUNG: Das bremst Downloads stark: Bei 20 ms Ping sind höchstens etwa 26 MBit/s möglich, bei 40 ms etwa 13 MBit/s - egal wie schnell dein Anschluss ist. Für den Ping in Spielen bringt es nichts Messbares. Nur zum Testen, wenn ein Router oder Netzwerk mit Auto-Tuning Probleme macht; in keinem Preset."
         Category = "Network"
         Group    = "TCP"
         Action   = {
@@ -1711,37 +1844,13 @@ $AllTweaks = @(
             Write-Log "TCP Auto-Tuning disabled"
         }
     },
-    [PSCustomObject]@{
-        Name     = "Optimize TCP Settings (ECN/SACK/Timestamps)"
-        Desc     = "Optimiert fortgeschrittene TCP-Einstellungen: Deaktiviert ECN (Explicit Congestion Notification), aktiviert SACK (Selective Acknowledgment) und deaktiviert TCP Timestamps. Reduziert Overhead und verbessert Stabilitaet bei Online-Spielen."
-        Category = "Network"
-        Group    = "TCP"
-        Action   = {
-            netsh int tcp set global ecncapability=disabled 2>$null | Out-Null
-            netsh int tcp set global timestamps=disabled 2>$null | Out-Null
-            netsh int tcp set global rss=enabled 2>$null | Out-Null
-            reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v SackOpts /t REG_DWORD /d 1 /f | Out-Null
-            reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v TcpMaxDupAcks /t REG_DWORD /d 2 /f | Out-Null
-            Write-Log "TCP Settings optimized (ECN/SACK/Timestamps)"
-        }
-    },
 
     # == NETWORK / QOS ====================================================
-    [PSCustomObject]@{
-        Name     = "Disable QoS Packet Scheduler Limit"
-        Desc     = "Entfernt das Standard-Limit von 20% Bandbreite das Windows fuer QoS reserviert. Gibt dir die volle verfuegbare Bandbreite - relevant besonders in Netzwerken mit hohem Traffic."
-        Category = "Network"
-        Group    = "QoS"
-        Action   = {
-            reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Psched" /v NonBestEffortLimit /t REG_DWORD /d 0 /f | Out-Null
-            Write-Log "QoS bandwidth limit removed"
-        }
-    },
 
     # == NETWORK / ADAPTER =================================================
     [PSCustomObject]@{
         Name     = "Disable Network Adapter Power Saving"
-        Desc     = "Deaktiviert 'Computer kann Geraet ausschalten um Strom zu sparen' fuer alle physischen Netzwerkadapter (LAN, WLAN). Verhindert Verbindungsabbrueche und Latenz-Spitzen durch Energiesparfunktionen des Adapters."
+        Desc     = "Deaktiviert 'Computer kann Gerät ausschalten um Strom zu sparen' für alle physischen Netzwerkadapter (LAN, WLAN). Verhindert Verbindungsabbrüche und Latenz-Spitzen durch Energiesparfunktionen des Adapters."
         Category = "Network"
         Group    = "Adapter"
         Action   = {
@@ -1759,7 +1868,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Delivery Optimization (P2P Windows Update)"
-        Desc     = "Deaktiviert Windows Delivery Optimization. Windows laedt Updates nur noch direkt von Microsoft statt Bandbreite mit anderen PCs im Netzwerk/Internet zu teilen (P2P). Verhindert unerwartete Bandbreitennutzung waehrend des Spielens."
+        Desc     = "Deaktiviert Windows Delivery Optimization. Windows lädt Updates nur noch direkt von Microsoft statt Bandbreite mit anderen PCs im Netzwerk/Internet zu teilen (P2P). Verhindert unerwartete Bandbreitennutzung während des Spielens."
         Category = "Network"
         Group    = "Adapter"
         Action   = {
@@ -1769,7 +1878,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Energy-Efficient Ethernet"
-        Desc     = "Schaltet Energy-Efficient Ethernet (EEE, 'Green Ethernet') an allen LAN-Adaptern ab, die es anbieten. Mit EEE geht die Leitung in Sendepausen in einen Stromsparzustand und muss fuer das naechste Paket erst aufwachen - das kann kleine Latenzspitzen geben. Kostet am Desktop praktisch nichts. Geaendert wird nur, was der Treiber selbst als Einstellung anbietet. Wirkt nach einem Neustart."
+        Desc     = "Schaltet Energy-Efficient Ethernet (EEE, 'Green Ethernet') an allen LAN-Adaptern ab, die es anbieten. Mit EEE geht die Leitung in Sendepausen in einen Stromsparzustand und muss für das nächste Paket erst aufwachen - das kann kleine Latenzspitzen geben. Kostet am Desktop praktisch nichts. Geändert wird nur, was der Treiber selbst als Einstellung anbietet. Wirkt nach einem Neustart."
         Category = "Network"
         Group    = "Adapter"
         Action   = {
@@ -1780,7 +1889,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Interrupt Moderation"
-        Desc     = "Der Netzwerkadapter meldet jedes Paket sofort, statt mehrere zu sammeln und gebuendelt zu melden. Senkt die Netzwerk-Latenz um Bruchteile einer Millisekunde, erzeugt aber bei hohen Download-Raten deutlich mehr CPU-Last. Gedacht fuer Online-Spiele - wer oft grosse Downloads hat oder streamt, laesst es besser an. Geaendert wird nur, was der Treiber selbst anbietet. Wirkt nach einem Neustart."
+        Desc     = "Der Netzwerkadapter meldet jedes Paket sofort, statt mehrere zu sammeln und gebündelt zu melden. Senkt die Netzwerk-Latenz um Bruchteile einer Millisekunde, erzeugt aber bei hohen Download-Raten deutlich mehr CPU-Last. Gedacht für Online-Spiele - wer oft große Downloads hat oder streamt, lässt es besser an. Geändert wird nur, was der Treiber selbst anbietet. Wirkt nach einem Neustart."
         Category = "Network"
         Group    = "Adapter"
         Action   = {
@@ -1793,7 +1902,7 @@ $AllTweaks = @(
     # == RAM & STORAGE / PAGE FILE ========================================
     [PSCustomObject]@{
         Name     = "Optimize PageFile (System Managed)"
-        Desc     = "Setzt die PageFile-Verwaltung auf automatisch durch Windows. Windows passt die Auslagerungsdatei dynamisch an den RAM-Bedarf an - verhindert sowohl zu kleine als auch zu grosse PageFiles."
+        Desc     = "Setzt die PageFile-Verwaltung auf automatisch durch Windows. Windows passt die Auslagerungsdatei dynamisch an den RAM-Bedarf an - verhindert sowohl zu kleine als auch zu große PageFiles."
         Category = "RAM & Storage"
         Group    = "Page File"
         Action   = {
@@ -1805,7 +1914,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Clear PageFile on Shutdown"
-        Desc     = "Loescht die Auslagerungsdatei bei jedem Herunterfahren. Verhindert dass sensible Daten im Speicher nach dem Neustart noch auf der Festplatte liegen. Gut fuer Datenschutz. Macht den Shutdown minimal langsamer."
+        Desc     = "Loescht die Auslagerungsdatei bei jedem Herunterfahren. Verhindert dass sensible Daten im Speicher nach dem Neustart noch auf der Festplatte liegen. Gut für Datenschutz. Macht den Shutdown minimal langsamer."
         Category = "RAM & Storage"
         Group    = "Page File"
         Action   = {
@@ -1817,7 +1926,7 @@ $AllTweaks = @(
     # == RAM & STORAGE / MEMORY ===========================================
     [PSCustomObject]@{
         Name     = "Disable Memory Compression"
-        Desc     = "Deaktiviert die RAM-Komprimierung in Windows. Memory Compression verbraucht CPU-Ressourcen um RAM-Inhalte zu komprimieren. Bei ausreichend RAM (16GB+) bringt Deaktivieren weniger CPU-Last waehrend des Spielens."
+        Desc     = "Deaktiviert die RAM-Komprimierung in Windows. Memory Compression verbraucht CPU-Ressourcen um RAM-Inhalte zu komprimieren. Bei ausreichend RAM (16GB+) bringt Deaktivieren weniger CPU-Last während des Spielens."
         Category = "RAM & Storage"
         Group    = "Memory"
         Action   = {
@@ -1833,7 +1942,7 @@ $AllTweaks = @(
     # == RAM & STORAGE / SSD ==============================================
     [PSCustomObject]@{
         Name     = "Enable SSD TRIM"
-        Desc     = "Aktiviert TRIM fuer alle angeschlossenen SSDs. TRIM informiert die SSD ueber nicht mehr benoetigte Datenbloecke - haelt die SSD-Performance langfristig auf hohem Niveau und verlaengert die Lebensdauer."
+        Desc     = "Aktiviert TRIM für alle angeschlossenen SSDs. TRIM informiert die SSD über nicht mehr benötigte Datenblöcke - haelt die SSD-Performance langfristig auf hohem Niveau und verlängert die Lebensdauer."
         Category = "RAM & Storage"
         Group    = "SSD & NVMe"
         Action   = {
@@ -1843,7 +1952,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Scheduled Defragmentation"
-        Desc     = "Deaktiviert die automatische geplante Defragmentierung. Auf SSDs absolut nicht empfohlen - Defrag schadet SSDs und ist voellig unnoetig. Windows erkennt SSDs normalerweise korrekt, aber dieser Tweak stellt es sicher ab."
+        Desc     = "Schaltet die wöchentliche Aufgabe 'Laufwerke optimieren' ab. Auf Festplatten (HDD) ist das die Defragmentierung, auf SSDs nur ein 'Retrim', das der SSD die freien Blöcke meldet - Windows defragmentiert SSDs nicht. Nur sinnvoll, wenn du die Optimierung selbst anstoßen willst (Laufwerke optimieren > Optimieren); für SSDs nicht zu empfehlen. In keinem Preset."
         Category = "RAM & Storage"
         Group    = "SSD & NVMe"
         Action   = {
@@ -1852,35 +1961,11 @@ $AllTweaks = @(
             Write-Log "Scheduled Defragmentation disabled"
         }
     },
-    [PSCustomObject]@{
-        Name     = "Optimize NVMe Queue Depth"
-        Desc     = "Optimiert die Queue Depth fuer NVMe-Laufwerke. Erhoehte Queue Depth erlaubt mehr parallele I/O-Operationen - verbessert Lese-/Schreibgeschwindigkeit bei NVMe SSDs merklich. Wird automatisch uebersprungen wenn kein NVMe erkannt."
-        Category = "RAM & Storage"
-        Group    = "SSD & NVMe"
-        Action   = {
-            if ($HasNVMe) {
-                foreach ($disk in $NVMeDisks) {
-                    $pnpId = $disk.PNPDeviceID
-                    # Path 1: per-device StorPort queue depth (most controllers)
-                    $regPath1 = "HKLM\SYSTEM\CurrentControlSet\Enum\$pnpId\Device Parameters\StorPort"
-                    reg add "$regPath1" /v QueueDepth /t REG_DWORD /d 32 /f | Out-Null
-                    # Path 2: interrupt affinity priority (Samsung/WD/Seagate NVMe)
-                    $regPath2 = "HKLM\SYSTEM\CurrentControlSet\Enum\$pnpId\Device Parameters\Interrupt Management\Affinity Policy"
-                    reg add "$regPath2" /v DevicePriority /t REG_DWORD /d 2 /f | Out-Null
-                }
-                # Global stornvme driver: disable idle power management for lower latency
-                reg add "HKLM\SYSTEM\CurrentControlSet\Services\stornvme\Parameters\Device" /v IdlePowerEnabled /t REG_DWORD /d 0 /f 2>$null | Out-Null
-                Write-Log ("NVMe Queue Depth optimized (" + $NVMeDisks.Count + " drive(s))")
-            } else {
-                Write-Log "NVMe Queue Depth skipped (no NVMe drive detected)"
-            }
-        }
-    },
 
     # == RAM & STORAGE / MAINTENANCE ======================================
     [PSCustomObject]@{
         Name     = "Disable Write-Cache Buffer Flushing"
-        Desc     = "Deaktiviert das erzwungene Leeren des Schreibcache-Puffers bei SSDs. Verbessert die Schreibgeschwindigkeit spuerbar (wie das Haekchen im Geraete-Manager). Bei Stromausfall koennen noch nicht geschriebene Daten verloren gehen - nur fuer Desktop-PCs mit stabiler Stromversorgung bzw. USV."
+        Desc     = "Deaktiviert das erzwungene Leeren des Schreibcache-Puffers bei SSDs. Verbessert die Schreibgeschwindigkeit spürbar (wie das Häkchen im Geräte-Manager). Bei Stromausfall können noch nicht geschriebene Daten verloren gehen - nur für Desktop-PCs mit stabiler Stromversorgung bzw. USV."
         Category = "RAM & Storage"
         Group    = "SSD & NVMe"
         Action   = {
@@ -1908,7 +1993,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Hibernation"
-        Desc     = "Deaktiviert den Ruhezustand (Hibernate) und loescht hiberfil.sys. Gibt mehrere GB Festplattenplatz (entspricht dem RAM) frei. Schnellstart bleibt davon unabhaengig. Empfohlen fuer Desktop-PCs."
+        Desc     = "Deaktiviert den Ruhezustand (Hibernate) und löscht hiberfil.sys. Gibt mehrere GB Speicherplatz frei (rund 40 % des RAMs). Damit ist auch der Schnellstart aus - er braucht den Ruhezustand; Windows fährt dann komplett herunter und startet ein paar Sekunden länger. Empfohlen für Desktop-PCs."
         Category = "RAM & Storage"
         Group    = "Maintenance"
         Action   = {
@@ -1944,7 +2029,7 @@ $AllTweaks = @(
     # == RAM & STORAGE / DEEP CLEAN (Kudu-style multi-category cleanup) ====
     [PSCustomObject]@{
         Name     = "Clean Browser Caches"
-        Desc     = "Leert die Caches von Chrome, Edge und Firefox (nur Cache, keine Passwoerter/Verlauf/Lesezeichen). Gibt oft mehrere hundert MB frei. Browser sollten geschlossen sein."
+        Desc     = "Leert die Caches von Chrome, Edge und Firefox (nur Cache, keine Passwörter/Verlauf/Lesezeichen). Gibt oft mehrere hundert MB frei. Browser sollten geschlossen sein."
         Category = "RAM & Storage"
         Group    = "Deep Clean"
         Action   = {
@@ -1960,7 +2045,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Clean Windows Update Cache"
-        Desc     = "Loescht den heruntergeladenen Windows-Update-Cache (SoftwareDistribution\Download). Sicher -- Windows laedt bei Bedarf neu. Der Update-Dienst wird kurz gestoppt und wieder gestartet."
+        Desc     = "Loescht den heruntergeladenen Windows-Update-Cache (SoftwareDistribution\Download). Sicher -- Windows lädt bei Bedarf neu. Der Update-Dienst wird kurz gestoppt und wieder gestartet."
         Category = "RAM & Storage"
         Group    = "Deep Clean"
         Action   = {
@@ -1982,7 +2067,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Empty Recycle Bin"
-        Desc     = "Leert den Papierkorb aller Laufwerke endgueltig. Achtung: geloeschte Dateien sind danach nicht mehr wiederherstellbar."
+        Desc     = "Leert den Papierkorb aller Laufwerke endgültig. Achtung: gelöschte Dateien sind danach nicht mehr wiederherstellbar."
         Category = "RAM & Storage"
         Group    = "Deep Clean"
         Action   = {
@@ -1992,7 +2077,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Clean Prefetch Data"
-        Desc     = "Loescht die Prefetch-Dateien (.pf). Windows baut sie beim naechsten Start neu auf. Kann bei veralteten Eintraegen helfen -- der erste Boot danach ist minimal langsamer."
+        Desc     = "Loescht die Prefetch-Dateien (.pf). Windows baut sie beim nächsten Start neu auf. Kann bei veralteten Einträgen helfen -- der erste Boot danach ist minimal langsamer."
         Category = "RAM & Storage"
         Group    = "Deep Clean"
         Action   = {
@@ -2002,7 +2087,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Clean System Logs & Crash Dumps"
-        Desc     = "Loescht Windows-Temp, CBS-Logs, Crash-Dumps und Fehlerbericht-Dateien. Rein diagnostische Dateien -- gefahrlos zu entfernen, gibt oft spuerbar Platz frei."
+        Desc     = "Loescht Windows-Temp, CBS-Logs, Crash-Dumps und Fehlerbericht-Dateien. Rein diagnostische Dateien -- gefahrlos zu entfernen, gibt oft spürbar Platz frei."
         Category = "RAM & Storage"
         Group    = "Deep Clean"
         Action   = {
@@ -2021,7 +2106,7 @@ $AllTweaks = @(
     # == WINDOWS 11 SPECIFIC ==============================================
     [PSCustomObject]@{
         Name     = "Restore Classic Right-Click Menu"
-        Desc     = "WIN11: Stellt das klassische Windows 10 Rechtsklick-Menue wieder her. Das neue Win11-Menue versteckt viele Optionen hinter 'Weitere Optionen anzeigen'. Wirkt nach Neustart des Explorers."
+        Desc     = "WIN11: Stellt das klassische Windows 10 Rechtsklick-Menü wieder her. Das neue Win11-Menü versteckt viele Optionen hinter 'Weitere Optionen anzeigen'. Wirkt nach Neustart des Explorers."
         Category = "Windows 11"
         Group    = "Taskbar & Shell"
         Action   = {
@@ -2037,7 +2122,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Left-Align Taskbar"
-        Desc     = "WIN11: Verschiebt die Taskleisten-Icons nach links (wie Windows 10). Windows 11 zentriert Icons standardmaessig. Wirkt nach Explorer-Neustart."
+        Desc     = "WIN11: Verschiebt die Taskleisten-Icons nach links (wie Windows 10). Windows 11 zentriert Icons standardmäßig. Wirkt nach Explorer-Neustart."
         Category = "Windows 11"
         Group    = "Taskbar & Shell"
         Action   = {
@@ -2058,7 +2143,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Recommended in Start Menu"
-        Desc     = "WIN11: Leert den 'Empfohlen'-Bereich im Startmenue auf allen Editionen: keine zuletzt geoeffneten Dateien und keine Tipps oder App-Empfehlungen mehr (das betrifft auch 'Zuletzt verwendet' im Datei-Explorer und die Sprunglisten der Taskleiste). Ganz ausgeblendet wird der Bereich per Richtlinie - laut Microsoft ab Pro; unter Home bleibt er leer stehen."
+        Desc     = "WIN11: Leert den 'Empfohlen'-Bereich im Startmenü auf allen Editionen: keine zuletzt geöffneten Dateien und keine Tipps oder App-Empfehlungen mehr (das betrifft auch 'Zuletzt verwendet' im Datei-Explorer und die Sprunglisten der Taskleiste). Ganz ausgeblendet wird der Bereich per Richtlinie - laut Microsoft ab Pro; unter Home bleibt er leer stehen."
         Category = "Windows 11"
         Group    = "Start Menu"
         Action   = {
@@ -2070,7 +2155,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Enable End Task in Taskbar"
-        Desc     = "WIN11: Aktiviert 'Task beenden' direkt im Rechtsklick-Menue der Taskleiste. Beendet haengende Prozesse ohne Task-Manager oeffnen zu muessen."
+        Desc     = "WIN11: Aktiviert 'Task beenden' direkt im Rechtsklick-Menü der Taskleiste. Beendet hängende Prozesse ohne Task-Manager öffnen zu müssen."
         Category = "Windows 11"
         Group    = "Taskbar & Shell"
         Action   = {
@@ -2080,7 +2165,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Snap Layout Hover Menu"
-        Desc     = "WIN11: Deaktiviert das Snap Layout-Popup das erscheint wenn man mit der Maus ueber den Maximieren-Button faehrt. Verhindert ungewolltes Snappen beim Gaming."
+        Desc     = "WIN11: Deaktiviert das Snap Layout-Popup das erscheint wenn man mit der Maus über den Maximieren-Button fährt. Verhindert ungewolltes Snappen beim Gaming."
         Category = "Windows 11"
         Group    = "Window Management"
         Action   = {
@@ -2090,7 +2175,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Dynamic Lighting"
-        Desc     = "WIN11: Schaltet die Dynamische Beleuchtung von Windows ab (Einstellungen > Personalisierung > Dynamische Beleuchtung). Sonst greift Windows auf RGB-Tastaturen, -Maeuse und -Beleuchtung zu und kann sich mit der Hersteller-Software (iCUE, Armoury Crate, G HUB, SignalRGB) streiten - Effekte flackern oder werden ueberschrieben. Wer RGB nur ueber Windows steuert, laesst sie an."
+        Desc     = "WIN11: Schaltet die Dynamische Beleuchtung von Windows ab (Einstellungen > Personalisierung > Dynamische Beleuchtung). Sonst greift Windows auf RGB-Tastaturen, -Mäuse und -Beleuchtung zu und kann sich mit der Hersteller-Software (iCUE, Armoury Crate, G HUB, SignalRGB) streiten - Effekte flackern oder werden überschrieben. Wer RGB nur über Windows steuert, lässt sie an."
         Category = "Windows 11"
         Group    = "Devices"
         Action   = {
@@ -2102,7 +2187,7 @@ $AllTweaks = @(
     # == AUDIO ============================================================
     [PSCustomObject]@{
         Name     = "Disable Audio Enhancements"
-        Desc     = "Schaltet die Audioverbesserungen (Bass Boost, Raumklang, Equalizer, Lautheitsausgleich) fuer alle angeschlossenen Wiedergabegeraete ab - ueber die Windows-Audio-Schnittstelle, wie die Sound-Systemsteuerung. Den direkten Weg ueber die Registry sperrt Windows 11 inzwischen, aeltere Versionen dieses Tweaks liefen deshalb ins Leere. Reduziert Audio-Latenz und CPU-Last von audiodg.exe. Spaeter angeschlossene Geraete: Tweak erneut anwenden (die Drift-Pruefung meldet sie)."
+        Desc     = "Schaltet die Audioverbesserungen (Bass Boost, Raumklang, Equalizer, Lautheitsausgleich) für alle angeschlossenen Wiedergabegeräte ab - über die Windows-Audio-Schnittstelle, wie die Sound-Systemsteuerung. Den direkten Weg über die Registry sperrt Windows 11 inzwischen, ältere Versionen dieses Tweaks liefen deshalb ins Leere. Reduziert Audio-Latenz und CPU-Last von audiodg.exe. Später angeschlossene Geräte: Tweak erneut anwenden (die Drift-Prüfung meldet sie)."
         Category = "Audio"
         Group    = "Latency & Quality"
         Action   = {
@@ -2121,7 +2206,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Optimize MMCSS Audio Profile"
-        Desc     = "Optimiert das Multimedia Class Scheduler Profil fuer Audio. Setzt Audio auf 'Latency Sensitive' mit hoher Scheduling-Prioritaet. Reduziert Audio-Stottern und Knacken unter CPU-Last."
+        Desc     = "Optimiert das Multimedia Class Scheduler Profil für Audio. Setzt Audio auf 'Latency Sensitive' mit hoher Scheduling-Priorität. Reduziert Audio-Stottern und Knacken unter CPU-Last."
         Category = "Audio"
         Group    = "Latency & Quality"
         Action   = {
@@ -2135,19 +2220,20 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Set Audio Service High Priority"
-        Desc     = "Erhoeht die Systemprioraet fuer Audio-Verarbeitung. Setzt SystemResponsiveness auf 0 (maximale Audio-CPU-Zeit). Verhindert Audio-Aussetzer wenn andere Prozesse die CPU belasten  --  spuerbar bei Gaming + Streaming gleichzeitig."
+        Desc     = "Gibt Audio, Spielen und anderen Multimedia-Aufgaben mehr CPU-Zeit: SystemResponsiveness wird von 20 auf 10 gesetzt, dann reserviert Windows nur noch 10 % statt 20 % der CPU für Hintergrundaufgaben. 10 ist der kleinste Wert, den Windows annimmt - kleinere Werte (früher 0) behandelt Windows laut Microsoft wie 20, also wie ohne Tweak. Hilft gegen Audio-Aussetzer, wenn andere Prozesse die CPU belasten - spürbar bei Gaming und Streaming gleichzeitig."
         Category = "Audio"
         Group    = "Latency & Quality"
         Action   = {
-            reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 0 /f | Out-Null
+            # 10, not 0: Windows treats values below 10 as 20 (= its default) -- Microsoft, MMCSS docs
+            reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 10 /f | Out-Null
             # Ownership marker for the shared SystemResponsiveness value (see reverts)
             reg add "HKLM\SOFTWARE\GameOptimizerPro" /v SR_AudioPriority /t REG_DWORD /d 1 /f | Out-Null
-            Write-Log "Audio SystemResponsiveness set to 0 (maximum audio priority)"
+            Write-Log "SystemResponsiveness set to 10 (the most CPU time Windows gives multimedia and games)"
         }
     },
     [PSCustomObject]@{
         Name     = "Disable Windows Sound Scheme"
-        Desc     = "Deaktiviert alle Windows-Systemklaenge (Start, Fehler, Benachrichtigungen usw.). Keine unerwarteten Sound-Unterbrechungen mehr waehrend Gaming oder Streaming."
+        Desc     = "Deaktiviert alle Windows-Systemklänge (Start, Fehler, Benachrichtigungen usw.). Keine unerwarteten Sound-Unterbrechungen mehr während Gaming oder Streaming."
         Category = "Audio"
         Group    = "System Sounds"
         Action   = {
@@ -2166,7 +2252,7 @@ $AllTweaks = @(
     # == GPU TWEAKS (AMD) =================================================
     [PSCustomObject]@{
         Name     = "AMD: Disable ULPS (Ultra Low Power State)"
-        Desc     = "AMD only: Deaktiviert Ultra Low Power State. ULPS versetzt inaktive GPUs (Multi-GPU) in extremen Stromsparmodus und kann beim Aufwachen zu Stottern fuehren. Auch bei Single-GPU sinnvoll deaktivieren."
+        Desc     = "AMD only: Deaktiviert Ultra Low Power State. ULPS versetzt inaktive GPUs (Multi-GPU) in extremen Stromsparmodus und kann beim Aufwachen zu Stottern führen. Auch bei Single-GPU sinnvoll deaktivieren."
         Category = "GPU Tweaks"
         Group    = "AMD"
         Action   = {
@@ -2179,40 +2265,11 @@ $AllTweaks = @(
             } else { Write-Log "GPU Tweak skipped: no AMD GPU detected ($GPU)" }
         }
     },
-    [PSCustomObject]@{
-        Name     = "AMD: Shader Cache (Unlimited)"
-        Desc     = "AMD only: Setzt den AMD Shader Cache auf maximale Groesse. Verhindert Cache-Eviction und erzwingt weniger Shader-Rekompilierungen. Reduziert In-Game Stutter besonders in OpenGL/Vulkan-Titeln."
-        Category = "GPU Tweaks"
-        Group    = "AMD"
-        Action   = {
-            if ($IsAMD) {
-                reg add "HKLM\SOFTWARE\ATI Technologies\CBT" /v ShaderCacheSizePC /t REG_DWORD /d 0xffffffff /f 2>$null | Out-Null
-                foreach ($k in @(Get-AmdGpuKeys)) {
-                    Set-ItemProperty -Path $k.PSPath -Name "KMD_EnableComputePreemption" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-                }
-                Write-Log "AMD: Shader Cache size maximized"
-            } else { Write-Log "GPU Tweak skipped: no AMD GPU detected ($GPU)" }
-        }
-    },
-    [PSCustomObject]@{
-        Name     = "AMD: Anti-Lag (Low Latency Mode)"
-        Desc     = "AMD only: Aktiviert AMD Anti-Lag via Registry. Reduziert den Abstand zwischen CPU-Input und GPU-Ausgabe  --  aehnlich wie NVIDIA Reflex. Effektiv bei CPU-limitierten Spielen mit AMD RX 5000+."
-        Category = "GPU Tweaks"
-        Group    = "AMD"
-        Action   = {
-            if ($IsAMD) {
-                foreach ($k in @(Get-AmdGpuKeys)) {
-                    Set-ItemProperty -Path $k.PSPath -Name "EnableAntiLag" -Value 1 -Type DWord -ErrorAction SilentlyContinue
-                }
-                Write-Log "AMD: Anti-Lag enabled"
-            } else { Write-Log "GPU Tweak skipped: no AMD GPU detected ($GPU)" }
-        }
-    },
 
     # == POWER PLAN =======================================================
     [PSCustomObject]@{
         Name     = "Disable USB Selective Suspend"
-        Desc     = "Deaktiviert USB Selective Suspend global. Windows schickt dann keine USB-Geraete mehr in den Schlafmodus. Verhindert Verbindungsabbrueche bei USB-Maus, Headset und Controllern unter Last."
+        Desc     = "Deaktiviert USB Selective Suspend global. Windows schickt dann keine USB-Geräte mehr in den Schlafmodus. Verhindert Verbindungsabbrüche bei USB-Maus, Headset und Controllern unter Last."
         Category = "Power Plan"
         Group    = "USB & PCI"
         Action   = {
@@ -2222,7 +2279,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable USB 3 Link Power Management"
-        Desc     = "Schaltet die Stromsparzustaende der USB-3-Verbindungen (U1/U2) in allen Energieplaenen ab. Die Verbindung zu USB-3-Geraeten (Headset-DACs, Capture-Karten, externe SSDs, VR-Brillen) muss dann nicht erst aufwachen - hilft gegen Aussetzer und kurze Ruckler. Ergaenzt 'Disable USB Selective Suspend' (das schickt ganze Geraete schlafen, dies nur die Verbindung). Windows blendet diese Einstellung in den Energieoptionen aus. Etwas mehr Stromverbrauch."
+        Desc     = "Schaltet die Stromsparzustände der USB-3-Verbindungen (U1/U2) in allen Energieplänen ab. Die Verbindung zu USB-3-Geräten (Headset-DACs, Capture-Karten, externe SSDs, VR-Brillen) muss dann nicht erst aufwachen - hilft gegen Aussetzer und kurze Ruckler. Ergänzt 'Disable USB Selective Suspend' (das schickt ganze Geräte schlafen, dies nur die Verbindung). Windows blendet diese Einstellung in den Energieoptionen aus. Etwas mehr Stromverbrauch."
         Category = "Power Plan"
         Group    = "USB & PCI"
         Action   = {
@@ -2242,7 +2299,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Hard Disk Sleep"
-        Desc     = "Setzt die Festplatten-Schlaf-Zeit auf 0 (niemals). Verhindert das bekannte Stottern nach laenger Inaktivitaet wenn eine HDD/SSD aus dem Schlaf aufwacht. Empfohlen fuer Gaming-PCs."
+        Desc     = "Setzt die Festplatten-Schlaf-Zeit auf 0 (niemals). Verhindert das bekannte Stottern nach länger Inaktivität wenn eine HDD/SSD aus dem Schlaf aufwacht. Empfohlen für Gaming-PCs."
         Category = "Power Plan"
         Group    = "Storage"
         Action   = {
@@ -2252,7 +2309,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Set Display Sleep = 15 Minutes"
-        Desc     = "Setzt den Monitor-Schlaf-Timer auf 15 Minuten (AC) und 5 Minuten (Akku). Verhindert dass der Monitor mitten im Spielen abschaltet, spart aber trotzdem Energie bei laengerer Pause."
+        Desc     = "Setzt den Monitor-Schlaf-Timer auf 15 Minuten (AC) und 5 Minuten (Akku). Verhindert dass der Monitor mitten im Spielen abschaltet, spart aber trotzdem Energie bei längerer Pause."
         Category = "Power Plan"
         Group    = "Display"
         Action   = {
@@ -2262,7 +2319,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Sleep (System)"
-        Desc     = "Deaktiviert den System-Schlafmodus komplett. Der PC schlaeft nicht mehr nach Inaktivitaet ein. Empfohlen fuer Desktop-PCs die im Hintergrund laufen sollen (z.B. Downloads, Server)."
+        Desc     = "Deaktiviert den System-Schlafmodus komplett. Der PC schläft nicht mehr nach Inaktivität ein. Empfohlen für Desktop-PCs die im Hintergrund laufen sollen (z.B. Downloads, Server)."
         Category = "Power Plan"
         Group    = "Sleep"
         Action   = {
@@ -2272,7 +2329,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Wake Timers"
-        Desc     = "Geplante Aufgaben (z.B. Neustarts nach Windows-Updates und die automatische Wartung) duerfen den PC nicht mehr aus dem Energiesparmodus wecken - kein PC mehr, der nachts von allein anspringt. Aufwecken per Maus, Tastatur oder Netzwerk (Wake-on-LAN) bleibt. Gilt fuer alle Energieplaene; spielt nur eine Rolle, wenn der PC in den Energiesparmodus geht."
+        Desc     = "Geplante Aufgaben (z.B. Neustarts nach Windows-Updates und die automatische Wartung) dürfen den PC nicht mehr aus dem Energiesparmodus wecken - kein PC mehr, der nachts von allein anspringt. Aufwecken per Maus, Tastatur oder Netzwerk (Wake-on-LAN) bleibt. Gilt für alle Energiepläne; spielt nur eine Rolle, wenn der PC in den Energiesparmodus geht."
         Category = "Power Plan"
         Group    = "Sleep"
         Action   = {
@@ -2282,7 +2339,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "CPU Minimum Processor State = 100%"
-        Desc     = "Setzt den minimalen CPU-Zustand auf 100%. Die CPU laeuft dann staendig mit voller Taktrate ohne herunterzuregeln. Eliminiert die kurze Verzoegerung beim Hochregeln von Idle  --  wichtig fuer konstante FPS."
+        Desc     = "Setzt den minimalen CPU-Zustand auf 100%. Die CPU läuft dann ständig mit voller Taktrate ohne herunterzuregeln. Eliminiert die kurze Verzögerung beim Hochregeln von Idle  --  wichtig für konstante FPS."
         Category = "Power Plan"
         Group    = "CPU"
         Action   = {
@@ -2292,7 +2349,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "CPU Maximum Processor State = 100%"
-        Desc     = "Setzt den maximalen CPU-Zustand auf 100% und stellt sicher dass Windows die CPU nie kuenstlich deckelt. Relevant auf Laptops und Systemen mit aggressiver Thermal-Policy."
+        Desc     = "Setzt den maximalen CPU-Zustand auf 100% und stellt sicher dass Windows die CPU nie künstlich deckelt. Relevant auf Laptops und Systemen mit aggressiver Thermal-Policy."
         Category = "Power Plan"
         Group    = "CPU"
         Action   = {
@@ -2310,14 +2367,14 @@ $RevertActions = @{
 
     # == BLOATWARE (apps removed  --  registry parts only) ===================
     "Remove Xbox Apps" = {
-        Write-Log "Revert Xbox Apps: apps were removed  --  needs System Restore to reinstall"
+        Write-Log "Revert Xbox Apps: removed apps stay removed -- reinstall them from the Microsoft Store (Xbox app, Game Bar) or use System Restore"
     }
     "Remove Copilot" = {
         reg delete "HKCU\Software\Policies\Microsoft\Windows\WindowsCopilot" /v TurnOffWindowsCopilot /f 2>$null
-        Write-Log "Revert Copilot: policy key removed (app needs System Restore)"
+        Write-Log "Revert Copilot: policy removed -- the Copilot app comes back from the Microsoft Store"
     }
     "Remove OneDrive" = {
-        Write-Log "Revert OneDrive: app was removed  --  needs System Restore to reinstall"
+        Write-Log "Revert OneDrive: stays removed -- reinstall it with OneDriveSetup.exe (Windows\System32) or from microsoft.com"
     }
     "Remove Windows Recall" = {
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v DisableAIDataAnalysis /f 2>$null
@@ -2325,7 +2382,7 @@ $RevertActions = @{
         Write-Log "Revert Recall: policies removed (Recall can be re-added via Windows Features / Windows Update)"
     }
     "Remove Other Bloatware" = {
-        Write-Log "Revert Bloatware: apps were removed  --  needs System Restore to reinstall"
+        Write-Log "Revert Bloatware: removed apps stay removed -- reinstall the ones you want from the Microsoft Store"
     }
     "Stop Auto-Installed Suggested Apps" = {
         # Windows ships these three values as 1 (auto-install allowed)
@@ -2375,8 +2432,9 @@ $RevertActions = @{
         Write-Log "Revert: Bing in Windows Search re-enabled (values removed -- Windows default)"
     }
     "Process Count Reduction (Svchost)" = {
-        reg add "HKLM\SYSTEM\CurrentControlSet\Control" /v SvcHostSplitThresholdInKB /t REG_DWORD /d 380000 /f | Out-Null
-        Write-Log "Revert: Svchost threshold reset to Windows default (380000 KB)"
+        # Windows ships 0x380000 = 3,670,016 KB (3.5 GB). Until 1.2.5 this wrote 380000 decimal (~370 MB).
+        reg add "HKLM\SYSTEM\CurrentControlSet\Control" /v SvcHostSplitThresholdInKB /t REG_DWORD /d 3670016 /f | Out-Null
+        Write-Log "Revert: Svchost split threshold back to the Windows default (0x380000 = 3.5 GB)"
     }
     "Disable Startup App Delay" = {
         reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize" /v StartupDelayInMSec /f 2>$null
@@ -2385,6 +2443,12 @@ $RevertActions = @{
     "Block Background Apps (Policy)" = {
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" /v LetAppsRunInBackground /f 2>$null
         Write-Log "Revert: background apps policy removed (user decides again)"
+    }
+    "Stop Background Apps (All Editions)" = {
+        reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" /v GlobalUserDisabled /f 2>$null
+        # the undocumented kernel value the old "Disable Background App Throttling" (until 1.2.5) wrote too
+        reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" /v DisableLowQosTimerResolution /f 2>$null
+        Write-Log "Revert: Store apps may run in the background again"
     }
 
     # == WINDOWS UPDATE ====================================================
@@ -2418,10 +2482,6 @@ $RevertActions = @{
         # Remove only the Deny entry again -- /grant would leave an extra explicit Allow behind
         if (Test-Path $storeDb) { icacls "$storeDb" /remove:d "*S-1-1-0" 2>$null | Out-Null }
         Write-Log "Revert: Store recommended search results re-enabled (store.db unlocked)"
-    }
-    "Enable Start Menu Previous Layout" = {
-        reg delete "HKLM\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\8\3036241548" /v EnabledState /f 2>$null
-        Write-Log "Revert: Start Menu layout override removed"
     }
     "Disable File Explorer Automatic Folder Discovery" = {
         $bags   = "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags"
@@ -2676,18 +2736,13 @@ $RevertActions = @{
         reg delete "HKCU\System\GameConfigStore" /v GameDVR_FSEBehavior /f 2>$null
         Write-Log "Revert: Fullscreen Optimizations keys removed (Windows default)"
     }
-    "Disable Windows Update during Gaming" = {
+    "Disable Automatic Windows Updates" = {
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /f 2>$null
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v AUOptions /f 2>$null
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v SetActiveHours /f 2>$null
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v ActiveHoursStart /f 2>$null
         reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v ActiveHoursEnd /f 2>$null
         Write-Log "Revert: Windows Update policies removed (auto-update default restored)"
-    }
-    "Disable Background App Throttling" = {
-        reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" /v DisableLowQosTimerResolution /f 2>$null
-        reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" /v GlobalUserDisabled /f 2>$null
-        Write-Log "Revert: Background App Throttling restored"
     }
 
     # == GAMING  --  GPU & DRIVER ============================================
@@ -2705,8 +2760,14 @@ $RevertActions = @{
         }
     }
     "Enable Hardware-Accelerated GPU Scheduling (HAGS)" = {
-        reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 1 /f | Out-Null
-        Write-Log "Revert: HAGS disabled (HwSchMode=1)"
+        # Back to what was set before the Apply (saved since 1.2.6). Without a saved value the
+        # value is removed and Windows decides again -- on current GPUs that is ON (DLSS Frame
+        # Generation needs it). Until 1.2.5 this wrote 1 = off.
+        $b = Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "HwSchModeBefore"
+        if ($null -ne $b -and $b -ne 0) { reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d $b /f | Out-Null }
+        else { reg delete "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /f 2>$null }
+        reg delete "HKLM\SOFTWARE\GameOptimizerPro" /v HwSchModeBefore /f 2>$null
+        Write-Log "Revert: HAGS back to $(if ($null -ne $b -and $b -ne 0) { "the setting from before ($b)" } else { 'the Windows default (value removed)' })"
     }
     "Clear Shader Cache" = {
         Write-Log "Revert: Shader Cache cleared  --  nothing to restore (cache rebuilds automatically)"
@@ -2757,19 +2818,8 @@ $RevertActions = @{
         netsh int tcp set global autotuninglevel=normal 2>$null | Out-Null
         Write-Log "Revert: TCP Auto-Tuning restored to normal"
     }
-    "Optimize TCP Settings (ECN/SACK/Timestamps)" = {
-        netsh int tcp set global ecncapability=enabled 2>$null | Out-Null
-        netsh int tcp set global timestamps=enabled 2>$null | Out-Null
-        reg delete "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v SackOpts /f 2>$null
-        reg delete "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v TcpMaxDupAcks /f 2>$null
-        Write-Log "Revert: TCP settings restored to Windows defaults"
-    }
 
     # == NETWORK  --  QOS ====================================================
-    "Disable QoS Packet Scheduler Limit" = {
-        reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\Psched" /v NonBestEffortLimit /f 2>$null
-        Write-Log "Revert: QoS bandwidth limit key removed (20% default restored)"
-    }
 
     # == NETWORK  --  ADAPTER ================================================
     "Disable Network Adapter Power Saving" = {
@@ -2818,19 +2868,6 @@ $RevertActions = @{
         schtasks /Change /TN "\Microsoft\Windows\Defrag\ScheduledDefrag" /Enable 2>$null | Out-Null
         reg delete "HKLM\SOFTWARE\Microsoft\Dfrg\BootOptimizeFunction" /v Enable /f 2>$null
         Write-Log "Revert: Scheduled Defragmentation re-enabled"
-    }
-    "Optimize NVMe Queue Depth" = {
-        if ($HasNVMe) {
-            foreach ($disk in $NVMeDisks) {
-                $pnpId = $disk.PNPDeviceID
-                reg delete "HKLM\SYSTEM\CurrentControlSet\Enum\$pnpId\Device Parameters\StorPort" /v QueueDepth /f 2>$null
-                reg delete "HKLM\SYSTEM\CurrentControlSet\Enum\$pnpId\Device Parameters\Interrupt Management\Affinity Policy" /v DevicePriority /f 2>$null
-            }
-            reg delete "HKLM\SYSTEM\CurrentControlSet\Services\stornvme\Parameters\Device" /v IdlePowerEnabled /f 2>$null
-            Write-Log "Revert: NVMe registry keys removed (defaults restored)"
-        } else {
-            Write-Log "Revert: NVMe Queue Depth skipped (no NVMe detected)"
-        }
     }
     "Disable Write-Cache Buffer Flushing" = {
         $disks = Get-WmiObject -Query "SELECT * FROM Win32_DiskDrive" |
@@ -2958,61 +2995,43 @@ $RevertActions = @{
             Write-Log "Revert: AMD ULPS re-enabled"
         }
     }
-    "AMD: Shader Cache (Unlimited)" = {
-        if ($IsAMD) {
-            reg delete "HKLM\SOFTWARE\ATI Technologies\CBT" /v ShaderCacheSizePC /f 2>$null
-            # The Apply also turned compute preemption off -- give it back to the driver
-            foreach ($k in @(Get-AmdGpuKeys)) { Remove-ItemProperty -Path $k.PSPath -Name "KMD_EnableComputePreemption" -ErrorAction SilentlyContinue }
-            Write-Log "Revert: AMD Shader Cache and compute preemption back to driver default"
-        }
-    }
-    "AMD: Anti-Lag (Low Latency Mode)" = {
-        if ($IsAMD) {
-            foreach ($k in @(Get-AmdGpuKeys)) { Remove-ItemProperty -Path $k.PSPath -Name "EnableAntiLag" -ErrorAction SilentlyContinue }
-            Write-Log "Revert: AMD Anti-Lag key removed (driver default)"
-        }
-    }
 
     # == POWER PLAN =======================================================
     "Disable USB Selective Suspend" = {
-        Set-PowerAllSchemes "2a737441-1930-4402-8d77-b2bebba308a3" "48e6b7a6-50f5-4782-a5d4-53bb8f07e226" 1
-        Write-Log "Revert: USB Selective Suspend re-enabled (all power schemes)"
+        $n = Reset-PowerSetting "2a737441-1930-4402-8d77-b2bebba308a3" "48e6b7a6-50f5-4782-a5d4-53bb8f07e226"
+        Write-Log "Revert: USB Selective Suspend back to the Windows default of each power plan ($n plan(s))"
     }
     "Disable USB 3 Link Power Management" = {
-        # The Windows default from the setting's own definition (2 = moderate power savings on
-        # 26H2 in Balanced, High performance and Power saver); 2 if it can't be read
-        $def = Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerSettings\2a737441-1930-4402-8d77-b2bebba308a3\d4e98f31-5ffe-4ce1-be31-1b38b384c009\DefaultPowerSchemeValues\381b4222-f694-41f0-9685-ff5bb260df2e" "ACSettingIndex"
-        if ($null -eq $def) { $def = 2 }
-        Set-PowerAllSchemes "2a737441-1930-4402-8d77-b2bebba308a3" "d4e98f31-5ffe-4ce1-be31-1b38b384c009" ([int]$def)
-        Write-Log "Revert: USB 3 link power management back to the Windows default ($def, all power schemes)"
+        $n = Reset-PowerSetting "2a737441-1930-4402-8d77-b2bebba308a3" "d4e98f31-5ffe-4ce1-be31-1b38b384c009"
+        Write-Log "Revert: USB 3 link power management back to the Windows default of each power plan ($n plan(s))"
     }
     "Disable PCI-E Link State Power Management" = {
-        Set-PowerAllSchemes "SUB_PCIEXPRESS" "ASPM" 2
-        Write-Log "Revert: PCI-E ASPM set back to Moderate (all power schemes)"
+        $n = Reset-PowerSetting "501a4d13-42af-4429-9fd1-a8218c268e20" "ee12f906-d277-404b-b6da-e5fa1a576df5"
+        Write-Log "Revert: PCI-E link state power management back to the Windows default of each power plan ($n plan(s))"
     }
     "Disable Hard Disk Sleep" = {
-        Set-PowerAllSchemes "SUB_DISK" "DISKIDLE" 1800 600
-        Write-Log "Revert: Hard Disk Sleep restored (30 min AC / 10 min DC, all power schemes)"
+        $n = Reset-PowerSetting "0012ee47-9041-4b5d-9b77-535fba8b1442" "6738e2c4-e8a5-4a42-b16a-e040e769756e"
+        Write-Log "Revert: hard disk sleep back to the Windows default of each power plan ($n plan(s))"
     }
     "Set Display Sleep = 15 Minutes" = {
-        Set-PowerAllSchemes "SUB_VIDEO" "VIDEOIDLE" 600 120
-        Write-Log "Revert: Display Sleep restored (10 min AC / 2 min DC, all power schemes)"
+        $n = Reset-PowerSetting "7516b95f-f776-4464-8c53-06167f40cc99" "3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e"
+        Write-Log "Revert: display sleep back to the Windows default of each power plan ($n plan(s))"
     }
     "Disable Sleep (System)" = {
-        Set-PowerAllSchemes "SUB_SLEEP" "STANDBYIDLE" 3600 1800
-        Write-Log "Revert: System Sleep restored (60 min AC / 30 min DC, all power schemes)"
+        $n = Reset-PowerSetting "238c9fa8-0aad-41ed-83f4-97be242c8f20" "29f6c1db-86da-48c5-9fdb-f2b67b1f44da"
+        Write-Log "Revert: system sleep back to the Windows default of each power plan ($n plan(s))"
     }
     "Disable Wake Timers" = {
-        Set-PowerAllSchemes "SUB_SLEEP" "RTCWAKE" 1 0          # Windows default: on (AC) / off (battery)
-        Write-Log "Revert: wake timers allowed again (AC on / battery off, all power schemes)"
+        $n = Reset-PowerSetting "238c9fa8-0aad-41ed-83f4-97be242c8f20" "bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d"
+        Write-Log "Revert: wake timers back to the Windows default of each power plan ($n plan(s))"
     }
     "CPU Minimum Processor State = 100%" = {
-        Set-PowerAllSchemes "SUB_PROCESSOR" "PROCTHROTTLEMIN" 5
-        Write-Log "Revert: CPU Minimum Processor State restored to 5% (all power schemes)"
+        $n = Reset-PowerSetting "54533251-82be-4824-96c1-47b60b740d00" "893dee8e-2bef-41e0-89c6-b55d0929964c"
+        Write-Log "Revert: CPU minimum processor state back to the Windows default of each power plan ($n plan(s))"
     }
     "CPU Maximum Processor State = 100%" = {
-        Set-PowerAllSchemes "SUB_PROCESSOR" "PROCTHROTTLEMAX" 100
-        Write-Log "Revert: CPU Maximum Processor State confirmed at 100% (all power schemes)"
+        $n = Reset-PowerSetting "54533251-82be-4824-96c1-47b60b740d00" "bc5038f7-23e0-4960-96da-33abaf5935ec"
+        Write-Log "Revert: CPU maximum processor state back to the Windows default of each power plan ($n plan(s))"
     }
 }
 
@@ -3036,20 +3055,18 @@ function Get-TaskState([string]$Path, [string]$Name) {
 $CheckFunctions = @{
 
     # BLOATWARE
-    "Remove Xbox Apps"                   = { $null -eq (Get-AppxPackage -AllUsers "*XboxGamingOverlay*" -EA SilentlyContinue | Select-Object -First 1) }
+    # Every package the Apply removes, for every account (Microsoft.XboxGameCallableUI is part of Windows)
+    "Remove Xbox Apps"                   = { $pats = Get-XboxPatterns; $null -eq (Get-AppxPackage -AllUsers "Microsoft.Xbox*" -EA Stop | Where-Object { $pats -contains $_.Name -and -not $_.NonRemovable } | Select-Object -First 1) }
     # Check the APP, not the policy: Microsoft marks TurnOffWindowsCopilot as deprecated
     # and it doesn't apply to the new Copilot app -- the policy could stay green while
     # an update had quietly reinstalled Copilot. NonRemovable system packages are
     # skipped because the Apply can't remove them either.
     "Remove Copilot"                     = { $null -eq (Get-AppxPackage -AllUsers "*Copilot*" -EA SilentlyContinue | Where-Object { -not $_.NonRemovable } | Select-Object -First 1) }
-    "Remove OneDrive"                    = { -not (Test-Path "$env:LOCALAPPDATA\Microsoft\OneDrive\OneDrive.exe") }
+    # per-user install (AppData) or machine-wide (Program Files)
+    "Remove OneDrive"                    = { -not (@("$env:LOCALAPPDATA\Microsoft\OneDrive\OneDrive.exe", "$env:ProgramFiles\Microsoft OneDrive\OneDrive.exe", "${env:ProgramFiles(x86)}\Microsoft OneDrive\OneDrive.exe") | Where-Object { Test-Path $_ }) }
     "Remove Windows Recall"              = { ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableAIDataAnalysis") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "AllowRecallEnablement") -eq 0) }
     # Active when none of the removable apps from the list is installed for any user
-    "Remove Other Bloatware"             = {
-        $pats = Get-BloatPatterns
-        $left = @(Get-AppxPackage -AllUsers -ErrorAction Stop | Where-Object { $n = $_.Name; -not $_.NonRemovable -and @($pats | Where-Object { $n -like $_ }).Count })
-        $left.Count -eq 0
-    }
+    "Remove Other Bloatware"             = { @(Get-BloatApps).Count -eq 0 }
     "Stop Auto-Installed Suggested Apps" = {
         $cdm = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
         ((Get-RegVal $cdm "SilentInstalledAppsEnabled") -eq 0) -and ((Get-RegVal $cdm "OemPreInstalledAppsEnabled") -eq 0) -and ((Get-RegVal $cdm "PreInstalledAppsEnabled") -eq 0)
@@ -3079,9 +3096,12 @@ $CheckFunctions = @{
         ((Get-RegVal "HKCU:\SOFTWARE\Policies\Microsoft\Windows\Explorer" "DisableSearchBoxSuggestions") -eq 1) -and
         ((Get-RegVal $ss "IsDynamicSearchBoxEnabled") -eq 0) -and ((Get-RegVal $ss "IsMSACloudSearchEnabled") -eq 0) -and ((Get-RegVal $ss "IsAADCloudSearchEnabled") -eq 0)
     }
-    "Process Count Reduction (Svchost)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control" "SvcHostSplitThresholdInKB") -gt 380000 }
+    # Active when the threshold is at least the RAM size (what the Apply writes) and not the Windows
+    # default 0x380000 = 3,670,016 KB -- "> 380000" was true on every untouched Windows
+    "Process Count Reduction (Svchost)" = { $v = Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control" "SvcHostSplitThresholdInKB"; $ram = [math]::Round((Get-WmiObject Win32_ComputerSystem).TotalPhysicalMemory / 1024); ($null -ne $v) -and ($ram -gt 0) -and ([int64]$v -ne 3670016) -and ([int64]$v -ge $ram) }
     "Disable Startup App Delay" = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize" "StartupDelayInMSec") -eq 0 }
     "Block Background Apps (Policy)" = { if (Test-HomeEdition) { return $null }; (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" "LetAppsRunInBackground") -eq 2 }
+    "Stop Background Apps (All Editions)" = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" "GlobalUserDisabled") -eq 1 }
 
     # WINDOWS UPDATE
     "Exclude Drivers from Windows Update" = { if (Test-HomeEdition) { return $null }; (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" "ExcludeWUDriversInQualityUpdate") -eq 1 }
@@ -3103,7 +3123,6 @@ $CheckFunctions = @{
         if (-not (Test-Path $storeDb)) { return $null }
         try { [bool]([regex]::IsMatch((Get-Acl -LiteralPath $storeDb -ErrorAction Stop).Sddl, '\(D;[^)]*;;;WD\)')) } catch { $null }
     }
-    "Enable Start Menu Previous Layout" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\FeatureManagement\Overrides\8\3036241548" "EnabledState") -eq 1 }
     "Disable File Explorer Automatic Folder Discovery" = { (Get-RegVal "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell" "FolderType") -eq "NotSpecified" }
     "Run Disk Cleanup" = { $null }
 
@@ -3168,7 +3187,8 @@ $CheckFunctions = @{
         ($b -match 'useplatformtick\s+Yes') -and ($b -match 'disabledynamictick\s+Yes')
     }
     "Allow Global Timer Resolution (Windows 11)"         = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\kernel" "GlobalTimerResolutionRequests") -eq 1 }
-    "Disable Prefetch & Superfetch"      = { (($s=Get-Service SysMain -EA SilentlyContinue) -and ($s.StartType -eq "Disabled" -or $s.Status -eq "Stopped")) }
+    # SysMain switched off (a stopped service starts again at the next boot) and Prefetch off
+    "Disable Prefetch & Superfetch"      = { $s = Get-Service SysMain -EA SilentlyContinue; ((-not $s) -or $s.StartType -eq "Disabled") -and ((Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" "EnablePrefetcher") -eq 0) }
     "Optimize Visual Effects (Performance Mode)" = {
         $adv = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
         $m = @(Get-RegVal "HKCU:\Control Panel\Desktop" "UserPreferencesMask")
@@ -3192,8 +3212,7 @@ $CheckFunctions = @{
     "CPU Priority for Games (Win32Priority)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation") -eq 26 }
     "MMCSS Gaming Profile (High Priority)" = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" "Scheduling Category") -eq "High" }
     "Disable Fullscreen Optimizations"   = { (Get-RegVal "HKCU:\System\GameConfigStore" "GameDVR_FSEBehaviorMode") -eq 2 }
-    "Disable Windows Update during Gaming" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" "NoAutoUpdate") -eq 1 }
-    "Disable Background App Throttling"  = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" "GlobalUserDisabled") -eq 1 }
+    "Disable Automatic Windows Updates" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" "NoAutoUpdate") -eq 1 }
 
     # GAMING GPU
     "Enable MSI Mode (Message Signaled Interrupts)" = {
@@ -3217,18 +3236,26 @@ $CheckFunctions = @{
         @($lso | Where-Object { $_.IPv4Enabled -or $_.IPv6Enabled }).Count -eq 0
     }
     "Disable Network Throttling Index"   = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "NetworkThrottlingIndex") -eq 4294967295 }
-    "Set DNS to Cloudflare (1.1.1.1)"   = {
+    # IPv4 AND IPv6: an adapter whose IPv6 DNS still comes from the router only half uses the provider
+    "Set DNS to Cloudflare (1.1.1.1)" = {
         $ad = @(Get-UpAdapters); if (-not $ad.Count) { return $null }
-        @($ad | Where-Object { -not ((Get-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4 -EA SilentlyContinue).ServerAddresses -contains "1.1.1.1") }).Count -eq 0
+        @($ad | Where-Object {
+            $v4 = @((Get-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4 -EA SilentlyContinue).ServerAddresses)
+            $v6 = @((Get-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv6 -EA SilentlyContinue).ServerAddresses)
+            ($v4 -notcontains "1.1.1.1") -or ($v6.Count -and ($v6 -notcontains "2606:4700:4700::1111"))
+        }).Count -eq 0
     }
-    "Set DNS to Google (8.8.8.8)"        = {
+    # IPv4 AND IPv6: an adapter whose IPv6 DNS still comes from the router only half uses the provider
+    "Set DNS to Google (8.8.8.8)" = {
         $ad = @(Get-UpAdapters); if (-not $ad.Count) { return $null }
-        @($ad | Where-Object { -not ((Get-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4 -EA SilentlyContinue).ServerAddresses -contains "8.8.8.8") }).Count -eq 0
+        @($ad | Where-Object {
+            $v4 = @((Get-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4 -EA SilentlyContinue).ServerAddresses)
+            $v6 = @((Get-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv6 -EA SilentlyContinue).ServerAddresses)
+            ($v4 -notcontains "8.8.8.8") -or ($v6.Count -and ($v6 -notcontains "2001:4860:4860::8888"))
+        }).Count -eq 0
     }
     "Flush DNS Cache"                    = { $null }
     "Disable TCP Auto-Tuning"            = { (Get-NetTCPSetting -SettingName Internet -EA SilentlyContinue).AutoTuningLevelLocal -eq "Disabled" }
-    "Optimize TCP Settings (ECN/SACK/Timestamps)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" "SackOpts") -eq 1 }
-    "Disable QoS Packet Scheduler Limit" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Psched" "NonBestEffortLimit") -eq 0 }
     "Disable Network Adapter Power Saving" = {
         # Physical adapters only (NCF_PHYSICAL = 0x4 in Characteristics): virtual ones
         # (WAN Miniport, Wi-Fi Direct, Bluetooth PAN, ...) have no power saving that
@@ -3259,11 +3286,6 @@ $CheckFunctions = @{
         if (-not $line) { $null } else { $line -match '=\s*0\b' }
     }
     "Disable Scheduled Defragmentation"  = { (Get-TaskState "\Microsoft\Windows\Defrag" "ScheduledDefrag") -eq "Disabled" }
-    "Optimize NVMe Queue Depth"          = {
-        if (-not $HasNVMe) { return $null }
-        # The Apply writes to every NVMe drive -- active only if every one has it
-        @($NVMeDisks | Where-Object { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Enum\$($_.PNPDeviceID)\Device Parameters\StorPort" "QueueDepth") -ne 32 }).Count -eq 0
-    }
     "Disable Write-Cache Buffer Flushing" = {
         # The Apply writes to every fixed disk -- active only if every one has it
         $d = @(Get-WmiObject -Query "SELECT * FROM Win32_DiskDrive" -EA SilentlyContinue | Where-Object { $null -eq $_.MediaType -or $_.MediaType -eq 3 -or $_.MediaType -eq 4 -or $_.MediaType -eq 'Fixed hard disk media' })
@@ -3308,7 +3330,10 @@ $CheckFunctions = @{
         @($ids | Where-Object { (Get-AudioFx $_) -ne 1 }).Count -eq 0
     }
     "Optimize MMCSS Audio Profile"       = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Audio" "Latency Sensitive") -eq "True" }
-    "Set Audio Service High Priority"    = { (Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "SR_AudioPriority") -eq 1 }
+    # the marker AND the value itself (another program or an update can set it back)
+    # the marker AND the value itself: 10 (Windows treats anything below 10 -- the 0 older versions
+    # wrote -- like its default 20)
+    "Set Audio Service High Priority"    = { ((Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "SR_AudioPriority") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "SystemResponsiveness") -eq 10) }
     "Disable Windows Sound Scheme"       = {
         # Active only if the scheme is ".None" AND no event still points to a sound file
         # (the name alone doesn't silence anything -- see the Apply).
@@ -3330,15 +3355,6 @@ $CheckFunctions = @{
         $vals = @(Get-AmdGpuKeys | ForEach-Object { Get-RegVal $_.PSPath "EnableULPS" } | Where-Object { $null -ne $_ })
         if ($vals.Count -eq 0) { return $null }
         -not ($vals | Where-Object { $_ -ne 0 })
-    }
-    "AMD: Shader Cache (Unlimited)"      = { if (-not $IsAMD) { return $null }; (Get-RegVal "HKLM:\SOFTWARE\ATI Technologies\CBT" "ShaderCacheSizePC") -ne $null }
-    "AMD: Anti-Lag (Low Latency Mode)"   = {
-        if (-not $IsAMD) { return $null }
-        # The Apply writes to every AMD card -- active only if every one has it
-        $keys = @(Get-AmdGpuKeys)
-        if (-not $keys.Count) { return $null }
-        $on = @($keys | Where-Object { (Get-RegVal $_.PSPath "EnableAntiLag") -eq 1 })
-        $on.Count -eq $keys.Count
     }
 
     # POWER PLAN
@@ -3398,7 +3414,7 @@ $Script:TweakDots = @{}           # tweakName -> dot Border (for Verify button r
 # -----------------------------------------
 $Script:UIStrings = @{
     # Status bar
-    "status_ready"      = @{ EN = "Ready -- pick a preset or tick tweaks, then click 'Apply selected'.";     DE = "Bereit -- Preset waehlen oder Tweaks anhaken, dann 'Apply selected' klicken." }
+    "status_ready"      = @{ EN = "Ready -- pick a preset or tick tweaks, then click 'Apply selected'.";     DE = "Bereit -- Preset wählen oder Tweaks anhaken, dann 'Apply selected' klicken." }
 
     # Startup Manager
     "sw_title"          = @{ EN = "Startup Manager";       DE = "Autostart-Manager" }
@@ -3407,22 +3423,22 @@ $Script:UIStrings = @{
     "sw_col_command"    = @{ EN = "Command";               DE = "Befehl" }
     "sw_col_location"   = @{ EN = "Location";              DE = "Ort" }
     "sw_col_status"     = @{ EN = "Status";                DE = "Status" }
-    "sw_col_delay"      = @{ EN = "Boot Delay";            DE = "Boot-Verzoegerung" }
+    "sw_col_delay"      = @{ EN = "Boot Delay";            DE = "Boot-Verzögerung" }
     "sw_btn_disable"    = @{ EN = "Disable Selected";      DE = "Auswahl deaktivieren" }
     "sw_btn_enable"     = @{ EN = "Enable Selected";       DE = "Auswahl aktivieren" }
     "sw_btn_refresh"    = @{ EN = "Refresh";               DE = "Aktualisieren" }
     "sw_btn_close"      = @{ EN = "Close";                 DE = "Schliessen" }
     "sw_loading"        = @{ EN = "Loading startup data...";  DE = "Lade Autostart-Daten..." }
     "sw_legend"         = @{ EN = "items  |  Green = fast (<1s)  |  Orange = medium (1-3s)  |  Red = slow (>3s)  |  Hover Boot Delay for details";
-                             DE = "Eintraege  |  Gruen = schnell (<1s)  |  Orange = mittel (1-3s)  |  Rot = langsam (>3s)  |  Boot-Verzoegerung fuer Details" }
-    "sw_none_sel"       = @{ EN = "No items selected.";       DE = "Keine Eintraege ausgewaehlt." }
-    "sw_disabled_msg"   = @{ EN = "items disabled. Takes effect on next login.";  DE = "Eintraege deaktiviert. Wirkt beim naechsten Login." }
-    "sw_enabled_msg"    = @{ EN = "items enabled. Takes effect on next login.";   DE = "Eintraege aktiviert. Wirkt beim naechsten Login." }
+                             DE = "Einträge  |  Grün = schnell (<1s)  |  Orange = mittel (1-3s)  |  Rot = langsam (>3s)  |  Boot-Verzögerung für Details" }
+    "sw_none_sel"       = @{ EN = "No items selected.";       DE = "Keine Einträge ausgewählt." }
+    "sw_disabled_msg"   = @{ EN = "items disabled. Takes effect on next login.";  DE = "Einträge deaktiviert. Wirkt beim nächsten Login." }
+    "sw_enabled_msg"    = @{ EN = "items enabled. Takes effect on next login.";   DE = "Einträge aktiviert. Wirkt beim nächsten Login." }
 
     # Services Manager
     "svc_title"         = @{ EN = "Services Manager";     DE = "Dienste-Manager" }
     "svc_subtitle"      = @{ EN = "Disable unnecessary Windows services for better performance and privacy.";
-                             DE = "Deaktiviere unnoetige Windows-Dienste fuer bessere Performance und Datenschutz." }
+                             DE = "Deaktiviere unnötige Windows-Dienste für bessere Performance und Datenschutz." }
     "svc_legend_safe"   = @{ EN = "Safe to disable";      DE = "Sicher deaktivierbar" }
     "svc_legend_caution"= @{ EN = "Caution -- system service"; DE = "Vorsicht -- Systemdienst" }
     "svc_legend_done"   = @{ EN = "Already disabled";     DE = "Bereits deaktiviert" }
@@ -3438,10 +3454,10 @@ $Script:UIStrings = @{
     "svc_btn_refresh"   = @{ EN = "Refresh";              DE = "Aktualisieren" }
     "svc_btn_close"     = @{ EN = "Close";                DE = "Schliessen" }
     "svc_found"         = @{ EN = "services found  |  Green = safe to disable  |  Red = system service (caution)";
-                             DE = "Dienste gefunden  |  Gruen = sicher deaktivierbar  |  Rot = Systemdienst (Vorsicht)" }
-    "svc_none_sel"      = @{ EN = "No services selected.";  DE = "Keine Dienste ausgewaehlt." }
+                             DE = "Dienste gefunden  |  Grün = sicher deaktivierbar  |  Rot = Systemdienst (Vorsicht)" }
+    "svc_none_sel"      = @{ EN = "No services selected.";  DE = "Keine Dienste ausgewählt." }
     "svc_disabled_msg"  = @{ EN = "service(s) disabled. Full effect after restart.";  DE = "Dienst(e) deaktiviert. Wirkt nach Neustart vollstaendig." }
-    "svc_enabled_msg"   = @{ EN = "service(s) back to the start type they had before (Manual if unknown).";  DE = "Dienst(e) auf die vorherige Starteinstellung zurueckgesetzt (Manuell, wenn unbekannt)." }
+    "svc_enabled_msg"   = @{ EN = "service(s) back to the start type they had before (Manual if unknown).";  DE = "Dienst(e) auf die vorherige Starteinstellung zurückgesetzt (Manuell, wenn unbekannt)." }
 
     # Status words (managers)
     "word_enabled"      = @{ EN = "Enabled";      DE = "Aktiviert" }
@@ -3468,13 +3484,14 @@ $TweakDescEN = @{
     "Disable Bing in Windows Search" = "Disables Bing integration in Windows Search. Start menu searches only locally -- faster, no data exchange with Microsoft on every search. Also off: search highlights (changing pictures and topics in the search box) and cloud content search in OneDrive, Outlook and Bing for Microsoft and work/school accounts (Settings > Privacy > Search permissions)."
     "Process Count Reduction (Svchost)"   = "Sets the Svchost split threshold to your RAM size. Windows combines services into fewer separate processes -- noticeably reduces background process count. WARNING: reduces process isolation -- if one service crashes it can take down others in the same host (audio, network etc.). Reboot recommended."
     "Block Background Apps (Policy)" = "Pro and up only: an official policy stops Store apps (e.g. WhatsApp, Phone Link, Mail, Weather) from running in the background -- saves RAM and background load. WARNING: their notifications (e.g. new WhatsApp messages or texts through Phone Link) only arrive while the app is open. Regular programs (Steam, Discord, driver tools) are not affected. Windows Home doesn't read the policy -- greyed out there."
+    "Stop Background Apps (All Editions)" = "Store apps (e.g. WhatsApp, Phone Link, Mail, Weather) may no longer run in the background for your user account -- the old 'Let apps run in the background' switch Windows 11 no longer shows (there is only the per-app setting otherwise). Works on every edition, Home included; from Pro up the same is done by policy with 'Block Background Apps (Policy)'. WARNING: notifications of these apps (e.g. new WhatsApp messages) only arrive while the app is open. Normal programs (Steam, Discord, driver tools) are not affected. Takes effect after signing out and in."
     "Exclude Drivers from Windows Update" = "Pro and up only: Windows Update no longer installs drivers (official policy 'Do not include drivers with Windows Updates'). Stops Windows from replacing, say, your freshly installed graphics driver with an older one. You then get drivers from the maker yourself (NVIDIA App, AMD Software, the board's website). Security and feature updates keep coming. No effect on Home -- greyed out there."
     "Hold Feature Updates (Stay on Current Version)" = "Pro and up only: keeps Windows on the installed version (e.g. 26H2) -- the next big feature update is not installed automatically. Monthly security updates keep coming. The version is read when you apply, never hard-coded. Important: every Windows version only gets updates for a limited time (Home and Pro 24 months) -- revert in time so you are not left without security updates. No effect on Home -- greyed out there."
+    "Disable Automatic Windows Updates" = "Windows no longer downloads and installs updates on its own -- security updates included. They only come when you click 'Check for updates' under Settings > Windows Update yourself. Also sets active hours 8:00 to 2:00 (no automatic restart in that time). Stops downloads and restarts while gaming, but: if you don't check for updates yourself regularly, you go without security updates. If you only want no restarts while gaming, set just the active hours (Settings > Windows Update > Advanced options). In no preset."
     "Prevent Device Companion Apps"       = "Stops Windows from downloading device metadata from the network and auto-installing or suggesting companion apps for connected devices. Saves background traffic and unwanted app installs."
     "Disable Consumer Features" = "Enterprise / Education only: sets the official 'Turn off Microsoft consumer experiences' policy (1:1 from WinUtil). According to Microsoft, Home and Pro don't read it -- greyed out there; on those editions 'Stop Auto-Installed Suggested Apps' (Windows tab, Bloatware) stops the silent installs of suggested apps."
     "Disable Windows Platform Binary Table (WPBT)" = "Disables execution of the Windows Platform Binary Table, preventing motherboard/OEM firmware from silently injecting programs into Windows at every boot. Pure security tweak."
     "Disable Store Recommended Search Results" = "Locks the Microsoft Store's store.db via file permissions so the Store stops showing recommended/sponsored search results. Fully reversible."
-    "Enable Start Menu Previous Layout"   = "Enables the previous Start menu layout on supported Windows 11 builds via a feature override. Only affects builds that know this feature flag -- otherwise no effect."
     "Disable File Explorer Automatic Folder Discovery" = "Sets every folder to 'General items' so Explorer stops auto-detecting folder types -- opens large folders noticeably faster. Sign out / restart required."
     "Run Disk Cleanup"                    = "Runs Windows Disk Cleanup automatically (cleanmgr /VERYLOWDISK) and additionally cleans up old Windows Update components via DISM. One-time action, can take 5-15 minutes -- the window stays usable and the status bar counts the seconds."
     "Show File Extensions"                        = "Shows file extensions in Explorer (e.g. .exe, .txt, .jpg). Important for security -- disguised files like 'photo.jpg.exe' become immediately visible."
@@ -3484,11 +3501,11 @@ $TweakDescEN = @{
     "Num Lock on Startup"                         = "Enables NumLock automatically at system startup and on the login screen. Handy if you want to use the numpad right away."
     "Disable Lock Screen"                         = "Disables the lock screen. On start/wake it goes straight to the login field -- saves a click or swipe."
     "Enable Long Paths"                           = "Enables paths longer than 260 characters. Helpful for deep folder structures, game mods, Node projects etc. -- prevents 'path too long' errors."
-    "Remove Xbox Apps" = "Removes Xbox Game Bar, Identity Provider and TCUI. These apps run in the background consuming resources even without an Xbox. WARNING: afterwards the Xbox sign-in for Game Pass and Microsoft Store games (Xbox Identity Provider), Xbox mode and Game Bar recordings are missing until you reinstall the apps from the Microsoft Store. Steam, Epic and other games keep working."
+    "Remove Xbox Apps" = "Removes the Xbox Game Bar, Xbox Identity Provider, Xbox TCUI and the speech overlay (on Windows 10 also the old Xbox app). These apps run in the background even without an Xbox. WARNING: afterwards the Xbox sign-in for Game Pass and Microsoft Store games (Xbox Identity Provider), Xbox mode and Game Bar recordings are missing until you reinstall the apps from the Microsoft Store. The Xbox app itself (Game Pass) stays. Steam, Epic and other games keep working."
     "Remove Copilot"                              = "Disables and removes Windows Copilot AI assistant. Prevents Copilot from running in the background and sending data."
     "Remove OneDrive"                             = "Completely uninstalls OneDrive including autostart and Explorer integration. Local files remain untouched."
     "Remove Windows Recall"                       = "Disables AND removes Windows Recall  --  the AI feature that takes screenshots of your activity. Uses Microsoft's official policies: snapshots off + Recall component removed from the system (existing snapshots are deleted). Restart required."
-    "Remove Other Bloatware"                      = "Removes pre-installed apps: Candy Crush, TikTok, Disney+, Facebook, Solitaire, Clipchamp, ToDo, Paint3D and more."
+    "Remove Other Bloatware"                      = "Removes pre-installed apps Windows or the PC maker put there: Candy Crush and other promoted games, News, Weather, Solitaire, Clipchamp, Microsoft To Do, Feedback Hub, Tips, Power Automate and the Mixed Reality Portal. The confirmation before applying lists which of them are on your PC. Apps you installed yourself (Spotify, Netflix, Instagram ...), the Media Player and Get Help stay. The apps come back through the Microsoft Store."
     "Stop Auto-Installed Suggested Apps"          = "Stops Windows from silently installing suggested apps and games (e.g. Candy Crush, TikTok), including the ones planned by the PC maker and Microsoft. Works on every edition including Home and Pro. Apps already installed stay -- use 'Remove Other Bloatware' for those."
     "Disable Tips, Ads & Suggestions" = "Turns off the ads, tips and suggestions Windows sprinkles everywhere: tip notifications, the 'finish setting up' pages and the welcome page after updates, suggestions in Settings and Start, account notices (Microsoft 365, OneDrive backup) in Start and Settings, and sync-provider ads in File Explorer. Windows Spotlight pictures on the lock screen stay, only the tips on them go -- the tweak deliberately leaves the master switch 'ContentDeliveryAllowed' alone, because it is not documented whether it also turns Spotlight off. Works on every edition. Recommendations in Start: 'Disable Recommended in Start Menu'."
     "Stop OneDrive Folder Backup" = "Uses the official OneDrive policy to stop OneDrive from moving Desktop, Documents and Pictures into the cloud ('folder backup') -- not even after asking during setup. Works on every edition. Folders that are already backed up stay in OneDrive; you get them back in OneDrive under Settings > Sync and backup. Without OneDrive installed nothing visible changes, but the policy applies if OneDrive comes back."
@@ -3501,7 +3518,7 @@ $TweakDescEN = @{
     "Disable AI in Paint & Notepad"               = "Disables the AI features in Paint (Cocreator, Image Creator, Generative Fill) and in Notepad (Copilot rewrite/summarize) via Microsoft's official policies. Both apps keep working normally."
     "Disable Location Tracking"                   = "Disables the Windows location service system-wide. Apps can no longer request your location."
     "Block Telemetry Hosts (hosts file)"          = "Adds Microsoft telemetry servers to the Windows hosts file, blocking them even if telemetry services are still running. Note: Microsoft Defender reports such entries as 'HostsFileHijack' and may remove them again - the status shows it if that happens."
-    "Disable Scheduled Telemetry Tasks" = "Disables the scheduled Windows tasks that collect and send telemetry and usage data: the compatibility appraiser, the Customer Experience Improvement Program (CEIP), disk diagnostics, feedback prompts, the upload of collected error reports and the power-efficiency analysis. Tasks this Windows doesn't have are skipped."
+    "Disable Scheduled Telemetry Tasks" = "Disables the scheduled Windows tasks that collect and send telemetry and usage data: the compatibility appraiser and the other compatibility tasks (MareBackup, PcaPatchDbTask, StartupAppTask), the Customer Experience Improvement Program (CEIP), disk diagnostics, feedback prompts, the upload of collected error reports and the power efficiency analysis. Tasks this Windows doesn't have are skipped. A big Windows update can switch single ones back on -- the drift check reports it."
     "Disable Input & Speech Data Collection" = "Turns off data collection for input and speech, as under Settings > Privacy: online speech recognition, inking & typing personalization (Windows no longer learns from your typing, handwriting and contacts), 'improve inking and typing', tailored experiences with diagnostic data and feedback prompts (frequency 'Never', from Pro also by policy). Websites can no longer read your language list, and Windows stops tracking which apps you start -- so 'Most used' in Start stays empty. Dictation with Win+H can be limited without online speech recognition. Works on every edition."
     "Disable Remote Assistance" = "Turns off Windows Remote Assistance (System Properties > Remote: 'Allow Remote Assistance connections to this computer'). Nobody can connect to your PC through an invitation any more. Remote Desktop, the Quick Assist app and tools like AnyDesk or TeamViewer are not affected. Works on every edition."
     "Ultimate Performance Plan"                   = "Activates the 'Ultimate Performance' power plan and sets it to always-on: Windows stops throttling CPU cores AND the PC no longer sleeps -- display, disks and system stay on (no timeout). Maximum performance at all times. Increases power consumption."
@@ -3521,21 +3538,17 @@ $TweakDescEN = @{
     "CPU Priority for Games (Win32Priority)"      = "Sets Win32PrioritySeparation to 26. Windows gives active games significantly more CPU time and reduces background process priority."
     "MMCSS Gaming Profile (High Priority)"        = "Sets Multimedia Class Scheduler (MMCSS) profiles for games to High Priority. Better audio and timer interrupt handling while gaming."
     "Disable Fullscreen Optimizations"            = "Disables Windows Fullscreen Optimizations globally. Forces true exclusive fullscreen for lower input lag in games."
-    "Disable Windows Update during Gaming"        = "Permanently disables Windows Update auto-download via registry. Windows Update won't interrupt or background-load during gaming."
-    "Disable Background App Throttling"           = "Disables Windows CPU throttling for background processes. Prevents Windows from secretly reducing game CPU time when background tasks are active."
     "Enable MSI Mode (Message Signaled Interrupts)" = "Enables MSI mode for the primary GPU. Significantly reduces interrupt latency compared to Line-Based Interrupts. Reboot recommended."
-    "Enable Hardware-Accelerated GPU Scheduling (HAGS)" = "Enables HAGS  --  Windows hands GPU scheduling directly to hardware instead of software. Reduces CPU overhead and slightly lowers input lag."
+    "Enable Hardware-Accelerated GPU Scheduling (HAGS)" = "Enables HAGS -- Windows hands GPU scheduling directly to the hardware instead of the software. Reduces CPU overhead and slightly lowers input lag. Needs NVIDIA RTX 2000+ or AMD RX 5000+ and Windows 10 2004+. Usually on already on current Windows 11 PCs; DLSS Frame Generation needs it. Revert puts back what was set before."
     "Clear Shader Cache"                          = "Clears the NVIDIA/AMD shader cache on disk. Forces fresh shader compilation on next game launch. Useful after driver updates or graphical glitches."
     "Increase GPU Timeout Tolerance (TDR)"             = "Raises the GPU timeout tolerance (TDR delay 2s -> 10s) so Windows doesn't reset the graphics driver prematurely when the GPU stalls briefly under heavy load. Reduces black-screens / driver resets in demanding games and when overclocking. Note: improves stability, not FPS."
     "Disable Nagle's Algorithm (TCPNoDelay)"      = "Disables Nagle's Algorithm on all network adapters. Nagle buffers small packets at the cost of latency. Disabling noticeably reduces ping in online games."
     "Disable Large Send Offload (LSO)"            = "Disables Large Send Offload on all active network adapters. Can reduce ping spikes on some systems in online games."
-    "Disable Network Throttling Index"            = "Disables Windows network packet throttling under high CPU load. Gives the network stack the highest priority."
+    "Disable Network Throttling Index"            = "Disables Windows' network throttling index, which slows down network packets under high CPU load. Most useful for latency-sensitive gaming while the CPU is busy. Also sets SystemResponsiveness to 10 (the smallest value Windows accepts; smaller values are treated like 20)."
     "Set DNS to Cloudflare (1.1.1.1)"            = "Sets DNS to Cloudflare 1.1.1.1 / 1.0.0.1 (IPv4) plus the matching IPv6 servers (2606:4700:4700::1111/::1001) so IPv6 lookups also go through Cloudflare. One of the fastest and most privacy-friendly DNS providers worldwide. Revert brings back the DNS servers you had before (e.g. a Pi-hole) -- or automatic."
     "Set DNS to Google (8.8.8.8)"                = "Sets DNS to Google 8.8.8.8 / 8.8.4.4 (IPv4) plus the matching IPv6 servers (2001:4860:4860::8888/::8844) so IPv6 lookups also go through Google. Globally distributed, fast and reliable. Alternative to Cloudflare. Revert brings back the DNS servers you had before (e.g. a Pi-hole) -- or automatic."
     "Flush DNS Cache"                             = "Clears the local DNS cache. Useful after DNS changes or connection issues. Fast and has no side effects."
-    "Disable TCP Auto-Tuning"                     = "Disables automatic TCP receive window sizing. Can reduce latency spikes on some systems. May slightly reduce throughput on gigabit+ connections."
-    "Optimize TCP Settings (ECN/SACK/Timestamps)" = "Optimizes advanced TCP settings: disables ECN, enables SACK, disables TCP Timestamps. Reduces overhead and improves stability in online games."
-    "Disable QoS Packet Scheduler Limit"          = "Removes the default 20% bandwidth limit that Windows reserves for QoS. Gives you the full available bandwidth."
+    "Disable TCP Auto-Tuning"                     = "Turns off the automatic size of the TCP receive window -- it then stays at 64 KB. WARNING: this slows downloads down a lot: at 20 ms ping at most about 26 Mbit/s, at 40 ms about 13 Mbit/s -- no matter how fast your connection is. It brings nothing measurable for the ping in games. Only for testing when a router or network has trouble with auto-tuning; in no preset."
     "Disable Network Adapter Power Saving"        = "Disables 'Allow the computer to turn off this device to save power' for all physical network adapters (Ethernet, Wi-Fi). Prevents dropped connections and latency spikes caused by adapter power management."
     "Disable Energy-Efficient Ethernet"           = "Turns off Energy-Efficient Ethernet (EEE, 'Green Ethernet') on every wired adapter that offers it. With EEE the link drops into a power-saving state during pauses and has to wake up for the next packet, which can cause small latency spikes. Costs practically nothing on a desktop. Only settings the driver itself offers are changed. Takes effect after a restart."
     "Disable Interrupt Moderation"                = "The network adapter reports every packet right away instead of collecting several and reporting them together. Lowers network latency by a fraction of a millisecond, but causes noticeably more CPU load at high download rates. Meant for online games - if you often download big files or stream, better leave it on. Only settings the driver itself offers are changed. Takes effect after a restart."
@@ -3544,10 +3557,9 @@ $TweakDescEN = @{
     "Clear PageFile on Shutdown"                  = "Clears the pagefile on every shutdown. Prevents sensitive data from remaining on disk after reboot. Good for privacy."
     "Disable Memory Compression"                  = "Disables RAM compression in Windows. Saves CPU cycles during gaming. Recommended when you have enough RAM (16GB+)."
     "Enable SSD TRIM"                             = "Enables TRIM for all connected SSDs. Informs the SSD about unused blocks  --  maintains SSD performance long-term and extends lifespan."
-    "Disable Scheduled Defragmentation"           = "Disables automatic scheduled defragmentation. Absolutely not recommended for SSDs  --  this tweak ensures it's turned off."
-    "Optimize NVMe Queue Depth"                   = "Optimizes queue depth for NVMe drives. More parallel I/O operations noticeably improve NVMe SSD read/write performance."
+    "Disable Scheduled Defragmentation"           = "Turns off the weekly 'Optimize drives' task. On hard disks (HDD) that is defragmentation, on SSDs only a 'retrim' that tells the SSD which blocks are free -- Windows does not defragment SSDs. Only useful if you want to start the optimization yourself (Optimize drives > Optimize); not recommended for SSDs. In no preset."
     "Disable Write-Cache Buffer Flushing"         = "Disables forced write-cache buffer flushing for SSDs. Noticeably improves write speed (same as the checkbox in Device Manager). If the power fails, data not yet written can be lost - desktop PCs with stable power or a UPS only."
-    "Disable Hibernation"                         = "Disables hibernate mode and removes hiberfil.sys. Frees several GB of disk space (equals your RAM amount). Recommended for desktop PCs."
+    "Disable Hibernation"                         = "Disables hibernate and deletes hiberfil.sys. Frees several GB of disk space (about 40 % of your RAM). Fast Startup goes off too -- it needs hibernation; Windows then shuts down completely and starts a few seconds slower. Recommended for desktop PCs."
     "Clean Temp Files"                            = "Deletes all files in %TEMP%, Windows\Temp and Prefetch folders. Frees disk space and can slightly speed up boot."
     "Clean Browser Caches"                        = "Clears the caches of Chrome, Edge and Firefox (cache only -- no passwords/history/bookmarks). Often frees several hundred MB. Browsers should be closed."
     "Clean Windows Update Cache"                   = "Deletes the downloaded Windows Update cache (SoftwareDistribution\Download). Safe -- Windows re-downloads as needed. The update service is briefly stopped and restarted."
@@ -3564,11 +3576,9 @@ $TweakDescEN = @{
     "Disable Dynamic Lighting" = "WIN11: Turns off Windows Dynamic Lighting (Settings > Personalization > Dynamic Lighting). Otherwise Windows takes control of RGB keyboards, mice and lighting and can fight the maker's software (iCUE, Armoury Crate, G HUB, SignalRGB) -- effects flicker or get overwritten. Leave it on if you control RGB through Windows only."
     "Disable Audio Enhancements" = "Turns off audio enhancements (Bass Boost, surround, equalizer, loudness equalization) for all connected playback devices -- through the Windows audio interface, like the Sound control panel. Windows 11 blocks the direct registry route, so older versions of this tweak changed nothing. Reduces audio latency and audiodg.exe CPU load. Devices you connect later: apply again (the drift check reports them)."
     "Optimize MMCSS Audio Profile"                = "Optimizes Multimedia Class Scheduler profile for audio. Sets Latency Sensitive with High scheduling priority. Reduces audio stuttering under CPU load."
-    "Set Audio Service High Priority"             = "Increases system priority for audio processing. Sets SystemResponsiveness to 0. Prevents audio dropouts when other processes load the CPU."
+    "Set Audio Service High Priority"             = "Gives audio, games and other multimedia tasks more CPU time: SystemResponsiveness goes from 20 to 10, so Windows reserves only 10 % instead of 20 % of the CPU for background tasks. 10 is the smallest value Windows accepts -- smaller values (0 in older versions) are treated like 20 according to Microsoft, i.e. like no tweak at all. Helps against audio dropouts while other processes load the CPU -- noticeable when gaming and streaming at once."
     "Disable Windows Sound Scheme"                = "Disables all Windows system sounds (startup, errors, notifications). No unexpected sound interruptions during gaming or streaming."
     "AMD: Disable ULPS (Ultra Low Power State)"   = "AMD only: Disables Ultra Low Power State. ULPS puts inactive GPUs into extreme power saving and can cause stuttering on wake. Also useful for single GPU."
-    "AMD: Shader Cache (Unlimited)"               = "AMD only: Maximizes AMD Shader Cache size. Prevents cache eviction and reduces shader recompilation. Reduces stutter in OpenGL/Vulkan titles."
-    "AMD: Anti-Lag (Low Latency Mode)"            = "AMD only: Enables AMD Anti-Lag via registry. Reduces the gap between CPU input and GPU output  --  similar to NVIDIA Reflex. Effective on AMD RX 5000+."
     "Disable USB Selective Suspend"               = "Disables USB Selective Suspend globally. Windows no longer puts USB devices to sleep. Prevents disconnections with USB mice, headsets and controllers under load."
     "Disable USB 3 Link Power Management" = "Turns off the power-saving states of USB 3 links (U1/U2) in every power plan. The link to USB 3 devices (headset DACs, capture cards, external SSDs, VR headsets) no longer has to wake up first -- helps against dropouts and short stutters. Complements 'Disable USB Selective Suspend' (that one puts whole devices to sleep, this one only the link). Windows hides this setting in Power Options. Slightly higher power use."
     "Disable PCI-E Link State Power Management"   = "Disables PCI-E ASPM. Prevents the GPU from putting its PCI Express connection into power saving mode. Reduces GPU latency spikes under load."
@@ -3580,8 +3590,8 @@ $TweakDescEN = @{
     "CPU Maximum Processor State = 100%"          = "Sets maximum CPU state to 100%. Ensures Windows never artificially caps the CPU. Relevant on laptops and systems with aggressive thermal policies."
 }
 # -----------------------------------------
-foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] Tweaks definiert ($($AllTweaks.Count) Stueck)" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
-Write-Host "[$(Get-Date -f 'HH:mm:ss')] Tweaks definiert ($($AllTweaks.Count) Stueck)" -ForegroundColor DarkGray
+foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] Tweaks definiert ($($AllTweaks.Count) Stück)" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
+Write-Host "[$(Get-Date -f 'HH:mm:ss')] Tweaks definiert ($($AllTweaks.Count) Stück)" -ForegroundColor DarkGray
 foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] XAML wird geladen..." | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
 Write-Host "[$(Get-Date -f 'HH:mm:ss')] XAML wird geladen..." -ForegroundColor DarkGray
 Set-Splash "Building the interface ..." 22
@@ -3891,7 +3901,7 @@ Set-Splash "Building the interface ..." 22
                             <Border Width="3" CornerRadius="2" Background="#e53935" Margin="0,2,16,2"/>
                             <StackPanel Grid.Column="1">
                                 <TextBlock Text="Tweaks" FontSize="26" FontWeight="SemiBold" Foreground="#e6edf3"/>
-                                <TextBlock Text="Windows, gaming, network and audio tweaks -- every one with Apply and Revert, live status where Windows reports it" FontSize="12.5" Foreground="#7d8896" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Text="Every tweak can be undone &#183; live status where Windows reports it" FontSize="12.5" Foreground="#7d8896" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
                             </StackPanel>
                             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                 <Button Name="BtnSelectAll" Style="{StaticResource GopBtn}" Content="All" Margin="8,0,0,0"/>
@@ -4300,8 +4310,10 @@ $Script:CatNotices   = @()   # banners hidden while searching
 $Script:OneTimeNames = @($CheckFunctions.Keys | Where-Object { $CheckFunctions[$_].ToString().Trim() -eq '$null' })
 $Script:RestartTweaks = @("Remove Windows Recall", "Disable HPET (High Precision Event Timer)", "Allow Global Timer Resolution (Windows 11)",
     "Process Count Reduction (Svchost)", "Enable MSI Mode (Message Signaled Interrupts)", "Enable Hardware-Accelerated GPU Scheduling (HAGS)",
-    "Disable Write-Cache Buffer Flushing", "Optimize NVMe Queue Depth", "Disable Windows Platform Binary Table (WPBT)", "Disable Memory Compression",
+    "Disable Write-Cache Buffer Flushing", "Disable Windows Platform Binary Table (WPBT)", "Disable Memory Compression",
     "Disable Energy-Efficient Ethernet", "Disable Interrupt Moderation")
+# Take effect after signing out and in (a restart does it too)
+$Script:SignOutTweaks = @("Optimize Visual Effects (Performance Mode)", "Stop Background Apps (All Editions)", "Disable File Explorer Automatic Folder Discovery")
 $Script:EnterpriseOnly = @("Disable Get Started & Copilot Sign-in Screens", "Disable Consumer Features")
 # Policies Windows reads from Pro upwards (Policy CSP: Pro / Enterprise / Education) -- greyed out on Home
 $Script:ProOnly = @("Block Background Apps (Policy)", "Exclude Drivers from Windows Update", "Hold Feature Updates (Stay on Current Version)")
@@ -4340,6 +4352,20 @@ function New-TweakRow {
     $desc = New-Text (Get-TweakDesc $Tweak) 12 $U.DESC 'Normal' -Wrap -Margin 0, 2, 0, 0
     $desc.MaxHeight = 34; $desc.TextTrimming = [Windows.TextTrimming]::CharacterEllipsis; $desc.ToolTip = (Get-TweakDesc $Tweak)
     $text = New-VStack @((New-Text $name 13.5 $U.TEXT 'SemiBold'), $desc) @(2, 0, 14, 0)
+    # Long descriptions (with their warnings) can be opened in the row, not only in the tooltip.
+    # Shown for texts longer than about two lines in the current language (see Set-DescLanguage).
+    $more = $null
+    $en = if ($TweakDescEN.ContainsKey($name)) { $TweakDescEN[$name] } else { '' }
+    if ([math]::Max($Tweak.Desc.Length, $en.Length) -gt 240) {
+        $more = New-Text 'Show more' 11.5 $U.ACC 'SemiBold' -Margin 0, 2, 0, 0
+        $more.Cursor = [System.Windows.Input.Cursors]::Hand; $more.HorizontalAlignment = 'Left'
+        $more.Visibility = $(if ((Get-TweakDesc $Tweak).Length -gt 240) { 'Visible' } else { 'Collapsed' })
+        $descRef = $desc
+        # Handled: the click must not also tick the row's checkbox
+        $more.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true
+            if ($descRef.MaxHeight -lt 1000) { $descRef.MaxHeight = [double]::PositiveInfinity; $s.Text = 'Show less' } else { $descRef.MaxHeight = 34; $s.Text = 'Show more' } }.GetNewClosure())
+        $text.Children.Add($more) | Out-Null
+    }
     $text.VerticalAlignment = 'Center'; $text.Cursor = [System.Windows.Input.Cursors]::Hand; $text.Background = [Windows.Media.Brushes]::Transparent
     [Windows.Controls.Grid]::SetColumn($text, 2); $grid.Children.Add($text) | Out-Null
     $cbRef = $cb
@@ -4352,7 +4378,6 @@ function New-TweakRow {
     if ($isEntOnly)   { $badges.Children.Add((New-Badge 'Enterprise only' $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
     if ($isProOnly)   { $badges.Children.Add((New-Badge 'Pro and up' $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
     if ($isWin11Only) { $badges.Children.Add((New-Badge 'Windows 11 only' $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
-    if ($name -eq 'Optimize NVMe Queue Depth' -and -not $HasNVMe) { $badges.Children.Add((New-Badge 'no NVMe found' $U.SLATE $U.CARD2 0xE7BA)) | Out-Null }
     if ($Script:OneTimeNames -contains $name) { $badges.Children.Add((New-Badge 'one-time' $U.TEXT2 $U.CARD2 0xE72C)) | Out-Null }
     $active = New-Badge 'active' $U.GREEN (Mix-Hex $U.CARD $U.GREEN 0.16) 0xE73E; $active.Visibility = 'Collapsed'
     $badges.Children.Add($active) | Out-Null
@@ -4364,7 +4389,7 @@ function New-TweakRow {
     $CheckBoxMap[$name]           = $cb
     $Script:TweakDots[$name]      = $dot
     $Script:TweakBadges[$name]    = $active
-    $Script:TweakRows[$name]      = @{ Card = $card; Desc = $desc; Tweak = $Tweak }
+    $Script:TweakRows[$name]      = @{ Card = $card; Desc = $desc; Tweak = $Tweak; More = $more }
     Update-TweakDot $dot $name | Out-Null
     return $card
 }
@@ -4391,7 +4416,10 @@ function Update-TweakDot($dot, $tweakName) {
 }
 
 function Set-DescLanguage {
-    foreach ($r in $Script:TweakRows.Values) { $d = Get-TweakDesc $r.Tweak; $r.Desc.Text = $d; $r.Desc.ToolTip = $d }
+    foreach ($r in $Script:TweakRows.Values) {
+        $d = Get-TweakDesc $r.Tweak; $r.Desc.Text = $d; $r.Desc.ToolTip = $d
+        if ($r.More) { $r.Desc.MaxHeight = 34; $r.More.Text = 'Show more'; $r.More.Visibility = $(if ($d.Length -gt 240) { 'Visible' } else { 'Collapsed' }) }
+    }
 }
 
 # =============================================================================
@@ -4613,6 +4641,12 @@ $SearchBox.Add_TextChanged({ Apply-TweakFilter })
 # newlines) -- avoids PowerShell 5.1's ConvertTo-Json single/nested-array quirks.
 $Script:BaselineFile = "$env:LOCALAPPDATA\GameOptimizerPro\baseline.txt"
 
+# Tweaks renamed in 1.2.6 -- their old names in a baseline or a saved selection still count
+$Script:RenamedTweaks = @{
+    'Disable Windows Update during Gaming' = 'Disable Automatic Windows Updates'
+    'Disable Background App Throttling'    = 'Stop Background Apps (All Editions)'
+}
+
 # Services Manager: the start type a service had before "Disable" here, so "Enable" brings
 # back exactly that instead of always "Manual" (Print Spooler & co. start automatically by
 # default). One line per service: name=auto|delayed-auto|demand
@@ -4663,35 +4697,65 @@ function Save-SvcOriginal($Map) {
     } catch { Write-Log "Services Manager: original start types could not be saved -- $_" }
 }
 
-function Save-Baseline {
-    # -FromState: take the results that were just read for every tweak
-    # ($Script:CheckRaw, see Update-AllDots) instead of running every check again.
-    param([switch]$FromState)
-    $activeNames = @()
-    foreach ($t in $AllTweaks) {
-        if ($FromState -and $Script:CheckRaw.ContainsKey($t.Name)) { if ($Script:CheckRaw[$t.Name] -eq 'T') { $activeNames += $t.Name }; continue }
-        if ($CheckFunctions.ContainsKey($t.Name)) {
-            try { if ((& $CheckFunctions[$t.Name]) -eq $true) { $activeNames += $t.Name } } catch { }
-        }
+# The baseline lists the tweaks THIS APP applied (line 1: "# GameOptimizerPro v<version>").
+# Until 1.2.5 it listed every tweak that was active after an Apply -- also settings Windows or
+# the user had made themselves -- and "Revert all" set every tweak back, applied or not.
+function Read-Baseline {
+    $r = @{ Version = $null; Names = @() }
+    if (-not (Test-Path $Script:BaselineFile)) { return $r }
+    try { $lines = @(Get-Content $Script:BaselineFile -ErrorAction Stop) } catch { return $r }
+    $map = $Script:RenamedTweaks
+    $known = @($AllTweaks | ForEach-Object { $_.Name })
+    foreach ($l in $lines) {
+        $t = "$l".Trim()
+        if (-not $t) { continue }
+        if ($t -match '^#\s*GameOptimizerPro\s+v?([0-9][0-9.]*)') { $r.Version = $matches[1]; continue }
+        if ($t.StartsWith('#')) { continue }
+        if ($map -and $map.ContainsKey($t)) { $t = $map[$t] }
+        if ($known.Count -and $known -notcontains $t) { continue }     # removed in a later version
+        $r.Names += $t
     }
+    $r.Names = @($r.Names | Select-Object -Unique)
+    $r
+}
+function Write-Baseline([string[]]$Names) {
     try {
         $dir = Split-Path $Script:BaselineFile
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-        Set-Content -Path $Script:BaselineFile -Value $activeNames -Encoding UTF8
-        Write-Log "Baseline saved ($($activeNames.Count) active tweaks)"
-    } catch { Write-Log "Baseline save failed: $_" }
+        Set-Content -Path $Script:BaselineFile -Value (@("# GameOptimizerPro v$($Script:AppVersion)") + @($Names | Where-Object { $_ } | Select-Object -Unique)) -Encoding UTF8 -ErrorAction Stop
+        $true
+    } catch { Write-Log "Baseline save failed: $_"; $false }
+}
+function Save-Baseline {
+    # Adds the tweaks an Apply just put in effect to the list of what this app applied
+    param([string[]]$Add)
+    $names = @(@((Read-Baseline).Names) + @($Add | Where-Object { $_ }) | Select-Object -Unique)
+    if (Write-Baseline $names) { Write-Log "Baseline saved ($($names.Count) tweaks applied by this app)" }
 }
 
-# The user declined re-applying these at launch: stop tracking them, so the same
-# question doesn't come back on every start. The next Apply records them again if
-# they are active then.
+# The user declined re-applying these at launch, or set them back: stop tracking them, so the
+# same question doesn't come back on every start. The next Apply records them again.
 function Remove-FromBaseline([string[]]$Names) {
     if (-not (Test-Path $Script:BaselineFile)) { return }
-    try {
-        $keep = @(Get-Content $Script:BaselineFile -ErrorAction Stop | Where-Object { $_ -and $_.Trim() -ne '' -and $Names -notcontains $_.Trim() })
-        Set-Content -Path $Script:BaselineFile -Value $keep -Encoding UTF8
-        Write-Log "Baseline: no longer tracking (re-apply declined or reverted): $($Names -join ', ')"
-    } catch { Write-Log "Baseline update failed: $_" }
+    $keep = @((Read-Baseline).Names | Where-Object { $Names -notcontains $_ })
+    if (Write-Baseline $keep) { Write-Log "Baseline: no longer tracking (re-apply declined or reverted): $($Names -join ', ')" }
+}
+
+# Current status of one tweak, read fresh ($true only when its check says so)
+function Test-TweakActive([string]$Name) {
+    if (-not $CheckFunctions.ContainsKey($Name)) { return $false }
+    try { (& $CheckFunctions[$Name]) -eq $true } catch { $false }
+}
+
+# System Protection (System Restore) for the Windows drive: $true on, $false off. Windows lists
+# the protected volumes in SPP\Clients -- the value System Properties > System Protection reads --
+# as volume paths ("\\?\Volume{guid}\..."). Without it no restore point can be created.
+function Test-SystemProtection {
+    $list = @(Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SPP\Clients" '{09F7EDC5-294E-4180-AF6A-FB0E6A0E9513}' | Where-Object { $_ })
+    if (-not $list.Count) { return $false }
+    $vol = try { "$((Get-CimInstance Win32_Volume -Filter "DriveLetter='$env:SystemDrive'" -ErrorAction Stop).DeviceID)" } catch { '' }
+    $guid = if ($vol -match '(\{[0-9a-fA-F-]+\})') { $matches[1] } else { $null }
+    [bool]@($list | Where-Object { ($guid -and "$_".IndexOf($guid, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or "$_".IndexOf("($env:SystemDrive", [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count
 }
 
 function Get-DriftedTweaks {
@@ -4700,11 +4764,8 @@ function Get-DriftedTweaks {
     # Only a definite $false counts as reverted: "can't read it right now" ($null,
     # e.g. while Windows Update servicing locks the reserved-storage API) is not.
     param([hashtable]$Known = @{})
-    if (-not (Test-Path $Script:BaselineFile)) { return @() }
-    try { $baseline = @(Get-Content $Script:BaselineFile -ErrorAction Stop | Where-Object { $_ -and $_.Trim() -ne '' }) } catch { return @() }
     $drifted = @()
-    foreach ($name in $baseline) {
-        $n = $name.Trim()
+    foreach ($n in (Read-Baseline).Names) {
         if ($Known.ContainsKey($n)) { if ($Known[$n] -eq 'F') { $drifted += $n }; continue }
         if ($CheckFunctions.ContainsKey($n)) {
             try { $r = & $CheckFunctions[$n]; if ($r -is [bool] -and -not $r) { $drifted += $n } } catch { }
@@ -4744,14 +4805,14 @@ function BS-MemoryProfile([string]$Brand, [string]$Ddr, [string]$Target, [string
     New-BiosSetting -Key 'memory_profile' -Cat 'Memory' -Name $name -Rec "Profile 1 ($Target)" -Def 'Off -- JEDEC base clock' `
         -Path 'OC / Tweaker menu -> memory profile (EXPO or XMP / DOCP) -> Profile 1' `
         -Expl ("Without a profile the RAM only runs at the slow $Ddr base clock -- the biggest free gain in the BIOS, especially for the 1% lows in CPU-heavy games. " + $(if ($Note) { "$Note " }) + "If the PC won't boot or crashes afterwards: try profile 2 or one speed step lower; many boards reset themselves after 3 failed boots.") `
-        -ExplDE ("Ohne Profil laeuft der RAM nur mit dem langsamen $Ddr-Standardtakt -- der groesste kostenlose Gewinn im BIOS, vor allem fuer die 1-%-Lows in CPU-lastigen Spielen. " + $(if ($NoteDE) { "$NoteDE " }) + "Startet der PC danach nicht oder gibt es Abstuerze: Profil 2 oder ein Takt-Schritt niedriger; viele Boards setzen nach 3 Fehlstarts selbst zurueck.") `
+        -ExplDE ("Ohne Profil läuft der RAM nur mit dem langsamen $Ddr-Standardtakt -- der größte kostenlose Gewinn im BIOS, vor allem für die 1-%-Lows in CPU-lastigen Spielen. " + $(if ($NoteDE) { "$NoteDE " }) + "Startet der PC danach nicht oder gibt es Abstürze: Profil 2 oder ein Takt-Schritt niedriger; viele Boards setzen nach 3 Fehlstarts selbst zurück.") `
         -Risk 'safe' -Impact 'high' -Detect 'expo_xmp' -Paths $paths
 }
 function BS-Rebar([string]$Brand, [string]$Note = '', [string]$NoteDE = '') {
     New-BiosSetting -Key 'rebar' -Cat 'GPU' -Name 'Resizable BAR (+ Above 4G Decoding)' -Rec 'Above 4G Decoding = Enabled, Re-Size BAR Support = Enabled' -Def 'Disabled' `
         -Path 'PCI / IO settings -> Above 4G Decoding = Enabled -> Re-Size BAR Support = Enabled' `
         -Expl ("Lets the CPU address the whole video memory at once instead of 256 MB chunks. NVIDIA uses it for the games it is enabled for in the driver; on AMD cards it is called Smart Access Memory and works almost everywhere. Requires CSM off (UEFI boot). $Note").Trim() `
-        -ExplDE ("Die CPU darf den ganzen Grafikspeicher auf einmal ansprechen statt in 256-MB-Haeppchen. NVIDIA nutzt es fuer die Spiele, fuer die es im Treiber freigegeben ist; bei AMD-Karten heisst es 'Smart Access Memory' und wirkt fast ueberall. Voraussetzung: CSM aus (UEFI-Start). $NoteDE").Trim() `
+        -ExplDE ("Die CPU darf den ganzen Grafikspeicher auf einmal ansprechen statt in 256-MB-Häppchen. NVIDIA nutzt es für die Spiele, für die es im Treiber freigegeben ist; bei AMD-Karten heißt es 'Smart Access Memory' und wirkt fast überall. Voraussetzung: CSM aus (UEFI-Start). $NoteDE").Trim() `
         -Risk 'safe' -Impact 'high' -Detect 'rebar' -Paths @{
             asus = 'Advanced -> PCI Subsystem Settings -> Above 4G Decoding = Enabled -> Re-Size BAR Support = Enabled'
             msi = 'Settings -> Advanced -> PCIe/PCI Sub-system Settings -> Above 4G memory/Crypto Currency mining = Enabled -> Re-Size BAR Support = Enabled'
@@ -4762,7 +4823,7 @@ function BS-Csm {
     New-BiosSetting -Key 'csm' -Cat 'Boot' -Name 'CSM (legacy boot) off' -Rec 'Disabled (pure UEFI boot)' -Def 'Auto / Enabled depending on the board' `
         -Path 'Boot -> CSM (Compatibility Support Module) -> Disabled' `
         -Expl 'The old legacy BIOS mode. Off is required for Resizable BAR and Secure Boot. IMPORTANT: only turn it off if Windows is installed in UEFI mode -- check with msinfo32 -> BIOS Mode: UEFI. If it says Legacy, Windows will not boot without CSM.' `
-        -ExplDE "Der alte Legacy-BIOS-Modus. Aus = Voraussetzung fuer Resizable BAR und Secure Boot. WICHTIG: nur ausschalten, wenn Windows im UEFI-Modus installiert ist -- pruefen mit msinfo32 -> 'BIOS-Modus: UEFI'. Steht dort 'Legacy', startet Windows ohne CSM nicht." `
+        -ExplDE "Der alte Legacy-BIOS-Modus. Aus = Voraussetzung für Resizable BAR und Secure Boot. WICHTIG: nur ausschalten, wenn Windows im UEFI-Modus installiert ist -- prüfen mit msinfo32 -> 'BIOS-Modus: UEFI'. Steht dort 'Legacy', startet Windows ohne CSM nicht." `
         -Risk 'moderate' -Impact 'medium' -Detect 'csm' -Paths @{
             asus = 'Boot -> CSM (Compatibility Support Module) -> Launch CSM = Disabled'
             msi = 'Settings -> Advanced -> Windows OS Configuration -> BIOS UEFI/CSM Mode = UEFI'
@@ -4773,7 +4834,7 @@ function BS-SecureBoot {
     New-BiosSetting -Key 'secure_boot' -Cat 'Boot' -Name 'Secure Boot' -Rec 'Enabled' -Def 'often Disabled (or Other OS)' `
         -Path 'Boot / Security -> Secure Boot = Enabled' `
         -Expl 'No FPS gain, but more and more games require it: Valorant/Vanguard on Windows 11, Battlefield 6, Call of Duty and other anti-cheats will not start without Secure Boot. Needs CSM off. If the BIOS reports missing keys: Restore Factory Keys / Install default Secure Boot keys.' `
-        -ExplDE "Bringt keine FPS, ist aber fuer immer mehr Spiele Pflicht: Valorant/Vanguard unter Windows 11, Battlefield 6, Call of Duty und weitere Anti-Cheats starten ohne Secure Boot nicht. Braucht CSM aus. Meldet das BIOS fehlende Schluessel: 'Restore Factory Keys' bzw. 'Install default Secure Boot keys'." `
+        -ExplDE "Bringt keine FPS, ist aber für immer mehr Spiele Pflicht: Valorant/Vanguard unter Windows 11, Battlefield 6, Call of Duty und weitere Anti-Cheats starten ohne Secure Boot nicht. Braucht CSM aus. Meldet das BIOS fehlende Schlüssel: 'Restore Factory Keys' bzw. 'Install default Secure Boot keys'." `
         -Risk 'safe' -Impact 'medium' -Detect 'secure_boot' -Paths @{
             asus = 'Boot -> Secure Boot -> OS Type = Windows UEFI mode'
             msi = 'Settings -> Security -> Secure Boot -> Secure Boot = Enabled'
@@ -4784,7 +4845,7 @@ function BS-BiosUpdate([string]$What, [string]$WhatDE, [string]$Risk = 'safe', [
     New-BiosSetting -Key 'bios_update' -Cat 'Boot' -Name 'Keep the BIOS up to date' -Rec 'latest version from the board maker' -Def 'factory version' `
         -Path "BIOS flash tool -- file from the board's support page on a FAT32 USB stick" `
         -Expl "$What Before flashing, note your EXPO/XMP setting (everything is reset to defaults afterwards) and never switch the PC off while it flashes." `
-        -ExplDE "$WhatDE Vor dem Flashen das EXPO/XMP-Profil notieren (danach ist alles auf Standard) und den PC waehrenddessen nicht ausschalten." `
+        -ExplDE "$WhatDE Vor dem Flashen das EXPO/XMP-Profil notieren (danach ist alles auf Standard) und den PC währenddessen nicht ausschalten." `
         -Risk $Risk -Impact $Impact -Paths @{
             asus = 'Tool -> ASUS EZ Flash 3 Utility (file on a USB stick)'
             msi = 'M-FLASH (start screen, bottom left) -- file on a USB stick'
@@ -4806,7 +4867,7 @@ function BS-PcieGpu {
     New-BiosSetting -Key 'pcie_gpu' -Cat 'GPU' -Name 'PCIe speed of the graphics card slot' -Rec 'Auto' -Def 'Auto' `
         -Path 'PCIe settings of the GPU slot (e.g. PCIEX16_1 Link Speed / PCI_E1 Gen Switch) = Auto' `
         -Expl 'On Auto the card uses the fastest mode that slot and card support. Only on black screens, flickering or no signal after installing a card (especially RTX 50 / PCIe 5.0 with a riser cable) set it one step lower (Gen 4) -- costs practically nothing in games.' `
-        -ExplDE "Auf Auto nimmt die Karte die schnellste Stufe, die Slot und Karte koennen. Nur bei Schwarzbild, Bildaussetzern oder 'kein Signal' nach dem Einbau (vor allem RTX 50 / PCIe 5.0 mit Riser-Kabel) eine Stufe fest einstellen (Gen 4) -- kostet in Spielen praktisch nichts." `
+        -ExplDE "Auf Auto nimmt die Karte die schnellste Stufe, die Slot und Karte können. Nur bei Schwarzbild, Bildaussetzern oder 'kein Signal' nach dem Einbau (vor allem RTX 50 / PCIe 5.0 mit Riser-Kabel) eine Stufe fest einstellen (Gen 4) -- kostet in Spielen praktisch nichts." `
         -Risk 'safe' -Impact 'low'
 }
 $Script:AmdPboPaths = @{
@@ -4823,22 +4884,22 @@ function BS-Pbo([string]$Kind) {
     $t = @{
         zen5     = @('Enabled (PBO limits: Motherboard)', 'moderate', 'medium',
                      'Lets the CPU draw more power and boost higher for longer. Usually 1-3 % in games, more in multi-core loads -- but warmer. Worth it with a good cooler; together with the Curve Optimizer it gains the most.',
-                     'Laesst die CPU mehr Strom ziehen und laenger hoch boosten. In Spielen meist 1-3 %, in Mehrkern-Last mehr -- dafuer waermer. Mit einem guten Kuehler sinnvoll; zusammen mit dem Curve Optimizer bringt es am meisten.')
+                     'Laesst die CPU mehr Strom ziehen und länger hoch boosten. In Spielen meist 1-3 %, in Mehrkern-Last mehr -- dafür wärmer. Mit einem guten Kühler sinnvoll; zusammen mit dem Curve Optimizer bringt es am meisten.')
         zen5_x3d = @('Enabled (+ up to +200 MHz Boost Override)', 'moderate', 'medium',
                      'Unlike the 7000X3D, the 9000X3D are unlocked: PBO with Curve Optimizer and up to +200 MHz Boost Override is allowed. Keep an eye on temperatures (the cache now sits under the cores, so cooling is better than on Zen 4).',
-                     'Die 9000X3D sind -- anders als die 7000X3D -- offen: PBO mit Curve Optimizer und bis zu +200 MHz Boost Override ist erlaubt. Temperaturen im Blick behalten (der Cache sitzt jetzt unter den Kernen, die Kuehlung ist dadurch besser als bei Zen 4).')
+                     'Die 9000X3D sind -- anders als die 7000X3D -- offen: PBO mit Curve Optimizer und bis zu +200 MHz Boost Override ist erlaubt. Temperaturen im Blick behalten (der Cache sitzt jetzt unter den Kernen, die Kühlung ist dadurch besser als bei Zen 4).')
         zen4_x3d = @('Advanced -> Curve Optimizer only (limits: Auto)', 'moderate', 'medium',
                      'On the 7000X3D clocks and power limits are locked -- PBO only works through the Curve Optimizer (negative = less voltage -> more boost at the same temperature).',
-                     'Bei den 7000X3D sind Takt und Leistungsgrenzen gesperrt -- PBO wirkt nur ueber den Curve Optimizer (negativ = weniger Spannung -> mehr Boost bei gleicher Temperatur).')
+                     'Bei den 7000X3D sind Takt und Leistungsgrenzen gesperrt -- PBO wirkt nur über den Curve Optimizer (negativ = weniger Spannung -> mehr Boost bei gleicher Temperatur).')
         zen4     = @('Enabled', 'moderate', 'medium',
                      'More boost under load; little in games, clearly more in multi-core loads. Ryzen 7000 quickly reaches 95 C -- that is by design, but with the Curve Optimizer the CPU stays cooler.',
-                     'Mehr Boost unter Last; in Spielen wenig, in Mehrkern-Last deutlich. Ryzen 7000 wird schnell 95 Grad heiss -- das ist bei ihnen gewollt, aber mit Curve Optimizer bleibt die CPU kuehler.')
+                     'Mehr Boost unter Last; in Spielen wenig, in Mehrkern-Last deutlich. Ryzen 7000 wird schnell 95 Grad heiß -- das ist bei ihnen gewollt, aber mit Curve Optimizer bleibt die CPU kuehler.')
         zen3     = @('Enabled', 'moderate', 'medium',
                      'More boost under load. Together with a negative Curve Optimizer the best lever on Ryzen 5000.',
                      'Mehr Boost unter Last. Zusammen mit einem negativen Curve Optimizer der beste Hebel bei Ryzen 5000.')
         zen2     = @('Auto / Enabled', 'moderate', 'low',
                      'On Ryzen 3000 PBO gains little (mostly < 2 %) -- it can stay on if the cooler copes.',
-                     'Bei Ryzen 3000 bringt PBO nur wenig (meist < 2 %) -- kann an bleiben, wenn der Kuehler reicht.')
+                     'Bei Ryzen 3000 bringt PBO nur wenig (meist < 2 %) -- kann an bleiben, wenn der Kühler reicht.')
     }[$Kind]
     New-BiosSetting -Key 'pbo' -Cat 'CPU' -Name 'Precision Boost Overdrive (PBO)' -Rec $t[0] -Def 'Auto (= off)' `
         -Path 'Advanced -> AMD Overclocking -> Precision Boost Overdrive' -Expl $t[3] -ExplDE $t[4] -Risk $t[1] -Impact $t[2] -Paths $Script:AmdPboPaths
@@ -4847,20 +4908,20 @@ function BS-CurveOptimizer([string]$Rec, [string]$Expl, [string]$ExplDE) {
     New-BiosSetting -Key 'curve_optimizer' -Cat 'CPU' -Name 'Curve Optimizer (undervolting)' -Rec $Rec -Def '0 (off)' `
         -Path 'AMD Overclocking -> Precision Boost Overdrive -> Curve Optimizer' `
         -Expl "$Expl Test stability afterwards (e.g. OCCT or CoreCycler, also at idle -- instability often shows while browsing, not under load)." `
-        -ExplDE "$ExplDE Danach stabil testen (z. B. OCCT oder CoreCycler, auch im Leerlauf -- Instabilitaet zeigt sich oft beim Surfen, nicht unter Last)." `
+        -ExplDE "$ExplDE Danach stabil testen (z. B. OCCT oder CoreCycler, auch im Leerlauf -- Instabilität zeigt sich oft beim Surfen, nicht unter Last)." `
         -Risk 'moderate' -Impact 'medium' -Paths $Script:AmdCoPaths
 }
 function BS-Fclk([string]$Value, [string]$Expl, [string]$ExplDE) {
     New-BiosSetting -Key 'fclk' -Cat 'Memory' -Name 'Infinity Fabric (FCLK)' -Rec $Value -Def 'Auto' `
         -Path 'AMD Overclocking -> DDR and Infinity Fabric Frequency/Timings -> Infinity Fabric Frequency and Dividers -> FCLK' `
-        -Expl "$Expl If crashes or USB dropouts appear afterwards: back to Auto." -ExplDE "$ExplDE Gibt es danach Abstuerze oder USB-Aussetzer: zurueck auf Auto." `
+        -Expl "$Expl If crashes or USB dropouts appear afterwards: back to Auto." -ExplDE "$ExplDE Gibt es danach Abstürze oder USB-Aussetzer: zurück auf Auto." `
         -Risk 'moderate' -Impact 'medium' -Paths @{ asus = 'Ai Tweaker -> FCLK Frequency'; msi = 'OC -> FCLK Frequency' }
 }
 function BS-Mcr {
     New-BiosSetting -Key 'mcr' -Cat 'Memory' -Name 'Memory Context Restore' -Rec 'Enabled' -Def 'Auto (usually off)' `
         -Path 'Advanced -> AMD CBS -> UMC Common Options -> DDR Options -> DDR Memory Features -> Memory Context Restore' `
         -Expl 'Skips the long memory training on every start (DDR5 on AM5 otherwise shows 20-60 s of black screen). Newer BIOS versions make this stable; if boot problems or crashes after waking appear: back to Auto.' `
-        -ExplDE 'Spart das lange Speichertraining bei jedem Start (DDR5 auf AM5 sonst 20-60 s schwarzer Bildschirm). Neuere BIOS-Versionen machen das stabil; gibt es danach Startprobleme oder Abstuerze nach dem Aufwachen: wieder Auto.' `
+        -ExplDE 'Spart das lange Speichertraining bei jedem Start (DDR5 auf AM5 sonst 20-60 s schwarzer Bildschirm). Neuere BIOS-Versionen machen das stabil; gibt es danach Startprobleme oder Abstürze nach dem Aufwachen: wieder Auto.' `
         -Risk 'moderate' -Impact 'low' -Paths @{
             asus = 'Ai Tweaker -> DRAM Timing Control -> Memory Context Restore'
             msi = 'OC -> Advanced DRAM Configuration -> Memory Context Restore'
@@ -4870,7 +4931,7 @@ function BS-CStatesAmd {
     New-BiosSetting -Key 'cstates' -Cat 'Power' -Name 'Global C-State Control' -Rec 'leave Auto / Enabled' -Def 'Auto' `
         -Path 'Advanced -> AMD CBS -> CPU Common Options -> Global C-state Control' `
         -Expl 'Often recommended off for lower latency -- on Ryzen that gains practically nothing in games, but costs idle power and can lower the single-core boost (the highest boost needs sleeping neighbour cores). So leave it on.' `
-        -ExplDE "Oft wird 'aus fuer weniger Latenz' empfohlen -- bei Ryzen bringt das in Spielen praktisch nichts, kostet aber Strom im Leerlauf und kann den Einkern-Boost senken (der hoechste Boost braucht schlafende Nachbarkerne). Also an lassen." `
+        -ExplDE "Oft wird 'aus für weniger Latenz' empfohlen -- bei Ryzen bringt das in Spielen praktisch nichts, kostet aber Strom im Leerlauf und kann den Einkern-Boost senken (der höchste Boost braucht schlafende Nachbarkerne). Also an lassen." `
         -Risk 'safe' -Impact 'low' -Paths @{
             msi = 'OC -> Advanced CPU Configuration -> Global C-state Control'
             gigabyte = 'Tweaker -> Advanced CPU Settings -> Global C-state Control' }
@@ -4880,13 +4941,13 @@ function BS-IgpuOff([bool]$Apu = $false) {
         return New-BiosSetting -Key 'igpu' -Cat 'GPU' -Name 'iGPU video memory (UMA Frame Buffer)' -Rec 'without a graphics card: 2-4 GB; with a graphics card: iGPU off' -Def 'Auto (often 512 MB)' `
             -Path 'Advanced -> AMD CBS -> NBIO Common Options -> GFX Configuration -> UMA Frame buffer Size' `
             -Expl 'If you game on the integrated graphics, a larger fixed video memory gives many games more headroom (enough RAM provided -- 32 GB recommended). With a dedicated graphics card, turn the iGPU off.' `
-            -ExplDE 'Spielst du ueber die integrierte Grafik, gibt ein groesserer fester Grafikspeicher vielen Spielen mehr Luft (genug RAM vorausgesetzt -- 32 GB empfohlen). Mit dedizierter Grafikkarte die iGPU ausschalten.' `
+            -ExplDE 'Spielst du über die integrierte Grafik, gibt ein größerer fester Grafikspeicher vielen Spielen mehr Luft (genug RAM vorausgesetzt -- 32 GB empfohlen). Mit dedizierter Grafikkarte die iGPU ausschalten.' `
             -Risk 'safe' -Impact 'medium'
     }
     New-BiosSetting -Key 'igpu' -Cat 'GPU' -Name 'Integrated graphics (iGPU) off' -Rec 'Disabled (only with a graphics card)' -Def 'Auto / Enabled' `
         -Path 'Advanced -> AMD CBS -> NBIO Common Options -> GFX Configuration -> iGPU Configuration = iGPU Disabled' `
         -Expl 'Ryzen 7000/9000 have a small iGPU. With a dedicated graphics card you do not need it; off saves a little power and memory and stops programs from picking the wrong GPU. Make sure the monitor is connected to the graphics card.' `
-        -ExplDE 'Ryzen 7000/9000 haben eine kleine iGPU. Mit dedizierter Grafikkarte braucht man sie nicht; aus spart etwas Strom und Arbeitsspeicher und verhindert, dass Programme die falsche GPU waehlen. Monitor dann unbedingt an der Grafikkarte anschliessen.' `
+        -ExplDE 'Ryzen 7000/9000 haben eine kleine iGPU. Mit dedizierter Grafikkarte braucht man sie nicht; aus spart etwas Strom und Arbeitsspeicher und verhindert, dass Programme die falsche GPU wählen. Monitor dann unbedingt an der Grafikkarte anschließen.' `
         -Risk 'moderate' -Impact 'low' -Paths @{
             asus = 'Advanced -> NB Configuration -> Integrated Graphics = Disabled'
             msi = 'Settings -> Advanced -> Integrated Graphics Configuration -> Integrated Graphics = Disabled'
@@ -4896,20 +4957,20 @@ function BS-CppcX3d {
     New-BiosSetting -Key 'x3d_cppc' -Cat 'CPU' -Name 'Core scheduling on X3D with two CCDs' -Rec 'CPPC Dynamic Preferred Cores = Auto (Driver)' -Def 'Auto' `
         -Path 'Advanced -> AMD CBS -> SMU Common Options -> CPPC Dynamic Preferred Cores' `
         -Expl "Only 7900X3D/7950X3D/9900X3D/9950X3D: games should run on the CCD with the 3D cache. AMD's chipset driver handles that together with Windows Game Mode and the Xbox Game Bar -- leave the BIOS on Auto and install the current chipset driver. On 7800X3D/9800X3D (one CCD) there is nothing to do." `
-        -ExplDE 'Nur 7900X3D/7950X3D/9900X3D/9950X3D: Spiele sollen auf dem CCD mit dem 3D-Cache laufen. Das uebernimmt AMDs Chipsatz-Treiber zusammen mit dem Windows-Spielmodus und der Xbox Game Bar -- im BIOS auf Auto lassen, aktuellen Chipsatz-Treiber installieren. Bei 7800X3D/9800X3D (ein CCD) gibt es nichts zu tun.' `
+        -ExplDE 'Nur 7900X3D/7950X3D/9900X3D/9950X3D: Spiele sollen auf dem CCD mit dem 3D-Cache laufen. Das übernimmt AMDs Chipsatz-Treiber zusammen mit dem Windows-Spielmodus und der Xbox Game Bar -- im BIOS auf Auto lassen, aktuellen Chipsatz-Treiber installieren. Bei 7800X3D/9800X3D (ein CCD) gibt es nichts zu tun.' `
         -Risk 'safe' -Impact 'medium'
 }
 function BS-IntelDefault([string]$Gen) {
     $t = @{
         rpl = @('Intel Default Settings = Performance (i9-K: PL1 = PL2 = 253 W, ICCMax 307 A)',
                 "Many boards ran 13th/14th gen without power limits -- together with the Vmin Shift bug that caused crashes and permanently damaged CPUs. Intel's Performance profile (Extreme only for i9-K with a very good cooler) is the safe state; in games it costs practically nothing.",
-                "Viele Boards liessen 13./14. Gen ohne Leistungsgrenze laufen -- zusammen mit dem Vmin-Shift-Fehler fuehrte das zu Abstuerzen und dauerhaft geschaedigten CPUs. Intels Vorgabe 'Performance' (bzw. 'Extreme' nur fuer i9-K mit sehr gutem Kuehler) ist der sichere Stand; in Spielen kostet sie praktisch nichts.")
+                "Viele Boards ließen 13./14. Gen ohne Leistungsgrenze laufen -- zusammen mit dem Vmin-Shift-Fehler führte das zu Abstürzen und dauerhaft geschädigten CPUs. Intels Vorgabe 'Performance' (bzw. 'Extreme' nur für i9-K mit sehr gutem Kühler) ist der sichere Stand; in Spielen kostet sie praktisch nichts.")
         adl = @('PL1 / PL2 per Intel (e.g. i9-12900K: 125 W / 241 W)',
                 "The board default is often unlimited -- that gains little in games but makes the CPU very hot. Intel's values are listed on ark.intel.com.",
-                "Board-Standard ist oft 'unbegrenzt' -- das bringt in Spielen kaum etwas, macht die CPU aber sehr heiss. Intels Werte stehen auf ark.intel.com.")
+                "Board-Standard ist oft 'unbegrenzt' -- das bringt in Spielen kaum etwas, macht die CPU aber sehr heiß. Intels Werte stehen auf ark.intel.com.")
         arl = @('Intel Default Settings = Performance',
                 "Intel's recommended state for Core Ultra 200S; some boards start with unlimited power.",
-                "Der von Intel empfohlene Stand fuer Core Ultra 200S; manche Boards starten mit 'unbegrenzt'.")
+                "Der von Intel empfohlene Stand für Core Ultra 200S; manche Boards starten mit 'unbegrenzt'.")
     }[$Gen]
     New-BiosSetting -Key 'intel_power' -Cat 'Power' -Name 'Power limits (Intel Default Settings)' -Rec $t[0] -Def 'unlimited on many boards' `
         -Path 'CPU / OC menu -> Intel Default Settings or Long/Short Duration Power Limit (PL1/PL2)' -Expl $t[1] -ExplDE $t[2] `
@@ -4923,7 +4984,7 @@ function BS-Mce {
     New-BiosSetting -Key 'mce' -Cat 'CPU' -Name 'Multi-Core Enhancement' -Rec 'Auto (performance) -- if too hot: Disabled' -Def 'Auto / Enabled' `
         -Path 'OC menu -> Multi-Core Enhancement' `
         -Expl "Runs all cores at the single-core turbo (outside Intel's spec). A few percent more performance, but clearly more heat -- with a weak cooler choose Disabled." `
-        -ExplDE 'Laesst alle Kerne mit dem Einkern-Turbo laufen (ausserhalb von Intels Vorgabe). Ein paar Prozent mehr Leistung, dafuer deutlich mehr Waerme -- mit schwachem Kuehler Disabled waehlen.' `
+        -ExplDE 'Laesst alle Kerne mit dem Einkern-Turbo laufen (außerhalb von Intels Vorgabe). Ein paar Prozent mehr Leistung, dafür deutlich mehr Wärme -- mit schwachem Kühler Disabled wählen.' `
         -Risk 'moderate' -Impact 'low' -Paths @{
             asus = 'Ai Tweaker -> ASUS MultiCore Enhancement'
             msi = 'OC -> Enhanced Turbo'
@@ -4934,22 +4995,22 @@ function BS-200SBoost {
     New-BiosSetting -Key '200s_boost' -Cat 'Memory' -Name 'Intel 200S Boost' -Rec 'Enabled (with matching RAM)' -Def 'Disabled' `
         -Path 'OC menu -> Intel 200S Boost (BIOS with microcode 0x114 or newer)' `
         -Expl "Intel's official, warranty-covered overclock for Core Ultra 200S: faster die-to-die / NGU links and RAM up to DDR5-8000. Gains a few percent in games -- Arrow Lake's biggest weakness is memory latency." `
-        -ExplDE 'Intels offizielle, von der Garantie gedeckte Uebertaktung fuer Core Ultra 200S: schnellere Verbindung zwischen den Kacheln (D2D/NGU) und RAM bis DDR5-8000. Bringt in Spielen einige Prozent -- die groesste Schwaeche von Arrow Lake ist die Speicher-Latenz.' `
+        -ExplDE 'Intels offizielle, von der Garantie gedeckte Übertaktung für Core Ultra 200S: schnellere Verbindung zwischen den Kacheln (D2D/NGU) und RAM bis DDR5-8000. Bringt in Spielen einige Prozent -- die größte Schwäche von Arrow Lake ist die Speicher-Latenz.' `
         -Risk 'safe' -Impact 'medium' -Paths @{
             asus = 'Ai Tweaker -> Intel(R) 200S Boost'; msi = 'OC -> Intel 200S Boost'; gigabyte = 'Tweaker -> Intel 200S Boost'; asrock = 'OC Tweaker -> Intel 200S Boost' }
 }
 function BS-ECores {
     New-BiosSetting -Key 'ecores' -Cat 'CPU' -Name 'E-Cores' -Rec 'leave Enabled' -Def 'Enabled' -Path 'CPU configuration -> Active Efficient Cores = All' `
         -Expl 'Disabling E-cores used to help some games. With Windows 11 and Thread Director games land on the P-cores today; disabling costs performance in everything else. Only test it for a single game with problems (old anti-cheats).' `
-        -ExplDE 'Frueher half das Abschalten der E-Cores manchen Spielen. Mit Windows 11 und dem Thread Director landen Spiele heute auf den P-Cores; abschalten kostet Leistung bei allem anderen. Nur bei einem einzelnen Spiel mit Problemen (alte Anti-Cheats) testen.' `
+        -ExplDE 'Früher half das Abschalten der E-Cores manchen Spielen. Mit Windows 11 und dem Thread Director landen Spiele heute auf den P-Cores; abschalten kostet Leistung bei allem anderen. Nur bei einem einzelnen Spiel mit Problemen (alte Anti-Cheats) testen.' `
         -Risk 'safe' -Impact 'low'
 }
 function BS-Am5Base([string]$Zen) {
     @(
-        (BS-MemoryProfile 'amd' 'DDR5' 'DDR5-6000 CL30 is the sweet spot' 'AM5 runs best with DDR5-6000 to -6400 in 1:1 mode (UCLK = MCLK).' 'AM5 laeuft am besten mit DDR5-6000 bis -6400 im 1:1-Modus (UCLK = MCLK).'),
-        (BS-Fclk $(if ($Zen -eq 'zen5') { '2000 MHz (Zen 5 often 2100)' } else { '2000 MHz' }) 'The link between cores and memory controller. With DDR5-6000, 2000 MHz is usual and stable; Auto often leaves 1733-1800 MHz.' 'Die Verbindung zwischen Kernen und Speicher-Controller. Bei DDR5-6000 sind 2000 MHz ueblich und stabil; Auto laesst oft 1733-1800 MHz liegen.'),
+        (BS-MemoryProfile 'amd' 'DDR5' 'DDR5-6000 CL30 is the sweet spot' 'AM5 runs best with DDR5-6000 to -6400 in 1:1 mode (UCLK = MCLK).' 'AM5 läuft am besten mit DDR5-6000 bis -6400 im 1:1-Modus (UCLK = MCLK).'),
+        (BS-Fclk $(if ($Zen -eq 'zen5') { '2000 MHz (Zen 5 often 2100)' } else { '2000 MHz' }) 'The link between cores and memory controller. With DDR5-6000, 2000 MHz is usual and stable; Auto often leaves 1733-1800 MHz.' 'Die Verbindung zwischen Kernen und Speicher-Controller. Bei DDR5-6000 sind 2000 MHz üblich und stabil; Auto lässt oft 1733-1800 MHz liegen.'),
         (BS-Mcr), (BS-CStatesAmd), (BS-Rebar 'amd'), (BS-PcieGpu), (BS-IgpuOff $false), (BS-Csm), (BS-SecureBoot),
-        (BS-BiosUpdate 'New AGESA versions bring noticeably shorter boot times, better RAM support and performance fixes on AM5 (Zen 5: the 2-core latency update).' "Neue AGESA-Versionen bringen bei AM5 spuerbar kuerzere Startzeiten, besseren RAM-Support und Leistungs-Fixes (Zen 5: '2-Kern-Latenz'-Update)."),
+        (BS-BiosUpdate 'New AGESA versions bring noticeably shorter boot times, better RAM support and performance fixes on AM5 (Zen 5: the 2-core latency update).' "Neue AGESA-Versionen bringen bei AM5 spürbar kürzere Startzeiten, besseren RAM-Support und Leistungs-Fixes (Zen 5: '2-Kern-Latenz'-Update)."),
         (BS-AutoInstall)
     )
 }
@@ -4957,57 +5018,57 @@ function New-BiosProfile([string]$Id, [string]$Name, [string]$Short, [string]$Cp
     [pscustomobject]@{ Id = $Id; Name = $Name; Short = $Short; Cpus = $Cpus; Platform = $Platform; Brand = $Brand; Settings = @($Settings); Notes = $Notes; NotesDE = $NotesDE }
 }
 $amCO1 = 'Lowers temperature and raises boost.'; $amCO1DE = 'Senkt Temperatur und hebt den Boost.'
-$am4Rebar = 'AM4 needs a BIOS from 2021 or newer for this.'; $am4RebarDE = 'AM4 braucht dafuer ein BIOS von 2021 oder neuer.'
+$am4Rebar = 'AM4 needs a BIOS from 2021 or newer for this.'; $am4RebarDE = 'AM4 braucht dafür ein BIOS von 2021 oder neuer.'
 $Script:BiosProfiles = @(
     (New-BiosProfile 'am5_zen5_x3d' 'AMD Ryzen 9000X3D (Zen 5 + 3D V-Cache) -- AM5' 'Ryzen 9000X3D' 'Ryzen 7 9800X3D, Ryzen 9 9900X3D, 9950X3D' 'AM5 -- X870E / X870 / B850 / B840 / X670E / X670 / B650 / A620' 'amd' `
         (@((BS-Pbo 'zen5_x3d'), (BS-CurveOptimizer 'All Cores, Negative 15-25' 'Most 9800X3D handle -15 to -25; less voltage = more boost at the same temperature.' 'Die meisten 9800X3D vertragen -15 bis -25; weniger Spannung = mehr Boost bei gleicher Temperatur.'), (BS-CppcX3d)) + (BS-Am5Base 'zen5')) `
-        'The best gaming CPU family -- the 3D cache does most of the work. Enabling EXPO is a must, PBO / Curve Optimizer are fine-tuning.' 'Die beste Gaming-CPU-Familie -- der 3D-Cache macht den groessten Teil der Arbeit. EXPO aktivieren ist Pflicht, PBO/Curve Optimizer sind Feinschliff.'),
+        'The best gaming CPU family -- the 3D cache does most of the work. Enabling EXPO is a must, PBO / Curve Optimizer are fine-tuning.' 'Die beste Gaming-CPU-Familie -- der 3D-Cache macht den größten Teil der Arbeit. EXPO aktivieren ist Pflicht, PBO/Curve Optimizer sind Feinschliff.'),
     (New-BiosProfile 'am5_zen5' 'AMD Ryzen 9000 (Zen 5) -- AM5' 'Ryzen 9000' 'Ryzen 5 9600(X), Ryzen 7 9700X, Ryzen 9 9900X, 9950X' 'AM5 -- X870E / X870 / B850 / B840 / X670E / X670 / B650 / A620' 'amd' `
-        (@((BS-Pbo 'zen5'), (BS-CurveOptimizer 'All Cores, Negative 10-20' 'Zen 5 usually handles -10 to -20.' 'Zen 5 vertraegt meist -10 bis -20.')) + (BS-Am5Base 'zen5')) `
+        (@((BS-Pbo 'zen5'), (BS-CurveOptimizer 'All Cores, Negative 10-20' 'Zen 5 usually handles -10 to -20.' 'Zen 5 verträgt meist -10 bis -20.')) + (BS-Am5Base 'zen5')) `
         'The 9600X/9700X ship with a 65 W limit; PBO (or the 105 W mode of some BIOS versions) raises it -- in games that gains little.' '9600X/9700X kommen ab Werk mit 65-W-Grenze; PBO (oder der 105-W-Modus mancher BIOS) hebt sie an -- in Spielen bringt das nur wenig.'),
     (New-BiosProfile 'am5_zen4_x3d' 'AMD Ryzen 7000X3D (Zen 4 + 3D V-Cache) -- AM5' 'Ryzen 7000X3D' 'Ryzen 7 7800X3D, Ryzen 9 7900X3D, 7950X3D' 'AM5 -- X870E / X870 / B850 / X670E / X670 / B650 / A620' 'amd' `
-        (@((BS-Pbo 'zen4_x3d'), (BS-CurveOptimizer 'All Cores, Negative 15-30' 'The only lever on the 7000X3D: less voltage lets them boost higher.' 'Der einzige Hebel bei den 7000X3D: weniger Spannung laesst sie hoeher boosten.'), (BS-CppcX3d)) + (BS-Am5Base 'zen4')) `
-        'Important: keep the BIOS current -- early versions allowed too-high SoC voltages (burnt 7800X3D in 2023). Current BIOS versions cap the SoC voltage at 1.3 V or less.' 'Wichtig: BIOS aktuell halten -- fruehe Versionen liessen zu hohe SoC-Spannungen zu (2023 durchgebrannte 7800X3D). Aktuelle BIOS begrenzen die SoC-Spannung auf hoechstens 1,3 V.'),
+        (@((BS-Pbo 'zen4_x3d'), (BS-CurveOptimizer 'All Cores, Negative 15-30' 'The only lever on the 7000X3D: less voltage lets them boost higher.' 'Der einzige Hebel bei den 7000X3D: weniger Spannung lässt sie höher boosten.'), (BS-CppcX3d)) + (BS-Am5Base 'zen4')) `
+        'Important: keep the BIOS current -- early versions allowed too-high SoC voltages (burnt 7800X3D in 2023). Current BIOS versions cap the SoC voltage at 1.3 V or less.' 'Wichtig: BIOS aktuell halten -- frühe Versionen ließen zu hohe SoC-Spannungen zu (2023 durchgebrannte 7800X3D). Aktuelle BIOS begrenzen die SoC-Spannung auf höchstens 1,3 V.'),
     (New-BiosProfile 'am5_zen4' 'AMD Ryzen 7000 (Zen 4) -- AM5' 'Ryzen 7000' 'Ryzen 5 7600(X), Ryzen 7 7700(X), Ryzen 9 7900(X), 7950X' 'AM5 -- X870E / X870 / B850 / X670E / X670 / B650 / A620' 'amd' `
         (@((BS-Pbo 'zen4'), (BS-CurveOptimizer 'All Cores, Negative 10-20' 'Lowers temperature and raises boost -- the best lever on Ryzen 7000.' 'Senkt Temperatur und hebt den Boost -- bei Ryzen 7000 der beste Hebel.')) + (BS-Am5Base 'zen4'))),
     (New-BiosProfile 'am5_apu' 'AMD Ryzen 8000G / 8000F (Zen 4 APU) -- AM5' 'Ryzen 8000G / 8000F' 'Ryzen 5 8500G / 8600G, Ryzen 7 8700G, Ryzen 5 8400F, Ryzen 7 8700F' 'AM5 -- B650 / A620 / X670 / B850' 'amd' `
-        @((BS-MemoryProfile 'amd' 'DDR5' 'DDR5-6000 or faster' 'If you game on the integrated graphics, fast RAM matters even more -- the iGPU has no memory of its own.' 'Spielst du ueber die integrierte Grafik, ist schneller RAM besonders wichtig -- die iGPU hat keinen eigenen Speicher.'),
+        @((BS-MemoryProfile 'amd' 'DDR5' 'DDR5-6000 or faster' 'If you game on the integrated graphics, fast RAM matters even more -- the iGPU has no memory of its own.' 'Spielst du über die integrierte Grafik, ist schneller RAM besonders wichtig -- die iGPU hat keinen eigenen Speicher.'),
           (BS-IgpuOff $true), (BS-Pbo 'zen4'), (BS-CurveOptimizer 'All Cores, Negative 10-20' $amCO1 $amCO1DE), (BS-Mcr), (BS-CStatesAmd), (BS-Rebar 'amd'), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
           (BS-BiosUpdate 'New AGESA versions improve RAM support and boot times.' 'Neue AGESA-Versionen verbessern RAM-Support und Startzeiten.'), (BS-AutoInstall)) `
-        'The 8000G/8000F have PCIe 4.0 and -- on 8500G/8400F -- fewer lanes; for a fast graphics card a Ryzen 7000/9000 is the better choice.' 'Die 8000G/8000F haben PCIe 4.0 und -- bei 8500G/8400F -- weniger Lanes; fuer eine schnelle Grafikkarte ist ein Ryzen 7000/9000 die bessere Wahl.'),
+        'The 8000G/8000F have PCIe 4.0 and -- on 8500G/8400F -- fewer lanes; for a fast graphics card a Ryzen 7000/9000 is the better choice.' 'Die 8000G/8000F haben PCIe 4.0 und -- bei 8500G/8400F -- weniger Lanes; für eine schnelle Grafikkarte ist ein Ryzen 7000/9000 die bessere Wahl.'),
     (New-BiosProfile 'am4_zen3_x3d' 'AMD Ryzen 5000X3D (Zen 3 + 3D V-Cache) -- AM4' 'Ryzen 5000X3D' 'Ryzen 5 5600X3D, Ryzen 7 5700X3D, 5800X3D' 'AM4 -- X570 / B550 / X470 / B450 / A520' 'amd' `
         @((BS-MemoryProfile 'amd' 'DDR4' 'DDR4-3600 CL16 is the sweet spot'),
           (BS-Fclk '1800 MHz (with DDR4-3600)' '1:1 with the RAM: DDR4-3600 -> FCLK 1800, DDR4-3800 -> 1900.' '1:1 mit dem RAM: DDR4-3600 -> FCLK 1800, DDR4-3800 -> 1900.'),
-          (BS-CurveOptimizer 'only if offered: All Cores, Negative 15-30' 'The 5000X3D are locked; newer BIOS versions (AGESA 1.2.0.8+) partly offer the Curve Optimizer, MSI calls it Kombo Strike (OC menu, level 1-3).' "Die 5000X3D sind gesperrt; neuere BIOS (AGESA 1.2.0.8+) bieten den Curve Optimizer teils an, MSI nennt es 'Kombo Strike' (OC-Menue, Stufe 1-3)."),
+          (BS-CurveOptimizer 'only if offered: All Cores, Negative 15-30' 'The 5000X3D are locked; newer BIOS versions (AGESA 1.2.0.8+) partly offer the Curve Optimizer, MSI calls it Kombo Strike (OC menu, level 1-3).' "Die 5000X3D sind gesperrt; neuere BIOS (AGESA 1.2.0.8+) bieten den Curve Optimizer teils an, MSI nennt es 'Kombo Strike' (OC-Menü, Stufe 1-3)."),
           (BS-Rebar 'amd' $am4Rebar $am4RebarDE), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
-          (BS-BiosUpdate 'For 5000X3D on older boards a BIOS update is mandatory (AGESA 1.2.0.x).' 'Fuer 5000X3D auf aelteren Boards ist ein BIOS-Update Pflicht (AGESA 1.2.0.x).'), (BS-AutoInstall)) `
-        'PBO and clock overclocking are locked on the 5000X3D -- EXPO/XMP and FCLK 1:1 are the most important points.' 'PBO und Takt-Uebertaktung sind bei den 5000X3D gesperrt -- EXPO/XMP und FCLK 1:1 sind die wichtigsten Punkte.'),
+          (BS-BiosUpdate 'For 5000X3D on older boards a BIOS update is mandatory (AGESA 1.2.0.x).' 'Fuer 5000X3D auf älteren Boards ist ein BIOS-Update Pflicht (AGESA 1.2.0.x).'), (BS-AutoInstall)) `
+        'PBO and clock overclocking are locked on the 5000X3D -- EXPO/XMP and FCLK 1:1 are the most important points.' 'PBO und Takt-Übertaktung sind bei den 5000X3D gesperrt -- EXPO/XMP und FCLK 1:1 sind die wichtigsten Punkte.'),
     (New-BiosProfile 'am4_zen3' 'AMD Ryzen 5000 (Zen 3) -- AM4' 'Ryzen 5000' 'Ryzen 5 5500 / 5600(X), Ryzen 7 5700X / 5800X, Ryzen 9 5900X / 5950X' 'AM4 -- X570 / B550 / X470 / B450 / A520' 'amd' `
         @((BS-MemoryProfile 'amd' 'DDR4' 'DDR4-3600 CL16 is the sweet spot'),
           (BS-Fclk '1800 MHz (with DDR4-3600)' '1:1 with the RAM: DDR4-3600 -> FCLK 1800, DDR4-3800 -> 1900 (not every CPU manages 1900).' '1:1 mit dem RAM: DDR4-3600 -> FCLK 1800, DDR4-3800 -> 1900 (nicht jede CPU schafft 1900).'),
           (BS-Pbo 'zen3'),
           (BS-CurveOptimizer 'All Cores, Negative 10-20 (better: per core)' 'Zen 3 responds strongly to the Curve Optimizer; the two best cores usually take less.' 'Zen 3 reagiert stark auf den Curve Optimizer; die besten zwei Kerne vertragen meist weniger.'),
           (BS-Rebar 'amd' $am4Rebar $am4RebarDE), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
-          (BS-BiosUpdate 'On 400-series boards a BIOS update is mandatory for Ryzen 5000; newer AGESA versions fix USB dropouts.' 'Auf 400er-Boards ist ein BIOS-Update fuer Ryzen 5000 Pflicht; neuere AGESA-Versionen beheben USB-Aussetzer.'), (BS-AutoInstall))),
+          (BS-BiosUpdate 'On 400-series boards a BIOS update is mandatory for Ryzen 5000; newer AGESA versions fix USB dropouts.' 'Auf 400er-Boards ist ein BIOS-Update für Ryzen 5000 Pflicht; neuere AGESA-Versionen beheben USB-Aussetzer.'), (BS-AutoInstall))),
     (New-BiosProfile 'am4_apu' 'AMD Ryzen 5000G / 4000G / 3000G / 2000G (APU) -- AM4' 'Ryzen 5000G - 2000G (APU)' 'Ryzen 3 5300G, Ryzen 5 5600G / 4600G / 3400G / 2400G, Ryzen 7 5700G' 'AM4 -- B550 / A520 / X570 / B450 / A320' 'amd' `
         @((BS-MemoryProfile 'amd' 'DDR4' 'DDR4-3600 or faster' 'The iGPU uses system RAM as video memory -- fast RAM helps it the most.' 'Die iGPU nutzt den Arbeitsspeicher als Grafikspeicher -- schneller RAM bringt ihr am meisten.'),
           (BS-IgpuOff $true),
           (BS-Fclk '1800-2000 MHz' 'The APUs often manage FCLK 2000 (DDR4-4000 1:1).' 'Die APUs schaffen oft FCLK 2000 (DDR4-4000 1:1).'),
           (BS-Rebar 'amd' 'On the APUs only with 5000G and a current BIOS.' 'Bei den APUs nur mit 5000G und aktuellem BIOS.'), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
           (BS-BiosUpdate 'New AGESA versions improve APU support.' 'Neue AGESA-Versionen verbessern den APU-Support.'), (BS-AutoInstall)) `
-        '5600G/5700G only have PCIe 3.0 -- not ideal for a fast graphics card.' '5600G/5700G haben nur PCIe 3.0 -- fuer eine schnelle Grafikkarte nicht ideal.'),
+        '5600G/5700G only have PCIe 3.0 -- not ideal for a fast graphics card.' '5600G/5700G haben nur PCIe 3.0 -- für eine schnelle Grafikkarte nicht ideal.'),
     (New-BiosProfile 'am4_zen2' 'AMD Ryzen 3000 (Zen 2) -- AM4' 'Ryzen 3000' 'Ryzen 5 3600(X), Ryzen 7 3700X / 3800X, Ryzen 9 3900X / 3950X' 'AM4 -- X570 / B550 / X470 / B450' 'amd' `
         @((BS-MemoryProfile 'amd' 'DDR4' 'DDR4-3600 CL16'),
           (BS-Fclk '1800 MHz (with DDR4-3600)' 'Zen 2 almost always manages 1800 MHz 1:1, 1866-1900 only rarely.' 'Zen 2 schafft fast immer 1800 MHz 1:1, 1866-1900 nur selten.'),
           (BS-Pbo 'zen2'),
-          (BS-Rebar 'amd' 'Ryzen 3000 supports it since 2021 on 400/500-series boards -- BIOS update required.' 'Ryzen 3000 unterstuetzt es seit 2021 auf 400er/500er-Boards -- BIOS-Update noetig.'),
+          (BS-Rebar 'amd' 'Ryzen 3000 supports it since 2021 on 400/500-series boards -- BIOS update required.' 'Ryzen 3000 unterstützt es seit 2021 auf 400er/500er-Boards -- BIOS-Update nötig.'),
           (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
-          (BS-BiosUpdate 'Resizable BAR and the Windows 11 TPM need a BIOS from 2021 or newer.' 'Fuer Resizable BAR und Windows-11-TPM ist ein BIOS ab 2021 noetig.'), (BS-AutoInstall))),
+          (BS-BiosUpdate 'Resizable BAR and the Windows 11 TPM need a BIOS from 2021 or newer.' 'Fuer Resizable BAR und Windows-11-TPM ist ein BIOS ab 2021 nötig.'), (BS-AutoInstall))),
     (New-BiosProfile 'am4_zen1' 'AMD Ryzen 1000 / 2000 (Zen / Zen+) -- AM4' 'Ryzen 1000 / 2000' 'Ryzen 5 1600 / 2600, Ryzen 7 1700 / 2700X' 'AM4 -- X470 / B450 / X370 / B350' 'amd' `
-        @((BS-MemoryProfile 'amd' 'DDR4' 'DDR4-3200 (Zen+: often 3466)' 'Zen/Zen+ are picky with RAM -- if the profile does not work, lower the speed one step.' 'Zen/Zen+ sind beim RAM waehlerisch -- klappt das Profil nicht, den Takt eine Stufe senken.'),
+        @((BS-MemoryProfile 'amd' 'DDR4' 'DDR4-3200 (Zen+: often 3466)' 'Zen/Zen+ are picky with RAM -- if the profile does not work, lower the speed one step.' 'Zen/Zen+ sind beim RAM wählerisch -- klappt das Profil nicht, den Takt eine Stufe senken.'),
           (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
-          (BS-BiosUpdate 'Newer BIOS versions clearly improve RAM compatibility.' 'Neuere BIOS-Versionen verbessern die RAM-Kompatibilitaet deutlich.'), (BS-AutoInstall)) `
-        'Resizable BAR does not exist for Ryzen 1000/2000. A Ryzen 5000(X3D) usually fits the same board after a BIOS update -- the biggest jump for little money.' 'Resizable BAR gibt es fuer Ryzen 1000/2000 nicht. Ein Ryzen 5000(X3D) passt meist mit BIOS-Update in dasselbe Board -- der groesste Sprung fuer wenig Geld.'),
+          (BS-BiosUpdate 'Newer BIOS versions clearly improve RAM compatibility.' 'Neuere BIOS-Versionen verbessern die RAM-Kompatibilität deutlich.'), (BS-AutoInstall)) `
+        'Resizable BAR does not exist for Ryzen 1000/2000. A Ryzen 5000(X3D) usually fits the same board after a BIOS update -- the biggest jump for little money.' 'Resizable BAR gibt es für Ryzen 1000/2000 nicht. Ein Ryzen 5000(X3D) passt meist mit BIOS-Update in dasselbe Board -- der größte Sprung für wenig Geld.'),
     (New-BiosProfile 'lga1851_arl' 'Intel Core Ultra 200S (Arrow Lake) -- LGA1851' 'Core Ultra 200S' 'Core Ultra 5 245K / 225, Core Ultra 7 265K, Core Ultra 9 285K' 'LGA1851 -- Z890 / B860 / H810' 'intel' `
         @((BS-MemoryProfile 'intel' 'DDR5' 'DDR5-6400 to -8000 (CUDIMM)' 'Arrow Lake benefits a lot from fast RAM; from DDR5-8000 CUDIMM modules are worth it.' 'Arrow Lake profitiert stark von schnellem RAM; ab DDR5-8000 lohnen CUDIMM-Module.'),
           (BS-200SBoost), (BS-IntelDefault 'arl'), (BS-Rebar 'intel'), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
@@ -5019,18 +5080,18 @@ $Script:BiosProfiles = @(
           (BS-IntelDefault 'rpl'),
           (BS-MemoryProfile 'intel' 'DDR5' 'DDR5-6000 to -7200 (DDR4 boards: DDR4-3600)'),
           (BS-ECores), (BS-Rebar 'intel'), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot), (BS-AutoInstall)) `
-        'Crashes in games (out of video memory, shader errors) are a typical sign of the Vmin Shift on 13th/14th gen -- first BIOS update + Intel Default Settings, then optimize further. Intel extended the warranty of these CPUs.' "Abstuerze in Spielen ('Out of video memory', Shader-Fehler) sind bei 13./14. Gen ein typisches Zeichen fuer den Vmin-Shift -- erst BIOS-Update + Intel Default Settings, dann weiter optimieren. Intel hat die Garantie dieser CPUs verlaengert."),
+        'Crashes in games (out of video memory, shader errors) are a typical sign of the Vmin Shift on 13th/14th gen -- first BIOS update + Intel Default Settings, then optimize further. Intel extended the warranty of these CPUs.' "Abstürze in Spielen ('Out of video memory', Shader-Fehler) sind bei 13./14. Gen ein typisches Zeichen für den Vmin-Shift -- erst BIOS-Update + Intel Default Settings, dann weiter optimieren. Intel hat die Garantie dieser CPUs verlängert."),
     (New-BiosProfile 'lga1700_adl' 'Intel Core 12th gen (Alder Lake) -- LGA1700' 'Core 12th gen' 'Core i3-12100, Core i5-12400 / 12600K, Core i7-12700K, Core i9-12900K' 'LGA1700 -- Z690 / B660 / H670 / H610 (also Z790 / B760)' 'intel' `
         @((BS-MemoryProfile 'intel' 'DDR5' 'DDR5-6000 (DDR4 boards: DDR4-3600 in Gear 1)'),
           (BS-IntelDefault 'adl'), (BS-ECores), (BS-Rebar 'intel'), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
           (BS-BiosUpdate 'Newer BIOS versions clearly improve DDR5 support.' 'Neuere BIOS-Versionen verbessern den DDR5-Support deutlich.'), (BS-AutoInstall)) `
-        'On Windows 10 the Thread Director distributes the cores worse -- Windows 11 gets noticeably more out of 12th gen.' 'Unter Windows 10 verteilt der Thread Director die Kerne schlechter -- Windows 11 holt bei 12. Gen spuerbar mehr heraus.'),
+        'On Windows 10 the Thread Director distributes the cores worse -- Windows 11 gets noticeably more out of 12th gen.' 'Unter Windows 10 verteilt der Thread Director die Kerne schlechter -- Windows 11 holt bei 12. Gen spürbar mehr heraus.'),
     (New-BiosProfile 'lga1200' 'Intel Core 10th / 11th gen (Comet / Rocket Lake) -- LGA1200' 'Core 10th / 11th gen' 'Core i5-10400 - 11600K, Core i7-10700K / 11700K, Core i9-10900K / 11900K' 'LGA1200 -- Z590 / B560 / H570 / Z490 / B460 / H410' 'intel' `
         @((BS-MemoryProfile 'intel' 'DDR4' 'DDR4-3200 to -3600 (11th gen: Gear 1)' 'On 11th gen keep the memory controller in Gear 1 -- Gear 2 costs latency.' "Bei 11. Gen den Speicher-Controller im 'Gear 1' lassen -- Gear 2 kostet Latenz."),
           (BS-Mce),
-          (BS-Rebar 'intel' 'Officially from 11th gen on 500-series boards; many Z490 boards added it for 10th gen via BIOS update.' 'Offiziell ab 11. Gen auf 500er-Boards; viele Z490-Boards haben es per BIOS-Update fuer 10. Gen nachgereicht.'),
+          (BS-Rebar 'intel' 'Officially from 11th gen on 500-series boards; many Z490 boards added it for 10th gen via BIOS update.' 'Offiziell ab 11. Gen auf 500er-Boards; viele Z490-Boards haben es per BIOS-Update für 10. Gen nachgereicht.'),
           (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
-          (BS-BiosUpdate 'Resizable BAR and the Windows 11 TPM need a BIOS from 2021 or newer.' 'Fuer Resizable BAR und Windows-11-TPM ist ein BIOS ab 2021 noetig.'), (BS-AutoInstall))),
+          (BS-BiosUpdate 'Resizable BAR and the Windows 11 TPM need a BIOS from 2021 or newer.' 'Fuer Resizable BAR und Windows-11-TPM ist ein BIOS ab 2021 nötig.'), (BS-AutoInstall))),
     (New-BiosProfile 'lga1151' 'Intel Core 8th / 9th gen (Coffee Lake) -- LGA1151' 'Core 8th / 9th gen' 'Core i5-8400 - 9600K, Core i7-8700K / 9700K, Core i9-9900K' 'LGA1151 v2 -- Z390 / Z370 / B365 / B360 / H370' 'intel' `
         @((BS-MemoryProfile 'intel' 'DDR4' 'DDR4-3200'), (BS-Mce), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
           (BS-BiosUpdate 'Newer BIOS versions contain security microcode and partly Resizable BAR (only some Z390 boards, unofficial).' 'Neuere BIOS-Versionen enthalten Sicherheits-Microcode und teils Resizable BAR (nur manche Z390-Boards, inoffiziell).'), (BS-AutoInstall)) `
@@ -5038,9 +5099,9 @@ $Script:BiosProfiles = @(
     (New-BiosProfile 'generic' 'Other / unknown platform -- basics' 'Other / unknown' 'any desktop CPU' 'any board' 'any' `
         @((New-BiosSetting -Key 'memory_profile' -Cat 'Memory' -Name 'XMP / EXPO / DOCP profile' -Rec 'Profile 1' -Def 'Off -- JEDEC base clock' `
               -Path 'OC / Tweaker menu -> memory profile -> Profile 1' -Expl 'Without a profile the RAM only runs at the base clock -- the biggest free gain in the BIOS.' `
-              -ExplDE 'Ohne Profil laeuft der RAM nur mit dem Standardtakt -- der groesste kostenlose Gewinn im BIOS.' -Risk 'safe' -Impact 'high' -Detect 'expo_xmp'),
+              -ExplDE 'Ohne Profil läuft der RAM nur mit dem Standardtakt -- der größte kostenlose Gewinn im BIOS.' -Risk 'safe' -Impact 'high' -Detect 'expo_xmp'),
           (BS-Rebar 'any'), (BS-PcieGpu), (BS-Csm), (BS-SecureBoot),
-          (BS-BiosUpdate 'Newer BIOS versions improve RAM compatibility and security.' 'Neuere BIOS-Versionen verbessern RAM-Kompatibilitaet und Sicherheit.'), (BS-AutoInstall)) `
+          (BS-BiosUpdate 'Newer BIOS versions improve RAM compatibility and security.' 'Neuere BIOS-Versionen verbessern RAM-Kompatibilität und Sicherheit.'), (BS-AutoInstall)) `
         "Laptops: most laptop BIOSes do not offer these options -- there the maker's performance mode (e.g. Turbo / Performance) in the maker's tool matters most." "Laptops: Die meisten Laptop-BIOS bieten diese Optionen nicht -- dort lohnt vor allem der Hersteller-Leistungsmodus (z. B. 'Turbo'/'Performance') im Hersteller-Tool.")
 )
 
@@ -5355,13 +5416,13 @@ function Open-LogFile {
 function Get-BackupSummary {
     $dirs = @(Get-ChildItem $Script:RegistryBackupRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
     if (-not $dirs) { return @{ Count = 0; Last = 'none yet' } }
-    $last = $dirs[0].Name -replace '^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})\d{2}_(.+)$', '$3.$2.$1 $4:$5 ($6)'
+    $last = $dirs[0].Name -replace '^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})\d{2}_(?:v1-)?(.+)$', '$3.$2.$1 $4:$5 ($6)'
     @{ Count = $dirs.Count; Last = $last }
 }
 function Get-BaselineSummary {
     if (Test-Path $Script:BaselineFile) {
-        $n = @(Get-Content $Script:BaselineFile -ErrorAction SilentlyContinue | Where-Object { $_ -and $_.Trim() }).Count
-        "saved $((Get-Item $Script:BaselineFile).LastWriteTime.ToString('dd.MM.yyyy HH:mm')) ($n tweaks)"
+        $n = @((Read-Baseline).Names).Count
+        "$n tweaks applied$($Script:Mid)saved $((Get-Item $Script:BaselineFile).LastWriteTime.ToString('dd.MM.yyyy HH:mm'))"
     } else { 'created after the first Apply' }
 }
 
@@ -5370,6 +5431,43 @@ function Get-BaselineSummary {
 # SecurityServicesRunning contains 2 = HVCI; VirtualizationBasedSecurityStatus 0 off,
 # 1 enabled but not running, 2 running. The shell's BitLocker property needs no admin
 # either: 1 on, 2 off, 3 encrypting, 4 decrypting, 5 suspended, 6 on (locked).
+# Newer release on GitHub? Asked once per start on a background thread -- the window never
+# waits, and a missing connection only means no notice. Nothing is sent but the request.
+function Start-UpdateCheck {
+    $st = @{ Ps = $null; Rs = $null; Handle = $null; Ticks = 0 }
+    try {
+        $st.Rs = [runspacefactory]::CreateRunspace(); $st.Rs.ApartmentState = 'MTA'; $st.Rs.Open()
+        $st.Ps = [powershell]::Create(); $st.Ps.Runspace = $st.Rs
+        [void]$st.Ps.AddScript({
+            try {
+                [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+                $r = Invoke-RestMethod -Uri 'https://api.github.com/repos/FloDePin/GameOptimizerPro/releases/latest' -Headers @{ 'User-Agent' = 'GameOptimizerPro' } -TimeoutSec 8 -UseBasicParsing
+                "$($r.tag_name)"
+            } catch { '' }
+        })
+        $st.Handle = $st.Ps.BeginInvoke()
+    } catch { return }
+    $timer = New-Object System.Windows.Threading.DispatcherTimer
+    $timer.Interval = [TimeSpan]::FromMilliseconds(500)
+    $timer.Add_Tick({
+        $st.Ticks++
+        if (-not $st.Handle.IsCompleted -and $st.Ticks -lt 40) { return }
+        $timer.Stop()
+        $tag = ''
+        try { if ($st.Handle.IsCompleted) { $tag = "$(@($st.Ps.EndInvoke($st.Handle))[0])" } } catch { }
+        try { $st.Ps.Dispose(); $st.Rs.Close(); $st.Rs.Dispose() } catch { }
+        Show-UpdateNotice $tag
+    }.GetNewClosure())
+    $timer.Start()
+}
+function Show-UpdateNotice([string]$Tag) {
+    $new = $null; $have = $null
+    if (-not ([version]::TryParse(($Tag -replace '^v', ''), [ref]$new) -and [version]::TryParse($Script:AppVersion, [ref]$have) -and $new -gt $have)) { return }
+    $Script:Dash.UpdateText.Text = "GameOptimizerPro $Tag is available $($Script:EmDash.Trim()) you have v$($Script:AppVersion). Run the install command again to update."
+    $Script:Dash.UpdateCard.Visibility = 'Visible'
+    Write-Log "Update check: $Tag is available (this is v$($Script:AppVersion))"
+}
+
 function Get-SecurityStatus {
     $dg = try { Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction Stop } catch { $null }
     $hv = if ($dg) { @($dg.SecurityServicesRunning) } else { $null }
@@ -5439,6 +5537,18 @@ function Build-DashboardPage {
     )
     for ($i = 0; $i -lt 4; $i++) { [Windows.Controls.Grid]::SetColumn($cards[$i], $i); $hw.Children.Add($cards[$i]) | Out-Null }
     $DashboardPanel.Children.Add($hw) | Out-Null
+
+    # ---- newer version available (hidden until the background check finds one) ----
+    $D.UpdateText = New-Text '' 12.5 $U.TEXT 'SemiBold' -Wrap
+    $upBtn = New-Btn 'Open release page' $U.CARD2 $U.TEXT 0xE8A7 -Margin 12, 0, 0, 0
+    $upBtn.Add_Click({ try { Start-Process 'https://github.com/FloDePin/GameOptimizerPro/releases/latest' } catch { } })
+    $upRow = New-Object Windows.Controls.DockPanel
+    [Windows.Controls.DockPanel]::SetDock($upBtn, 'Right'); $upRow.Children.Add($upBtn) | Out-Null
+    $upRow.Children.Add((New-HStack @((New-Icon 0xE896 15 $U.GREEN @(0, 0, 10, 0)), $D.UpdateText))) | Out-Null
+    $D.UpdateCard = New-Card $upRow @(0, 0, 0, 14)
+    $D.UpdateCard.Visibility = 'Collapsed'
+    $DashboardPanel.Children.Add($D.UpdateCard) | Out-Null
+    Start-UpdateCheck
 
     # ---- optimization score ----
     $verifyBtn = New-Btn 'Verify again' $U.CARD2 $U.TEXT 0xE72C -Margin 0, 0, 0, 0
@@ -5564,7 +5674,7 @@ function Build-DashboardPage {
         $gr
     }
     $safeBody = New-VStack @((New-CardTitle 'Safety net' $U.GREEN),
-        (& $safeRow 0xEA18 $U.GREEN 'Restore point before app removals' (New-Text 'on' 12.5 $U.TEXT 'SemiBold')),
+        (& $safeRow 0xEA18 $U.GREEN 'Restore point before app removals' $(if (Test-SystemProtection) { New-Text "on ($env:SystemDrive protected)" 12.5 $U.TEXT 'SemiBold' } else { New-Text "System Protection off $($Script:EmDash.Trim()) asked first" 12.5 $U.AMBER 'SemiBold' })),
         (& $safeRow 0xE81C $U.VIOLET 'Last registry backup' $D.SafeBackup),
         (& $safeRow 0xE895 $U.CYAN 'Drift baseline' $D.SafeBase))
     $safeCard = New-Card $safeBody @(7, 0, 0, 14); [Windows.Controls.Grid]::SetColumn($safeCard, 1); $row2.Children.Add($safeCard) | Out-Null
@@ -5651,14 +5761,17 @@ function Build-DashboardPage {
 
 function Update-ScoreCard {
     $D = $Script:Dash; if (-not $D.ScorePct) { return }
+    # Measured against the recommended preset (Balanced) -- tweaks outside it (riskier ones, the
+    # two DNS providers that exclude each other) don't move it, so 100 % is reachable
     $sc = Get-StateCounts
-    $a = $sc.Active; $i = $sc.Inactive
-    $c = $a + $i
+    $set = @($Script:PresetBalanced | Where-Object { $Script:TweakState[$_] -eq 'active' -or $Script:TweakState[$_] -eq 'inactive' })
+    $a = @($set | Where-Object { $Script:TweakState[$_] -eq 'active' }).Count
+    $c = $set.Count
     $score = if ($c) { [math]::Round($a / $c * 100) } else { 0 }
     $col = if ($score -ge 80) { $Script:UI.GREEN } elseif ($score -ge 50) { $Script:UI.AMBER } else { $Script:UI.ERR }
     $D.ScorePct.Text = "$score %"; $D.ScorePct.Foreground = Brush $col
-    $D.ScoreLine.Text = "$a of $c checkable tweaks are active on this PC"
-    $D.ScoreSub.Text = "$($sc.OneTime) one-time actions" + $(if ($sc.NA) { " and $($sc.NA) tweaks not applicable here" } else { "" }) + " are not counted$($Script:Mid)drift check at every start"
+    $D.ScoreLine.Text = "$a of $c tweaks of the recommended Balanced preset are active"
+    $D.ScoreSub.Text = "All tweaks: $($sc.Active) active$($Script:Mid)$($sc.Inactive) inactive" + $(if ($sc.NA) { "$($Script:Mid)$($sc.NA) not applicable here" } else { "" }) + "$($Script:Mid)drift check at every start"
     Set-Bar $D.ScoreBar $score $col
     $bk = Get-BackupSummary
     $D.SafeBackup.Text = $bk.Last
@@ -5728,6 +5841,7 @@ function Build-PresetsPage {
         if (-not $dlg.ShowDialog($Window)) { return }
         try { $lines = @(Get-Content -LiteralPath $dlg.FileName -Encoding UTF8 -ErrorAction Stop | ForEach-Object { "$_".Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') }) }
         catch { Set-Status "Could not read the list: $($_.Exception.Message)"; return }
+        $lines = @($lines | ForEach-Object { if ($Script:RenamedTweaks.ContainsKey($_)) { $Script:RenamedTweaks[$_] } else { $_ } })
         $unknown = @($lines | Where-Object { -not $CheckBoxMap.ContainsKey($_) })
         Set-Preset $lines 'Custom list'
         if ($unknown.Count) { $StatusText.Text += " $($unknown.Count) name(s) from the list don't exist in this version." }
@@ -5828,7 +5942,7 @@ function Build-BackupsPage {
         $c = New-Card $v @(0, 0, 0, 0); $c.VerticalAlignment = 'Stretch'; $c
     }
     $b1 = New-Btn 'Open backup folder' $U.VIOLET '#120a24' 0xE838 -Bold; $b1.Add_Click({ Open-BackupFolder })
-    Add-Grid2 $grid (& $mk 'Registry backups' $U.VIOLET 'Before every Apply and Revert, every registry key a tweak touches is exported to .reg files. Double-click one to put the saved values back; _remove-new-keys.reg deletes keys that did not exist yet. Values a tweak added to an existing key go away with its revert. The newest 20 backups are kept.' @(
+    Add-Grid2 $grid (& $mk 'Registry backups' $U.VIOLET 'Before every Apply and Revert, every registry key a tweak touches is exported to .reg files. Double-click one to put the saved values back; _remove-new-keys.reg deletes keys that did not exist yet, _values.reg holds two single values. Values a tweak added to an existing key go away with its revert. The newest 20 backups of this app are kept (those of GameOptimizerPro v2 in the same folder are left alone).' @(
         (New-Text "$($bk.Count) backup(s)$($Script:Mid)last: $($bk.Last)" 12 $U.DIM 'Normal' -Wrap -Margin 0, 8, 0, 0),
         (New-Text $Script:RegistryBackupRoot 11.5 $U.MUTED 'Normal' -Wrap -Mono -Margin 0, 4, 0, 0)) $b1)
     $b2 = New-Btn 'Open log' $U.CARD2 $U.TEXT 0xE838; $b2.Add_Click({ Open-LogFile })
@@ -5836,10 +5950,10 @@ function Build-BackupsPage {
         (New-Text $LogFile 11.5 $U.MUTED 'Normal' -Wrap -Mono -Margin 0, 8, 0, 0)) $b2)
     $b3 = New-Btn 'Open System Restore' $U.CARD2 $U.TEXT 0xE7A7
     $b3.Add_Click({ try { Start-Process "rstrui.exe" } catch { [System.Windows.MessageBox]::Show("Could not open System Restore (rstrui.exe). Run it manually: Start -> type rstrui", "Error") | Out-Null } })
-    Add-Grid2 $grid (& $mk 'System Restore' $U.GREEN 'A restore point is created before every Apply that removes apps -- System Restore is the only way to bring them back. Everything else has its own revert and is in the registry backup.' @() $b3)
+    Add-Grid2 $grid (& $mk 'System Restore' $U.GREEN 'A restore point is created before every Apply that removes apps; if System Protection is off, you are asked first. Removed apps also come back through the Microsoft Store. Everything else has its own revert and is in the registry backup.' @() $b3)
     $b4 = New-Btn 'Revert all ...' $U.AMBER '#1a1205' 0xE7A7 -Bold
     $b4.Add_Click({ $BtnRevertAll.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Button]::ClickEvent))) })
-    Add-Grid2 $grid (& $mk 'Revert all' $U.AMBER 'Sets every registry, service and network change back to the Windows defaults -- no reboot needed. Removed apps need System Restore.' @() $b4)
+    Add-Grid2 $grid (& $mk 'Revert all' $U.AMBER 'Sets every tweak GameOptimizerPro applied back to the Windows default -- no reboot needed. Settings you made yourself stay. Removed apps come back through the Microsoft Store or System Restore.' @() $b4)
     Add-Grid2 $grid (& $mk 'Drift check' $U.WIN11 'After every Apply the active tweaks are recorded. At every start the tool checks whether a Windows update reset any of them and offers to re-apply them -- no background process, no autostart.' @(
         (New-Text "Baseline: $(Get-BaselineSummary)" 12 $U.DIM 'Normal' -Wrap -Margin 0, 8, 0, 0)) $null)
     $BackupsPanel.Children.Add($grid) | Out-Null
@@ -5866,33 +5980,33 @@ $Script:PresetMinimal = @(
     "Disable Power Throttling",
     "Enable Game Mode","CPU Priority for Games (Win32Priority)","MMCSS Gaming Profile (High Priority)","Disable Fullscreen Optimizations",
     "Disable Mouse Acceleration","Show File Extensions",
-    "Disable Nagle's Algorithm (TCPNoDelay)","Disable Network Throttling Index","Disable QoS Packet Scheduler Limit",
+    "Disable Nagle's Algorithm (TCPNoDelay)","Disable Network Throttling Index",
     "Disable Delivery Optimization (P2P Windows Update)"
 )
 $Script:PresetBalanced = $Script:PresetMinimal + @(
     "Remove Copilot","Remove Windows Recall","Remove Other Bloatware",
     "Stop Auto-Installed Suggested Apps","Disable Tips, Ads & Suggestions","Stop OneDrive Folder Backup","Disable Get Started & Copilot Sign-in Screens",
-    "Disable Click to Do & Settings Agent (AI)","Disable AI in Paint & Notepad",
+    "Disable Click to Do & Settings Agent (AI)","Disable AI in Paint & Notepad","Disable Text & Image Generation (AI)",
     "Block Telemetry Hosts (hosts file)","Disable Input & Speech Data Collection","Disable Remote Assistance",
     "Ultimate Performance Plan","Disable HPET (High Precision Event Timer)","Allow Global Timer Resolution (Windows 11)",
     "Disable Prefetch & Superfetch","Optimize Visual Effects (Performance Mode)","Disable Startup App Delay","Disable Bing in Windows Search",
     "Disable Store Recommended Search Results","Disable File Explorer Automatic Folder Discovery",
-    "Disable Xbox Game Bar","Disable Windows Update during Gaming","Disable Background App Throttling",
+    "Disable Xbox Game Bar",
     "Enable MSI Mode (Message Signaled Interrupts)","Enable Hardware-Accelerated GPU Scheduling (HAGS)","Increase GPU Timeout Tolerance (TDR)",
-    "AMD: Disable ULPS (Ultra Low Power State)","AMD: Shader Cache (Unlimited)","AMD: Anti-Lag (Low Latency Mode)",
+    "AMD: Disable ULPS (Ultra Low Power State)",
     "Disable Audio Enhancements","Optimize MMCSS Audio Profile","Set Audio Service High Priority","Disable Windows Sound Scheme",
-    "Disable Large Send Offload (LSO)","Optimize TCP Settings (ECN/SACK/Timestamps)","Disable TCP Auto-Tuning","Disable Network Adapter Power Saving","Disable Energy-Efficient Ethernet",
+    "Disable Large Send Offload (LSO)","Disable Network Adapter Power Saving","Disable Energy-Efficient Ethernet",
     "Disable Sticky Keys","Enable Dark Mode","Disable Transparency Effects",
     "Restore Classic Right-Click Menu","Left-Align Taskbar","Disable Widgets","Disable Recommended in Start Menu","Enable End Task in Taskbar","Disable Snap Layout Hover Menu",
     "Show Hidden Files","Num Lock on Startup","Enable Long Paths",
-    "Optimize PageFile (System Managed)","Enable SSD TRIM","Disable Scheduled Defragmentation","Optimize NVMe Queue Depth",
+    "Optimize PageFile (System Managed)","Enable SSD TRIM",
     "Disable USB Selective Suspend","Disable USB 3 Link Power Management","Disable PCI-E Link State Power Management","Disable Hard Disk Sleep","Disable Wake Timers","CPU Minimum Processor State = 100%","CPU Maximum Processor State = 100%"
 )
 $Script:PresetAggressive = $Script:PresetBalanced + @(
-    "Remove Xbox Apps","Remove OneDrive","Block Background Apps (Policy)","Exclude Drivers from Windows Update",
+    "Remove Xbox Apps","Remove OneDrive","Block Background Apps (Policy)","Stop Background Apps (All Editions)","Exclude Drivers from Windows Update",
     "Disable Windows Search Indexing","Process Count Reduction (Svchost)","Disable Interrupt Moderation",
     "Disable Memory Compression","Disable Write-Cache Buffer Flushing","Disable Hibernation","Clear PageFile on Shutdown",
-    "Disable Reserved Storage","Disable Storage Sense","Disable Lock Screen","Enable Start Menu Previous Layout",
+    "Disable Reserved Storage","Disable Storage Sense","Disable Lock Screen",
     "Disable Sleep (System)"
 )
 # NOTE: "Set Display Sleep = 15 Minutes" is deliberately NOT part of any preset.
@@ -5902,7 +6016,10 @@ $Script:PresetAggressive = $Script:PresetBalanced + @(
 # plan promising otherwise. Both remain selectable manually; the Apply handler
 # warns when the two are combined.
 # Also in no preset: 'Hold Feature Updates' (a choice with an end date -- revert it in
-# time), 'Alt+Tab Without Browser Tabs' and 'Disable Dynamic Lighting' (taste / RGB setup).
+# time), 'Alt+Tab Without Browser Tabs' and 'Disable Dynamic Lighting' (taste / RGB setup),
+# and since 1.2.6 'Disable Automatic Windows Updates' (no security updates unless you look
+# yourself), 'Disable TCP Auto-Tuning' (caps downloads at the 64 KB window) and 'Disable
+# Scheduled Defragmentation' (on SSDs it only stops the weekly retrim).
 
 function Set-Preset {
     param([string[]]$Names, [string]$Label)
@@ -6033,7 +6150,7 @@ $BtnPresetMin.Add_Click({ Set-Preset $Script:PresetMinimal "Minimal"; Show-Prese
 $BtnPresetBal.Add_Click({ Set-Preset $Script:PresetBalanced "Balanced"; Show-Preset-Result })
 $BtnPresetAgg.Add_Click({
     $r = [System.Windows.MessageBox]::Show(
-        "The 'Aggressive' preset also selects app removals (OneDrive, Xbox, Recall, bloatware) and aggressive tweaks.`n`nRemoved apps cannot be restored by 'Revert All' -- only via System Restore.`n`nSelect the aggressive preset now? (Nothing is applied until you click 'Apply selected'.)",
+        "The 'Aggressive' preset also selects app removals (OneDrive, Xbox, Recall, bloatware) and aggressive tweaks.`n`nRemoved apps don't come back with 'Revert all' -- reinstall them from the Microsoft Store (OneDrive: its installer) or use System Restore.`n`nSelect the aggressive preset now? (Nothing is applied until you click 'Apply selected'.)",
         "GameOptimizerPro -- Aggressive Preset",
         [System.Windows.MessageBoxButton]::YesNo,
         [System.Windows.MessageBoxImage]::Warning)
@@ -6054,6 +6171,16 @@ $BtnApply.Add_Click({
 
     if ($selected.Count -eq 0) {
         [System.Windows.MessageBox]::Show("No tweaks selected!", "GameOptimizerPro", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
+        return
+    }
+
+    # Tweaks already in effect are left alone. Running them again re-deleted every folder view,
+    # restarted Explorer and asked for a restore point for apps that were long gone (after
+    # "Verify" every active tweak is ticked). One-time actions (cleanups) always run.
+    $already = @($selected | Where-Object { $Script:OneTimeNames -notcontains $_.Name -and (Test-TweakActive $_.Name) })
+    $selected = @($selected | Where-Object { $already -notcontains $_ })
+    if ($selected.Count -eq 0) {
+        [System.Windows.MessageBox]::Show("All $($already.Count) ticked tweak(s) are already active -- nothing to do.", "GameOptimizerPro", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
         return
     }
 
@@ -6085,33 +6212,67 @@ $BtnApply.Add_Click({
         if ($pwrWarn -ne [System.Windows.MessageBoxResult]::Yes) { return }
     }
 
-    # A restore point only when apps are removed: they come back through System Restore
-    # alone. Everything else has its own revert plus the registry backup, and
-    # Checkpoint-Computer costs 10-60 s on every Apply.
+    # A restore point only when apps are removed: System Restore is one way to bring them back
+    # (the Microsoft Store the other). Everything else has its own revert plus the registry
+    # backup, and Checkpoint-Computer costs 10-60 s.
     $removals = @($selected | Where-Object { $Script:AppRemovals -contains $_.Name })
-    $safetyNote = if ($removals.Count) { "WARNING -- this removes apps / Windows components:`n  - " + (@($removals | ForEach-Object { $_.Name }) -join "`n  - ") + "`nThey only come back through System Restore. A restore point and a registry backup are created first." } else { "A registry backup is saved first." }
+    $protection = if ($removals.Count) { Test-SystemProtection } else { $null }
+    $safetyNote = if ($removals.Count) {
+        "WARNING -- this removes apps / Windows components:`n  - " + (@($removals | ForEach-Object { $_.Name }) -join "`n  - ") +
+        "`nThey come back through the Microsoft Store (OneDrive: its installer) or System Restore. " +
+        $(if ($protection) { "A restore point and a registry backup are created first." } else { "System Protection is OFF for $env:SystemDrive -- you are asked about the restore point next." })
+    } else { "A registry backup is saved first." }
+    # what "Remove Other Bloatware" takes on THIS PC
+    $bloatNote = ""
+    if ($selected | Where-Object { $_.Name -eq "Remove Other Bloatware" }) {
+        $found = @(try { Get-BloatApps | ForEach-Object { $_.Name -replace '^Microsoft\.', '' } | Select-Object -Unique } catch { })
+        $bloatNote = "`n`n'Remove Other Bloatware' removes on this PC: " + $(if ($found.Count) { (@($found | Select-Object -First 14) -join ', ') + $(if ($found.Count -gt 14) { " and $($found.Count - 14) more" }) } else { "nothing (none of those apps is installed)" })
+    }
+    $skipNote = if ($already.Count) { "`n`n$($already.Count) ticked tweak(s) are already active and are left as they are." } else { "" }
     $confirm = [System.Windows.MessageBox]::Show(
-        "Apply $($selected.Count) selected tweak(s)?`n`n$safetyNote",
+        "Apply $($selected.Count) tweak(s)?`n`n$safetyNote$bloatNote$skipNote",
         "GameOptimizerPro -- Confirm",
         [System.Windows.MessageBoxButton]::YesNo,
         $(if ($removals.Count) { [System.Windows.MessageBoxImage]::Warning } else { [System.Windows.MessageBoxImage]::Question })
     )
     if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) { return }
 
+    # System Protection off = no restore point possible. Until 1.2.5 that only went to the log
+    # and the apps were removed anyway, while the dashboard said "on".
+    $makePoint = [bool]$removals.Count
+    if ($removals.Count -and -not $protection) {
+        $sp = [System.Windows.MessageBox]::Show(
+            "System Protection is off for $env:SystemDrive, so Windows can't create a restore point.`n`nYes = turn System Protection on for $env:SystemDrive (Windows uses a few percent of the drive for it) and create the restore point`nNo = remove the apps without a restore point (they come back through the Microsoft Store)`nCancel = stop, nothing is changed",
+            "GameOptimizerPro -- No restore point possible",
+            [System.Windows.MessageBoxButton]::YesNoCancel,
+            [System.Windows.MessageBoxImage]::Warning)
+        if ($sp -eq [System.Windows.MessageBoxResult]::Cancel) { return }
+        if ($sp -eq [System.Windows.MessageBoxResult]::Yes) {
+            try { Enable-ComputerRestore -Drive "$env:SystemDrive\" -ErrorAction Stop; Write-Log "System Protection turned on for $env:SystemDrive" }
+            catch { Write-Log "System Protection could not be turned on: $_" }
+        } else { $makePoint = $false; Write-Log "No restore point: System Protection is off and the user chose to go on without" }
+    }
+
     Set-Busy $true
     try {
-    if ($removals.Count) {
+    if ($makePoint) {
         Set-Status "Creating restore point..."
         try {
             New-RestorePoint "GameOptimizerPro Backup"
             Write-Log "Restore point created (app removals selected)"
             Set-Status "Restore point created. Backing up registry..."
         } catch {
-            Write-Log "Restore point skipped (VSS error or System Protection disabled): $_"
-            Set-Status "Restore point skipped. Backing up registry..."
+            Write-Log "Restore point could not be created: $_"
+            $rp = [System.Windows.MessageBox]::Show(
+                "The restore point could not be created:`n$($_.Exception.Message)`n`nRemove the apps anyway? They come back through the Microsoft Store (OneDrive: its installer).`n`nNo = stop, nothing is changed.",
+                "GameOptimizerPro -- Restore point failed",
+                [System.Windows.MessageBoxButton]::YesNo,
+                [System.Windows.MessageBoxImage]::Warning)
+            if ($rp -ne [System.Windows.MessageBoxResult]::Yes) { Set-Status "Stopped -- nothing was changed."; return }
+            Set-Status "Backing up registry..."
         }
     } else {
-        Write-Log "No app removals selected -- registry backup only, no restore point"
+        Write-Log "No restore point for this Apply (no app removals, or declined)"
         Set-Status "Backing up registry..."
     }
 
@@ -6145,32 +6306,36 @@ $BtnApply.Add_Click({
     $notActive = @($selected | Where-Object { $failedNames -notcontains $_.Name -and $Script:RestartTweaks -notcontains $_.Name -and $Script:TweakState[$_.Name] -eq 'inactive' } | ForEach-Object { $_.Name })
     foreach ($nm in $notActive) { Write-Log "NOT ACTIVE after Apply: $nm (Windows reports it as not in effect)" }
     $okCount = $total - $failedNames.Count - $notActive.Count
-    Set-Status "Done! $okCount of $total tweaks applied$(if ($failedNames.Count + $notActive.Count) { " -- $($failedNames.Count + $notActive.Count) not in effect, see the log" }). Log: $LogFile"
+    Set-Status "Done! $okCount of $total tweaks applied$(if ($failedNames.Count + $notActive.Count) { " -- $($failedNames.Count + $notActive.Count) not in effect, see the log" })$(if ($already.Count) { " ($($already.Count) were already active)" }). Log: $LogFile"
     $listOf = { param($names) $s = @($names | Select-Object -First 8) -join "`n  - "; if (@($names).Count -gt 8) { $s += "`n  ... and $(@($names).Count - 8) more" }; "  - $s" }
     $problems = ""
     if ($failedNames.Count) { $problems += "`n`nFailed (details in the log):`n" + (& $listOf $failedNames) }
     if ($notActive.Count)   { $problems += "`n`nApplied, but Windows reports them as not in effect (often a policy, antivirus or a driver without that option -- see the log):`n" + (& $listOf $notActive) }
 
-    # Snapshot the now-active tweaks so the next launch can detect Windows-reverted
-    # drift -- from the results just read, instead of running every check again.
-    Save-Baseline -FromState
+    # Record what THIS app applied (in effect now; restart tweaks count once applied) -- the
+    # drift check at the next start and "Revert all" work from this list
+    $applied = @($selected | Where-Object { $Script:OneTimeNames -notcontains $_.Name -and $failedNames -notcontains $_.Name -and $notActive -notcontains $_.Name } | ForEach-Object { $_.Name })
+    Save-Baseline -Add $applied
 
+    # A restart / sign-out only matters for some tweaks -- no question after a cleanup
+    $needRestart = @($selected | Where-Object { $failedNames -notcontains $_.Name -and ($Script:RestartTweaks -contains $_.Name -or $Script:SignOutTweaks -contains $_.Name) } | ForEach-Object { $_.Name })
     [System.Windows.MessageBox]::Show(
-        "$okCount of $total tweaks applied.$problems`n`nSome changes require a restart to take effect.`nLog saved to:`n$LogFile`n`nRegistry backup (.reg files) saved to:`n$Script:LastBackupDir",
+        "$okCount of $total tweaks applied.$(if ($already.Count) { " $($already.Count) ticked tweak(s) were already active." })$problems$(if ($needRestart.Count) { "`n`nSome of them take effect after a restart (or signing out and in)." })`nLog saved to:`n$LogFile`n`nRegistry backup (.reg files) saved to:`n$Script:LastBackupDir",
         "GameOptimizerPro -- Done",
         [System.Windows.MessageBoxButton]::OK,
         $(if ($problems) { [System.Windows.MessageBoxImage]::Warning } else { [System.Windows.MessageBoxImage]::Information })
     )
 
-    # Neustart-Empfehlung
-    $restart = [System.Windows.MessageBox]::Show(
-        "For best results, a restart is recommended.`n`nRestart now?",
-        "GameOptimizerPro -- Restart recommended",
-        [System.Windows.MessageBoxButton]::YesNo,
-        [System.Windows.MessageBoxImage]::Question
-    )
-    if ($restart -eq [System.Windows.MessageBoxResult]::Yes) {
-        Restart-Computer -Force
+    if ($needRestart.Count) {
+        $restart = [System.Windows.MessageBox]::Show(
+            "These take effect after a restart:`n" + (& $listOf $needRestart) + "`n`nRestart now?",
+            "GameOptimizerPro -- Restart recommended",
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Question
+        )
+        if ($restart -eq [System.Windows.MessageBoxResult]::Yes) {
+            Restart-Computer -Force
+        }
     }
     } finally { Set-Busy $false }
 })
@@ -6181,17 +6346,25 @@ $BtnApply.Add_Click({
 $BtnRevertAll.Add_Click({
     if ($Script:Busy) { return }
 
+    # Only what THIS app applied (the baseline): until 1.2.5 every one of the tweaks was set
+    # back, also never applied ones -- light mode, location on, hibernation on, folder views
+    # deleted, the power plans' timeouts rewritten.
+    $catOf = @{}; foreach ($t in $AllTweaks) { $catOf[$t.Name] = $t.Category }
+    $cands = @((Read-Baseline).Names | Where-Object { $RevertActions.ContainsKey($_) -and -not ($catOf[$_] -eq 'Windows 11' -and -not $IsWin11) })
+    $appRemoved = @($cands | Where-Object { $Script:AppRemovals -contains $_ })
+
     # Step 1: Let user choose: System Restore or Quick Registry Reset
     $choice = [System.Windows.MessageBox]::Show(
         "REVERT ALL  --  Undo GameOptimizerPro Changes`n`n" +
         "Choose how to revert:`n`n" +
         "  YES  ->  System Restore`n" +
         "           - Only needed to bring back removed apps`n" +
+        "             (they also come back through the Microsoft Store)`n" +
         "           - Point 'GameOptimizerPro Backup' (made before app removals)`n" +
         "           - Opens the Windows wizard, your PC reboots (~5-10 min)`n`n" +
         "  NO   ->  Quick Reset (Recommended)`n" +
-        "           - Every tweak back to the Windows default -- including`n" +
-        "             personal settings some tweaks cover (dark mode, taskbar, file extensions)`n" +
+        "           - The $($cands.Count) tweak(s) GameOptimizerPro applied on this PC go back`n" +
+        "             to the Windows default; settings you made yourself stay`n" +
         "           - No reboot required`n" +
         "           - Removed apps (OneDrive, Xbox etc.) stay removed`n`n" +
         "  CANCEL  ->  Do nothing",
@@ -6226,13 +6399,14 @@ $BtnRevertAll.Add_Click({
     }
 
     # Option B: Quick Registry Reset
+    $list = (@($cands | Select-Object -First 12 | ForEach-Object { "  - $_" }) -join "`n") + $(if ($cands.Count -gt 12) { "`n  ... and $($cands.Count - 12) more" } else { '' })
     $confirm = [System.Windows.MessageBox]::Show(
         "Quick Registry Reset`n`n" +
-        "This will restore all registry, service and network settings`n" +
-        "to Windows defaults.`n`n" +
-        "NOTE: Removed apps (Xbox, OneDrive, Bloatware)`n" +
-        "cannot be restored this way  --  use System Restore for those.`n`n" +
-        "A registry backup is saved first. Continue?",
+        $(if ($cands.Count) { "These $($cands.Count) tweak(s) GameOptimizerPro applied go back to the Windows default:`n$list`n`n" }
+          else { "GameOptimizerPro has no record of tweaks it applied on this PC (the record starts with the first Apply). To set single tweaks back, tick them and use 'Revert selected'.`n`n" }) +
+        "Leftovers of tweaks removed in earlier versions are cleaned up as well.`n" +
+        $(if ($appRemoved.Count) { "Removed apps don't come back this way -- reinstall them from the Microsoft Store (OneDrive: its installer) or use System Restore.`n" }) +
+        "`nA registry backup is saved first. Continue?",
         "GameOptimizerPro  --  Confirm Quick Reset",
         [System.Windows.MessageBoxButton]::YesNo,
         [System.Windows.MessageBoxImage]::Question
@@ -6247,57 +6421,37 @@ $BtnRevertAll.Add_Click({
     $Script:LastBackupDir = Backup-Registry -Label "PreRevert"
     Set-Status "Registry backup saved. Starting revert..."
 
-    # Run all revert actions
-    $done  = 0
-    $failed = 0
-    $total = $RevertActions.Count
-    $appWarnings = 0
-
-    $catOf = @{}; foreach ($t in $AllTweaks) { $catOf[$t.Name] = $t.Category }
-    foreach ($tweakName in $RevertActions.Keys) {
-        # Windows 11 tweaks can't have been applied on Windows 10 (greyed out there) --
-        # their reverts would only restart Explorer for nothing
-        if ($catOf[$tweakName] -eq 'Windows 11' -and -not $IsWin11) { $done++; continue }
-        Set-Status "Reverting [$done/$total]: $tweakName..."
-        try {
-            & $RevertActions[$tweakName]
-            $done++
-        } catch {
-            Write-Log "Revert FAILED: $tweakName -- $_"
-            $failed++
-            $done++
-        }
-        # Count app-restore warnings
-        if ($tweakName -match "Remove Xbox|Remove OneDrive|Remove Other Bloat") {
-            $appWarnings++
-        }
+    $done = 0; $failedNames = @()
+    foreach ($tweakName in $cands) {
+        Set-Status "Reverting [$done/$($cands.Count)]: $tweakName..."
+        try { & $RevertActions[$tweakName]; Write-Log "Revert OK: $tweakName" }
+        catch { Write-Log "Revert FAILED: $tweakName -- $_"; $failedNames += $tweakName }
+        $done++
     }
-    try { $null = Remove-RetiredTweakValues } catch { Write-Log "Retired tweak values could not be removed: $_" }
+    $retired = 0
+    try { $retired = Remove-RetiredTweakValues } catch { Write-Log "Retired tweak values could not be removed: $_" }
 
-    # Drop the baseline snapshot. It lists the tweaks that were active at the last
-    # Apply; keeping it after a deliberate Revert All would make the drift check on
-    # the NEXT launch report all of them as "reverted by a Windows update" and offer
-    # to re-apply exactly what the user just undid.
+    # The record keeps only what could not be set back. Keeping the rest would make the drift
+    # check on the NEXT launch offer to re-apply exactly what the user just undid.
     try {
-        if (Test-Path $Script:BaselineFile) { Remove-Item $Script:BaselineFile -Force -ErrorAction Stop }
-        Write-Log "Baseline cleared after Revert All"
+        if ($failedNames.Count) { $null = Write-Baseline $failedNames }
+        elseif (Test-Path $Script:BaselineFile) { Remove-Item $Script:BaselineFile -Force -ErrorAction Stop }
+        Write-Log "Baseline updated after Revert All ($($failedNames.Count) left)"
     } catch { Write-Log "Baseline could not be cleared: $_" }
 
     # Refresh the status dots so they reflect the reverted state (Apply does the same)
     Update-AllDots "Checking the result:"
 
-    Set-Status "Revert complete! $done/$total settings processed. Log: $LogFile"
-    Write-Log "Revert All complete: $done processed, $failed failed"
-
-    $appNote = if ($appWarnings -gt 0) {
-        "`n`nIMPORTANT: $appWarnings removed apps (Xbox, OneDrive etc.) cannot be`nrestored via Quick Reset  --  use System Restore for those."
-    } else { "" }
+    $ok = $cands.Count - $failedNames.Count
+    Set-Status "Revert complete! $ok of $($cands.Count) tweaks set back$(if ($retired) { ", $retired leftover value(s) removed" }). Log: $LogFile"
+    Write-Log "Revert All complete: $ok set back, $($failedNames.Count) failed, $retired leftover value(s) of retired tweaks removed"
 
     [System.Windows.MessageBox]::Show(
         "Quick Registry Reset complete!`n`n" +
-        "$done settings reverted to Windows defaults." +
-        $(if ($failed -gt 0) { "`n$failed actions failed (see log for details)." } else { "" }) +
-        $appNote +
+        "$ok of $($cands.Count) tweak(s) set back to the Windows default." +
+        $(if ($retired) { "`n$retired leftover value(s) of tweaks removed in earlier versions cleaned up." } else { "" }) +
+        $(if ($failedNames.Count) { "`n`nFailed (see the log):`n  - " + ($failedNames -join "`n  - ") } else { "" }) +
+        $(if ($appRemoved.Count) { "`n`nRemoved apps stay removed: " + ($appRemoved -join ', ') + " -- reinstall them from the Microsoft Store (OneDrive: its installer) or use System Restore." } else { "" }) +
         "`n`nSome changes require a restart to take effect.`nLog: $LogFile`n`nPre-revert registry backup (.reg files):`n$Script:LastBackupDir",
         "GameOptimizerPro  --  Revert Complete",
         [System.Windows.MessageBoxButton]::OK,
@@ -6317,7 +6471,7 @@ $BtnRevertSel.Add_Click({
     $oneTime  = @($names | Where-Object { $Script:OneTimeNames -contains $_ })
     $r = [System.Windows.MessageBox]::Show(
         "Set $($names.Count) ticked tweak(s) back to the Windows default?`n`n$list" +
-        $(if ($removals.Count) { "`n`nRemoved apps don't come back this way -- only through System Restore:`n  - " + ($removals -join "`n  - ") } else { '' }) +
+        $(if ($removals.Count) { "`n`nRemoved apps don't come back this way -- reinstall them from the Microsoft Store (OneDrive: its installer) or use System Restore:`n  - " + ($removals -join "`n  - ") } else { '' }) +
         $(if ($oneTime.Count) { "`n`nOne-time actions (cleanups) have nothing to undo:`n  - " + ($oneTime -join "`n  - ") } else { '' }) +
         "`n`nA registry backup is saved first.",
         "GameOptimizerPro  --  Revert selected",
@@ -6365,27 +6519,24 @@ $BtnLang.Add_Click({
 # -----------------------------------------
 # -----------------------------------------
 # STARTUP DELAY DATA (Windows Event Log)
-# Event 902 = Diagnostics-Performance boot delays
-# Returns hashtable: { "process.exe" -> delay_ms }
+# Event 101 of Diagnostics-Performance: "this application took longer than usual to start" --
+# fields Name, Path, TotalTime, DegradationTime. Windows only logs programs that slowed the
+# boot down, so most autostarts have no entry. Until 1.2.5 this read event 902 with field
+# names that don't exist there, and the column never showed anything.
+# Returns hashtable: { "process.exe" -> slowest start time in ms }
 # -----------------------------------------
 function Get-StartupDelays {
     $delays = @{}
     try {
-        $events = Get-WinEvent -LogName "Microsoft-Windows-Diagnostics-Performance/Operational" `
-            -FilterHashtable @{ LogName="Microsoft-Windows-Diagnostics-Performance/Operational"; Id=902 } `
-            -MaxEvents 200 -ErrorAction SilentlyContinue
+        $events = Get-WinEvent -FilterHashtable @{ LogName = "Microsoft-Windows-Diagnostics-Performance/Operational"; Id = 101 } -MaxEvents 300 -ErrorAction Stop
         foreach ($evt in $events) {
             try {
-                $xml  = [xml]$evt.ToXml()
-                $ns   = $xml.Event.EventData.Data
-                $name = ($ns | Where-Object { $_.Name -eq "FileName" })."#text"
-                $ms   = ($ns | Where-Object { $_.Name -eq "DegradationInterval" })."#text"
-                if ($name -and $ms) {
-                    $exe = [System.IO.Path]::GetFileName($name).ToLower()
-                    if (-not $delays.ContainsKey($exe) -or $delays[$exe] -lt [int]$ms) {
-                        $delays[$exe] = [int]$ms
-                    }
-                }
+                $data = ([xml]$evt.ToXml()).Event.EventData.Data
+                $name = "$(($data | Where-Object { $_.Name -eq 'Name' }).'#text')"
+                $path = "$(($data | Where-Object { $_.Name -eq 'Path' }).'#text')"
+                $ms   = [int]"$(($data | Where-Object { $_.Name -eq 'TotalTime' }).'#text')"
+                $exe  = $(if ($path) { [System.IO.Path]::GetFileName($path) } else { $name }).ToLower()
+                if ($exe -and $ms -gt 0 -and (-not $delays.ContainsKey($exe) -or $delays[$exe] -lt $ms)) { $delays[$exe] = $ms }
             } catch { }
         }
     } catch { }
@@ -6428,8 +6579,9 @@ function Get-StartupEntries {
                     $cmd     = if ($_.Value -and $_.Value.Length -gt 65) { $_.Value.Substring(0,62)+"..." } else { $_.Value }
                     $enabled = $true
                     if (Test-Path $src.App) {
+                        # first byte odd = switched off (03 by the user, 07 / 0B by others), even = on
                         $av = Get-ItemProperty $src.App -Name $name -ErrorAction SilentlyContinue
-                        if ($av -and $av.$name -and $av.$name[0] -eq 3) { $enabled = $false }
+                        if ($av -and $av.$name -and ($av.$name[0] -band 1)) { $enabled = $false }
                     }
                     $entries.Add([PSCustomObject]@{
                         Name        = $name
@@ -6473,7 +6625,7 @@ function Get-StartupEntries {
                 $enabled = $true
                 if (Test-Path $fsrc.App) {
                     $av = Get-ItemProperty $fsrc.App -Name $name -ErrorAction SilentlyContinue
-                    if ($av -and $av.$name -and $av.$name[0] -eq 3) { $enabled = $false }
+                    if ($av -and $av.$name -and ($av.$name[0] -band 1)) { $enabled = $false }
                 }
                 $entries.Add([PSCustomObject]@{
                     Name         = $name
@@ -6486,6 +6638,26 @@ function Get-StartupEntries {
                 })
             }
         } catch { }
+    }
+
+    # Startup tasks of Store apps (Spotify, WhatsApp, Teams ...) -- Task Manager lists them, the
+    # Run keys don't. State 2 = on, 0 / 1 = off; 3 / 4 = set by a policy (left alone).
+    $sad = "HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\SystemAppData"
+    foreach ($pkg in @(Get-ChildItem $sad -ErrorAction SilentlyContinue)) {
+        foreach ($tk in @(Get-ChildItem $pkg.PSPath -ErrorAction SilentlyContinue)) {
+            $state = Get-RegVal $tk.PSPath 'State'
+            if ($null -eq $state -or $state -eq 3 -or $state -eq 4) { continue }
+            $entries.Add([PSCustomObject]@{
+                Name         = ($pkg.PSChildName -replace '_[^_]+$', '')
+                Command      = "Store app startup task ($($tk.PSChildName))"
+                FullCmd      = $pkg.PSChildName
+                Location     = "Store app"
+                Status       = if ($state -eq 2) { "Enabled" } else { "Disabled" }
+                RegPath      = $tk.PSPath
+                ApprovedPath = $tk.PSPath
+                Kind         = 'StoreTask'
+            })
+        }
     }
     return $entries
 }
@@ -6705,9 +6877,9 @@ $BtnStartup.Add_Click({
                 New-Object Windows.Media.SolidColorBrush (Get-DelayColor $delayMs)
             }
             $tbDelay.ToolTip = if ($delayMs -gt 0) {
-                "Last measured boot delay: $delayMs ms`nSource: Windows Diagnostics-Performance log"
+                "Slowest measured start: $delayMs ms`nSource: Windows boot performance log (event 101)"
             } else {
-                "No delay data available.`nWill be available after next restart."
+                "No delay logged for this program.`nWindows only logs programs that slowed the boot down."
             }
 
             $row.Children.Add($cb)       | Out-Null
@@ -6728,48 +6900,40 @@ $BtnStartup.Add_Click({
 
     Build-StartupRows
 
+    # Switch one entry: Store app startup tasks through their State value (like Task Manager),
+    # everything else through StartupApproved (first byte 3 = off, 2 = on). Only real successes count.
+    $setStartup = {
+        param($item, [bool]$On)
+        if ($item.Kind -eq 'StoreTask') {
+            Set-ItemProperty -Path $item.RegPath -Name 'State' -Value $(if ($On) { 2 } else { 1 }) -Type DWord -ErrorAction Stop
+        } else {
+            if (-not (Test-Path $item.ApprovedPath)) { New-Item -Path $item.ApprovedPath -Force -ErrorAction Stop | Out-Null }
+            $bytes = [byte[]]($(if ($On) { 2 } else { 3 }), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+            Set-ItemProperty -Path $item.ApprovedPath -Name $item.Name -Value $bytes -Type Binary -ErrorAction Stop
+        }
+    }
     $swDisable.Add_Click({
         $sel = $swCbMap.Values | Where-Object { $_.Cb.IsChecked -eq $true }
         if (-not $sel) { $swStatus.Text = Get-UIString "sw_none_sel"; return }
-        $count = 0
+        $count = 0; $fail = 0
         foreach ($entry in $sel) {
-            $item = $entry.Item
-            if (-not (Test-Path $item.ApprovedPath)) {
-                New-Item -Path $item.ApprovedPath -Force | Out-Null
-            }
-            $disableBytes = [byte[]](3,0,0,0,0,0,0,0,0,0,0,0)
-            Set-ItemProperty -Path $item.ApprovedPath -Name $item.Name -Value $disableBytes -Type Binary -ErrorAction SilentlyContinue
-            $entry.StatusTb.Text       = Get-UIString "word_disabled"
-            $entry.StatusTb.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(220,80,80))
-            $entry.Cb.IsChecked        = $false
-            $count++
-            Write-Log "Startup Manager: Disabled '$($item.Name)'"
+            try { & $setStartup $entry.Item $false; $count++; Write-Log "Startup Manager: Disabled '$($entry.Item.Name)'" }
+            catch { $fail++; Write-Log "Startup Manager: could not disable '$($entry.Item.Name)' -- $_" }
         }
         Build-StartupRows   # status, colours and the boot-delay column straight away, not only after Refresh
-        $swStatus.Text = "$count " + (Get-UIString "sw_disabled_msg")
+        $swStatus.Text = "$count " + (Get-UIString "sw_disabled_msg") + $(if ($fail) { " -- $fail failed, see the log" } else { "" })
     })
-
     $swEnable.Add_Click({
         $sel = $swCbMap.Values | Where-Object { $_.Cb.IsChecked -eq $true }
         if (-not $sel) { $swStatus.Text = Get-UIString "sw_none_sel"; return }
-        $count = 0
+        $count = 0; $fail = 0
         foreach ($entry in $sel) {
-            $item = $entry.Item
-            if (-not (Test-Path $item.ApprovedPath)) {
-                New-Item -Path $item.ApprovedPath -Force | Out-Null
-            }
-            $enableBytes = [byte[]](2,0,0,0,0,0,0,0,0,0,0,0)
-            Set-ItemProperty -Path $item.ApprovedPath -Name $item.Name -Value $enableBytes -Type Binary -ErrorAction SilentlyContinue
-            $entry.StatusTb.Text       = Get-UIString "word_enabled"
-            $entry.StatusTb.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0,200,100))
-            $entry.Cb.IsChecked        = $false
-            $count++
-            Write-Log "Startup Manager: Enabled '$($item.Name)'"
+            try { & $setStartup $entry.Item $true; $count++; Write-Log "Startup Manager: Enabled '$($entry.Item.Name)'" }
+            catch { $fail++; Write-Log "Startup Manager: could not enable '$($entry.Item.Name)' -- $_" }
         }
         Build-StartupRows
-        $swStatus.Text = "$count " + (Get-UIString "sw_enabled_msg")
+        $swStatus.Text = "$count " + (Get-UIString "sw_enabled_msg") + $(if ($fail) { " -- $fail failed, see the log" } else { "" })
     })
-
     $swRefresh.Add_Click({ Build-StartupRows })
     $swClose.Add_Click({  $sw.Close() })
 
@@ -6793,19 +6957,19 @@ $BtnServices.Add_Click({
         "MapsBroker"             = @{ Desc="Maps Broker -- for the Windows Maps app. Rarely used.";             Safe=$true;  Cat="Bloat" }
         "RetailDemo"             = @{ Desc="Retail Demo Service -- only for store demo devices.";              Safe=$true;  Cat="Bloat" }
         "WerSvc"                 = @{ Desc="Windows Error Reporting -- sends crash reports to Microsoft."; Safe=$true;  Cat="Privacy" }
-        "XblGameSave"            = @{ Desc="Xbox Game Save -- Xbox cloud saves. Unnecessary without Xbox.";    Safe=$true;  Cat="Bloat" }
-        "XblAuthManager"         = @{ Desc="Xbox Live Auth -- Xbox authentication. Unnecessary without Xbox.";        Safe=$true;  Cat="Bloat" }
-        "XboxNetApiSvc"          = @{ Desc="Xbox Live Networking -- Xbox network service.";                    Safe=$true;  Cat="Bloat" }
-        "xbgm"                   = @{ Desc="Xbox Game Monitoring -- monitors Xbox games.";                 Safe=$true;  Cat="Bloat" }
+        "XblGameSave"            = @{ Desc="Xbox cloud saves -- Game Pass / Microsoft Store games need it. Unneeded if you only play on Steam, Epic & co."; Safe=$true;  Cat="Bloat" }
+        "XblAuthManager"         = @{ Desc="Xbox sign-in -- Game Pass / Microsoft Store games and achievements need it. Unneeded for Steam, Epic & co."; Safe=$true;  Cat="Bloat" }
+        "XboxNetApiSvc"          = @{ Desc="Xbox networking -- multiplayer in Game Pass / Microsoft Store games needs it.";            Safe=$true;  Cat="Bloat" }
+        "xbgm"                   = @{ Desc="Xbox game monitoring -- used by Game Pass / Microsoft Store games.";                       Safe=$true;  Cat="Bloat" }
         "Spooler"                = @{ Desc="Print Spooler -- only needed if a printer is connected.";      Safe=$false; Cat="System" }
         "BITS"                   = @{ Desc="Background Intelligent Transfer -- the Windows Update downloader.";   Safe=$false; Cat="System" }
         "wuauserv"               = @{ Desc="Windows Update -- automatic updates. Be careful disabling this!"; Safe=$false; Cat="System" }
-        "TabletInputService"     = @{ Desc="Touch Keyboard & Handwriting -- only for touchscreens/tablets."; Safe=$true;  Cat="Performance" }
+        "TabletInputService"     = @{ Desc="Touch keyboard, emoji panel (Win+.) and handwriting -- some input languages need it; on Windows 10 typing in the Start search can stop working without it."; Safe=$false; Cat="System" }
         "WMPNetworkSvc"          = @{ Desc="Windows Media Player Network -- media sharing on the network.";    Safe=$true;  Cat="Bloat" }
         "lfsvc"                  = @{ Desc="Geolocation Service -- location requests from apps.";            Safe=$true;  Cat="Privacy" }
         "SharedAccess"           = @{ Desc="Internet Connection Sharing -- only needed for ICS/hotspot."; Safe=$true;  Cat="Network" }
         "PhoneSvc"               = @{ Desc="Phone Service -- telephony features. Rarely needed.";         Safe=$true;  Cat="Bloat" }
-        "wisvc"                  = @{ Desc="Windows Insider Service -- only for Insider builds.";            Safe=$true;  Cat="Bloat" }
+        "wisvc"                  = @{ Desc="Windows Insider Service -- on an Insider build the Insider updates stop without it. Not needed on normal Windows."; Safe=$false; Cat="System" }
         "WpcMonSvc"              = @{ Desc="Parental Controls -- family safety monitoring.";                  Safe=$true;  Cat="Bloat" }
         "CscService"             = @{ Desc="Offline Files -- cached offline access. Usually unnecessary.";       Safe=$true;  Cat="Performance" }
         "TrkWks"                 = @{ Desc="Distributed Link Tracking -- tracks moved files.";     Safe=$true;  Cat="Performance" }
@@ -6903,7 +7067,7 @@ $BtnServices.Add_Click({
         <!-- Title -->
         <StackPanel Grid.Row="0" Margin="0,0,0,10">
             <TextBlock Name="SvcTitle" Text="Services Manager" FontSize="18" FontWeight="Bold" Foreground="#e6edf3"/>
-            <TextBlock Name="SvcSubtitle" Text="Deaktiviere unnoetige Windows-Dienste fuer bessere Performance und Datenschutz."
+            <TextBlock Name="SvcSubtitle" Text="Deaktiviere unnötige Windows-Dienste für bessere Performance und Datenschutz."
                        FontSize="11" Foreground="#7d8896" Margin="0,2,0,0"/>
         </StackPanel>
 
@@ -7212,6 +7376,11 @@ $BtnServices.Add_Click({
 
     $svcWin.Owner = $Window; $svcWin.WindowStartupLocation = "CenterOwner"   # on the app's monitor, never behind it
     $svcWin.ShowDialog() | Out-Null
+    # The services switched here also decide some tweak dots -- refresh them right away
+    foreach ($n in 'Disable Telemetry & Data Collection', 'Disable Location Tracking', 'Disable Prefetch & Superfetch', 'Disable Windows Search Indexing') {
+        if ($Script:TweakDots.ContainsKey($n)) { Update-TweakDot $Script:TweakDots[$n] $n | Out-Null }
+    }
+    Update-Counts
 })
 
 
@@ -7233,13 +7402,19 @@ $Window.Add_ContentRendered({ Close-Splash })   # main window is on screen -> sp
 # Runs only at launch (no background process). If the last-applied snapshot has
 # tweaks that are no longer active, offer to re-apply them.
 try {
+    $blv = (Read-Baseline).Version
     $drifted = Get-DriftedTweaks -Known $Script:CheckRaw
     if ($drifted.Count -gt 0) {
         Close-Splash
         $list = ($drifted | ForEach-Object { " - $_" }) -join "`n"
+        # Who reset them can't be told apart. A newer app version can also check more settings
+        # of a tweak than the one that applied it (1.2.6: DNS also over IPv6, Prefetch, ...).
+        $why = if ($blv -ne $Script:AppVersion) {
+            "A Windows update, another program or a change in Settings switched them back -- or this version of GameOptimizerPro (v$($Script:AppVersion)) checks more of their settings than the version you applied them with$(if ($blv) { " (v$blv)" })."
+        } else { "A Windows update, another program or a change in Settings switched them back." }
         $r = [System.Windows.MessageBox]::Show(
-            "$($drifted.Count) tweak(s) you applied earlier are no longer active -- a Windows update most likely reset them:`n`n$list`n`nRe-apply them now? (A registry backup is created first.)`n`nNo = keep the current settings -- you won't be asked about these again.",
-            "GameOptimizerPro -- Tweaks were reverted",
+            "$($drifted.Count) tweak(s) GameOptimizerPro applied are no longer fully in effect:`n`n$list`n`n$why`n`nRe-apply them now? (A registry backup is created first.)`n`nNo = keep the current settings -- you won't be asked about these again.",
+            "GameOptimizerPro -- Tweaks no longer in effect",
             [System.Windows.MessageBoxButton]::YesNo,
             [System.Windows.MessageBoxImage]::Warning)
         if ($r -eq [System.Windows.MessageBoxResult]::Yes) {
@@ -7253,10 +7428,10 @@ try {
                 }
             }
             # The list was built before the re-apply -- refresh those rows + counts first, then the
-            # baseline from those results (every other check ran at startup already)
+            # baseline (keeps its entries, gets this version's header)
             foreach ($name in $drifted) { if ($Script:TweakDots.ContainsKey($name)) { Update-TweakDot $Script:TweakDots[$name] $name | Out-Null } }
             Update-Counts
-            Save-Baseline -FromState
+            Save-Baseline -Add @()
             [System.Windows.MessageBox]::Show(
                 "Re-applied $reapplied tweak(s). A restart may be needed for some to take effect.",
                 "GameOptimizerPro",

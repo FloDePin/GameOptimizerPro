@@ -6,6 +6,36 @@ All notable changes to GameOptimizerPro (the PowerShell edition), newest first. 
 
 ---
 
+## [1.2.6] — 2026-11-14
+
+A full audit of 1.2.5 — every tweak, revert, status check and button read again, and the new parts checked against the PC itself (read only). Everything it found is fixed; tweaks without a documented effect are gone (114 → 108).
+
+- **Revert all only sets back what the app applied** — until now it set every tweak to the Windows default, applied or not: light mode, location on, hibernation on, folder views deleted, the timeouts of every power plan rewritten. It now works from the list of what GameOptimizerPro applied; settings you made yourself stay.
+- **Reverts write the real Windows defaults** — the power reverts put back each plan's own default (until now PCIe link state went to *maximum power savings*, disk sleep to 30 min, the CPU minimum to 5 % even on *High performance*); the TCP revert switched ECN and timestamps **on**; the Svchost revert wrote 380000 instead of 0x380000 (≈ 370 MB instead of 3.5 GB) and its status was green on every untouched Windows; the HAGS revert switched HAGS **off** — it now puts back what was set before.
+- **Restore point that can't be made is no longer hidden** — the dashboard showed "on" no matter what. With System Protection off, the app now asks before removing apps: turn it on and make the point, go on without, or stop. A failed restore point stops too, unless you say otherwise.
+- **Apply leaves active tweaks alone** — running them again deleted every folder view and restarted Explorer each time, and after *Verify* (which ticks everything active) it asked for a restore point for apps that were long gone.
+- **SystemResponsiveness 10 instead of 0** — Microsoft: values below 10 are treated as 20, the Windows default. *Set Audio Service High Priority* and *Disable Network Throttling Index* wrote 0, so that part did nothing.
+- **DNS status checks IPv6 too** — an adapter whose IPv6 DNS still came from the router showed Cloudflare / Google as active. The DNS tweaks now only change the physical adapters (VPN, Hyper-V and WSL keep theirs), and an own list like "1.1.1.1 + Pi-hole" is remembered for the revert.
+- **Removed: 6 tweaks without a documented effect** — *Optimize TCP Settings* (sets Windows defaults), *Disable QoS Packet Scheduler Limit* (the 20 % only apply to programs that reserve bandwidth), *Optimize NVMe Queue Depth*, *Enable Start Menu Previous Layout* (no longer works on current builds), *AMD: Shader Cache* and *AMD: Anti-Lag*. *Revert all* removes what they wrote.
+- **Honest names and presets** — *Disable Windows Update during Gaming* is now *Disable Automatic Windows Updates* (it always switched them off for good) and in no preset; *Disable Background App Throttling* is now *Stop Background Apps (All Editions)* (the undocumented kernel value is gone); *Disable TCP Auto-Tuning* (caps downloads at the 64 KB window) and *Disable Scheduled Defragmentation* (on SSDs it only stops the weekly retrim) left the presets.
+- **Remove Other Bloatware only removes what Windows put there** — Spotify, Netflix, Instagram & co., the Media Player and *Get Help* are no longer on the list; the confirmation shows what goes on your PC. *Remove Xbox Apps* now really removes Xbox TCUI (the old pattern never matched it); removals cover every account.
+- **Smaller fixes** — the Startup Manager shows Store app autostarts, the boot delay Windows logged (it read a wrong event and never showed anything) and counts only real successes; Services marks the Insider service and the touch keyboard service as risky and mentions Game Pass for the Xbox services; long descriptions open with *Show more*; the restart question only comes when a tweak needs it; the score is measured against the Balanced preset; *Disable Hibernation* says that Fast Startup goes off too; three more telemetry tasks (WinUtil parity); real umlauts in the German texts.
+- **Backups are ~3 MB instead of ~38 MB** — only the parts of `HKLM\...\Control` the tweaks touch, two single values in `_values.reg`. Only this app's backups are pruned (GameOptimizerPro v2 writes to the same folder).
+- **Update notice and installer** — the dashboard says when a newer release is out (one look at GitHub at start, nothing sent). The installer starts exactly the bytes it checked, from a folder only administrators can write to.
+
+<details>
+<summary><b>Development log — 1.2.6</b></summary>
+
+- **Checked on the real PC (read only)** — power defaults per plan from `DefaultPowerSchemeValues` (Balanced PCIe 1/2, High performance 0/0, disk 1200 s); the Ultimate plan keeps the template's name resource `powrprof.dll,-19` in every language; System Protection off (`SPP\Clients` empty); a backup into a test folder: 2.6 MB, 65 files, retention 20 with foreign folders untouched; the boot-performance event template (event 101: Name, Path, TotalTime, DegradationTime — the log itself needs admin).
+- **Sources** — SystemResponsiveness clamping: Microsoft's MMCSS documentation. QoS: Microsoft's QoS Packet Scheduler documentation ("if no QoS-aware application reserves any bandwidth, this setting has no effect"). Start menu override: WinUtil's own note that it no longer works on newer builds. Svchost default 0x380000. Telemetry tasks: WinUtil's *Disable Telemetry*.
+- **Installer** — the elevated PowerShell reads the file once, hashes those bytes and writes them into a new folder under `Windows\Temp` with only SYSTEM and Administrators on its ACL; tested with a matching and a swapped file.
+- **Old baselines** — files from 1.2.5 list every tweak that was active; renamed tweaks map to their new names, removed ones drop out, and the first drift notice after the update says that a newer version may check more settings.
+- **Tests** — the test PCs now have the real Windows defaults (Svchost, power plans per plan), IPv6 DNS, a machine-wide OneDrive and the Xbox / bloatware packages that must stay; new scenarios for every fix; *Revert all* in the preset test works like the app (applied list only); static checks 0 findings; the real window offscreen incl. *Show more*; the real system unchanged.
+
+</details>
+
+---
+
 ## [1.2.5] — 2026-11-12
 
 Two more audits, checked against the code — what holds is fixed, plus a few things that make the tool nicer to live with.

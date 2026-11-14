@@ -12,7 +12,7 @@ Only the latest release is supported. Its SHA256 is published in [CHECKSUMS.txt]
 
 ## Verifying a download
 
-`install.ps1` compares the downloaded script with the hash in `CHECKSUMS.txt` and warns before running anything that doesn't match. To check a file by hand:
+`install.ps1` compares the downloaded script with the hash in `CHECKSUMS.txt` and never starts a file that doesn't match. To check a file by hand:
 
 ```powershell
 Get-FileHash .\GameOptimizerPro.ps1 -Algorithm SHA256

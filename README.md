@@ -3,7 +3,7 @@
 # ⚡ GameOptimizerPro
 
 **Windows & gaming optimizer in a single PowerShell script.**<br>
-114 tweaks — every setting can be undone, and you can see which ones are active.
+108 tweaks — every setting can be undone, and you can see which ones are active.
 
 [![Release](https://img.shields.io/github/v/release/FloDePin/GameOptimizerPro?style=flat-square&color=e53935&label=release)](https://github.com/FloDePin/GameOptimizerPro/releases/latest)
 [![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?style=flat-square&logo=windows)](#-requirements)
@@ -24,7 +24,7 @@ Open **PowerShell** and paste:
 irm https://raw.githubusercontent.com/FloDePin/GameOptimizerPro/main/install.ps1 | iex
 ```
 
-The installer downloads the script, checks its SHA256 against [CHECKSUMS.txt](CHECKSUMS.txt) and starts it with administrator rights (Windows asks once). **Nothing changes until you click _Apply selected_** — and before that, a registry backup is saved (plus a restore point whenever apps are removed).
+The installer downloads the script, checks its SHA256 against [CHECKSUMS.txt](CHECKSUMS.txt) and starts it with administrator rights (Windows asks once). **Nothing changes until you click _Apply selected_** — and before that, a registry backup is saved (plus a restore point whenever apps are removed — if System Protection is off, you are asked first).
 
 <details>
 <summary><b>Rather read the script before running it?</b></summary>
@@ -40,8 +40,8 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 ## ✨ Why GameOptimizerPro
 
-- ↩️ **Every setting can be undone** — each of the 114 tweaks has its own revert back to the Windows default — all at once (*Revert all*) or just the ones you tick (*Revert selected*). Only two kinds are one-way: app removals (they come back through System Restore) and the cleanups (deleted cache files stay deleted).
-- 🟢 **You see what is active** — 104 tweaks have a live status check read straight from Windows (registry, services, power plan), not from a list of what you once clicked.
+- ↩️ **Every setting can be undone** — each of the 108 tweaks has its own revert back to the Windows default — everything the app applied at once (*Revert all*; settings you made yourself stay) or just the ones you tick (*Revert selected*). Only two kinds are one-way: app removals (they come back through the Microsoft Store or System Restore) and the cleanups (deleted cache files stay deleted).
+- 🟢 **You see what is active** — 98 tweaks have a live status check read straight from Windows (registry, services, power plan), not from a list of what you once clicked.
 - 🔄 **Notices when Windows resets your tweaks** — updates like to switch things back. At start the app compares with your last Apply and offers to re-apply what was reverted.
 - 🛟 **Safety net before every change** — a `.reg` backup of every affected key before every Apply and Revert, plus a System Restore point whenever apps are removed.
 - 🧾 **Honest descriptions** — every tweak says what it does, what it costs and where Windows ignores it (e.g. policies that only work on Enterprise / Education).
@@ -64,46 +64,45 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 | Category | Tweaks | Examples |
 |---|:---:|---|
-| 🪟 Windows | 52 | Debloat (Copilot, Recall, OneDrive, suggested apps, tips & ads), telemetry & privacy, the Windows AI switches, Windows Update control (Pro), Ultimate Performance, HPET / timer, quality of life |
-| 🎮 Gaming | 11 | Game Mode, MMCSS, CPU priority, fullscreen optimizations, MSI mode, HAGS, GPU timeout (TDR) |
-| 🌐 Network | 13 | Nagle, LSO, network throttling, DNS (Cloudflare / Google), TCP, QoS, Energy-Efficient Ethernet, interrupt moderation, adapter power saving |
-| 💾 RAM & Storage | 15 | Page file, memory compression, TRIM, NVMe, write cache, hibernation + **Deep Clean** (6 cleanups, each shows the MB it freed) |
+| 🪟 Windows | 53 | Debloat (Copilot, Recall, OneDrive, suggested apps, tips & ads), telemetry & privacy, the Windows AI switches, Windows Update control, background apps, Ultimate Performance, HPET / timer, quality of life |
+| 🎮 Gaming | 9 | Game Mode, MMCSS, CPU priority, fullscreen optimizations, MSI mode, HAGS, GPU timeout (TDR) |
+| 🌐 Network | 11 | Nagle, LSO, network throttling, DNS (Cloudflare / Google, IPv4 + IPv6), TCP auto-tuning, Energy-Efficient Ethernet, interrupt moderation, adapter power saving |
+| 💾 RAM & Storage | 14 | Page file, memory compression, TRIM, write cache, hibernation + **Deep Clean** (6 cleanups, each shows the MB it freed) |
 | 🪟 Windows 11 | 7 | Classic right-click menu, left taskbar, widgets, Start recommendations, End Task, Dynamic Lighting |
 | 🔊 Audio | 4 | Audio enhancements, MMCSS audio, audio service priority, sound scheme |
-| 🖥️ GPU | 3 | AMD driver tweaks (ULPS, Anti-Lag, shader cache). NVIDIA keeps its driver settings in the NVIDIA app, not in the registry |
+| 🖥️ GPU | 1 | AMD: ULPS (Ultra Low Power State). NVIDIA keeps its driver settings in the NVIDIA app, not in the registry |
 | ⚡ Power | 9 | USB / USB 3 / PCIe power saving, disk and system sleep, wake timers, display timeout, CPU min / max state |
 
 <details>
-<summary><b>Show all 114 tweaks</b></summary>
+<summary><b>Show all 108 tweaks</b></summary>
 
-**🪟 Windows (52)**
+**🪟 Windows (53)**
 
 - *Bloatware:* Remove Xbox Apps · Remove Copilot · Remove OneDrive · Remove Windows Recall · Remove Other Bloatware · Stop Auto-Installed Suggested Apps · Disable Tips, Ads & Suggestions · Stop OneDrive Folder Backup · Disable Get Started & Copilot Sign-in Screens
 - *Privacy:* Disable Telemetry & Data Collection · Disable Activity History · Disable Advertising ID · Disable Text & Image Generation (AI) · Disable Click to Do & Settings Agent (AI) · Disable AI in Paint & Notepad · Disable Location Tracking · Block Telemetry Hosts (hosts file) · Disable Scheduled Telemetry Tasks · Disable Input & Speech Data Collection · Disable Remote Assistance
-- *Performance:* Ultimate Performance Plan · Disable HPET (High Precision Event Timer) · Allow Global Timer Resolution (Windows 11) · Disable Prefetch & Superfetch · Optimize Visual Effects (Performance Mode) · Disable Startup App Delay · Disable Windows Search Indexing · Disable Power Throttling · Disable Bing in Windows Search · Process Count Reduction (Svchost) · Block Background Apps (Policy)
-- *Windows Update:* Exclude Drivers from Windows Update · Hold Feature Updates (Stay on Current Version)
-- *CTT Essentials:* Prevent Device Companion Apps · Disable Consumer Features · Disable Windows Platform Binary Table (WPBT) · Disable Store Recommended Search Results · Enable Start Menu Previous Layout · Disable File Explorer Automatic Folder Discovery · Run Disk Cleanup
+- *Performance:* Ultimate Performance Plan · Disable HPET (High Precision Event Timer) · Allow Global Timer Resolution (Windows 11) · Disable Prefetch & Superfetch · Optimize Visual Effects (Performance Mode) · Disable Startup App Delay · Disable Windows Search Indexing · Disable Power Throttling · Disable Bing in Windows Search · Process Count Reduction (Svchost) · Block Background Apps (Policy) · Stop Background Apps (All Editions)
+- *Windows Update:* Exclude Drivers from Windows Update · Hold Feature Updates (Stay on Current Version) · Disable Automatic Windows Updates
+- *CTT Essentials:* Prevent Device Companion Apps · Disable Consumer Features · Disable Windows Platform Binary Table (WPBT) · Disable Store Recommended Search Results · Disable File Explorer Automatic Folder Discovery · Run Disk Cleanup
 - *Quality of Life:* Show File Extensions · Show Hidden Files · Disable Reserved Storage · Disable Storage Sense · Num Lock on Startup · Disable Lock Screen · Enable Long Paths
 - *Mouse & UI:* Disable Mouse Acceleration · Disable Sticky Keys · Enable Dark Mode · Disable Transparency Effects · Alt+Tab Without Browser Tabs
 
-**🎮 Gaming (11)**
+**🎮 Gaming (9)**
 
-- *In-Game Boosts:* Enable Game Mode · Disable Xbox Game Bar · CPU Priority for Games (Win32Priority) · MMCSS Gaming Profile (High Priority) · Disable Fullscreen Optimizations · Disable Windows Update during Gaming · Disable Background App Throttling
+- *In-Game Boosts:* Enable Game Mode · Disable Xbox Game Bar · CPU Priority for Games (Win32Priority) · MMCSS Gaming Profile (High Priority) · Disable Fullscreen Optimizations
 - *GPU & Driver:* Enable MSI Mode (Message Signaled Interrupts) · Enable Hardware-Accelerated GPU Scheduling (HAGS) · Clear Shader Cache · Increase GPU Timeout Tolerance (TDR)
 
-**🌐 Network (13)**
+**🌐 Network (11)**
 
 - *Latency:* Disable Nagle's Algorithm (TCPNoDelay) · Disable Large Send Offload (LSO) · Disable Network Throttling Index
 - *DNS:* Set DNS to Cloudflare (1.1.1.1) · Set DNS to Google (8.8.8.8) · Flush DNS Cache
-- *TCP:* Disable TCP Auto-Tuning · Optimize TCP Settings (ECN/SACK/Timestamps)
-- *QoS:* Disable QoS Packet Scheduler Limit
+- *TCP:* Disable TCP Auto-Tuning
 - *Adapter:* Disable Network Adapter Power Saving · Disable Delivery Optimization (P2P Windows Update) · Disable Energy-Efficient Ethernet · Disable Interrupt Moderation
 
-**💾 RAM & Storage (15)**
+**💾 RAM & Storage (14)**
 
 - *Page File:* Optimize PageFile (System Managed) · Clear PageFile on Shutdown
 - *Memory:* Disable Memory Compression
-- *SSD & NVMe:* Enable SSD TRIM · Disable Scheduled Defragmentation · Optimize NVMe Queue Depth · Disable Write-Cache Buffer Flushing
+- *SSD & NVMe:* Enable SSD TRIM · Disable Scheduled Defragmentation · Disable Write-Cache Buffer Flushing
 - *Maintenance:* Disable Hibernation · Clean Temp Files
 - *Deep Clean:* Clean Browser Caches · Clean Windows Update Cache · Clean Thumbnail Cache · Empty Recycle Bin · Clean Prefetch Data · Clean System Logs & Crash Dumps
 
@@ -119,9 +118,9 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 - *Latency & Quality:* Disable Audio Enhancements · Optimize MMCSS Audio Profile · Set Audio Service High Priority
 - *System Sounds:* Disable Windows Sound Scheme
 
-**🖥️ GPU (3)**
+**🖥️ GPU (1)**
 
-- *AMD:* AMD: Disable ULPS (Ultra Low Power State) · AMD: Shader Cache (Unlimited) · AMD: Anti-Lag (Low Latency Mode)
+- *AMD:* AMD: Disable ULPS (Ultra Low Power State)
 
 **⚡ Power (9)**
 
@@ -137,27 +136,27 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 | Preset | Tweaks | For whom |
 |---|:---:|---|
-| 🟢 **Minimal** | 19 | Safe basics: privacy, gaming priority, network latency. No app removal — the ideal first run. |
-| 🟠 **Balanced** | 81 | Minimal + Ultimate Performance, timer, GPU and audio tweaks, light debloat (Copilot, Recall, tips & ads) and the Windows AI and privacy switches. The recommended all-round setup. |
-| 🔴 **Aggressive** | 97 | Everything, incl. Xbox and OneDrive removal, no background Store apps, no drivers from Windows Update, no hibernation, no memory compression. For experienced users. |
+| 🟢 **Minimal** | 18 | Safe basics: privacy, gaming priority, network latency. No app removal — the ideal first run. |
+| 🟠 **Balanced** | 73 | Minimal + Ultimate Performance, timer, GPU and audio tweaks, light debloat (Copilot, Recall, tips & ads) and the Windows AI and privacy switches. The recommended all-round setup. |
+| 🔴 **Aggressive** | 89 | Everything, incl. Xbox and OneDrive removal, no background Store apps, no drivers from Windows Update, no hibernation, no memory compression. For experienced users. |
 
-A preset only ticks the boxes — you review the list and click **Apply selected** yourself.
+A preset only ticks the boxes — you review the list and click **Apply selected** yourself. Tweaks that are already active are left as they are. On purpose in no preset: turning off automatic Windows updates or TCP auto-tuning, the scheduled drive optimization, holding feature updates, the DNS providers and a few matters of taste.
 
 ### 🛠️ Tools
 
-- 📊 **Dashboard** — hardware overview, optimization score, monitor refresh-rate check, live CPU / RAM / disk / network monitor, ping test (latency, packet loss, jitter), snapshot & compare (kept after a restart, e.g. across a Windows update)
+- 📊 **Dashboard** — hardware overview, optimization score (against the recommended Balanced preset), notice when a newer release is out, monitor refresh-rate check, live CPU / RAM / disk / network monitor, ping test (latency, packet loss, jitter), snapshot & compare (kept after a restart, e.g. across a Windows update)
 - 🔧 **BIOS Guide** — 16 platforms (AM5, AM4, Intel LGA1851 / 1700 / 1200 / 1151), menu paths for ASUS, MSI, Gigabyte and ASRock, live check of EXPO/XMP, Resizable BAR, CSM and Secure Boot. Read-only: you change the BIOS yourself
-- 🚀 **Startup Manager** — Run keys and startup folders, disable / enable the same way Task Manager does — nothing is deleted
+- 🚀 **Startup Manager** — Run keys, startup folders and the startup tasks of Store apps, disable / enable the same way Task Manager does — nothing is deleted; the boot delay Windows measured, where it logged one
 - ⚙️ **Services** — asks before touching critical services like Windows Update, BITS or the print spooler; *Enable* brings back the start type a service had before
 - 🗄️ **Backups & Log** — registry backups, System Restore, Revert all, log file
 - 💾 **Your own selection** — save the ticked tweaks to a text file (Presets page) and tick them again after a reinstall or on a second PC
 
 ## 🛡️ Safety
 
-- **Registry backup** before every Apply and Revert — the `.reg` files are kept in `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups` (the newest 20). Double-clicking one puts the saved values back; `_remove-new-keys.reg` deletes keys that did not exist yet. **A restore point** comes on top whenever an Apply removes apps
-- **Removed apps** (OneDrive, Xbox, …) are the one thing a revert can't reinstall — they come back via System Restore. Those tweaks are marked *removes app*
-- **SHA256 chain** — `install.ps1` only runs a script whose hash matches [CHECKSUMS.txt](CHECKSUMS.txt)
-- **No background process, no telemetry** — the check for reverted tweaks runs only when you start the app
+- **Registry backup** before every Apply and Revert — the `.reg` files are kept in `%LOCALAPPDATA%\GameOptimizerPro\RegistryBackups` (the newest 20 of this app, about 3 MB each). Double-clicking one puts the saved values back; `_remove-new-keys.reg` deletes keys that did not exist yet. **A restore point** comes on top whenever an Apply removes apps
+- **Removed apps** (OneDrive, Xbox, …) are the one thing a revert can't reinstall — they come back through the Microsoft Store (OneDrive: its installer) or System Restore. If System Protection is off, the app asks before removing anything. Those tweaks are marked *removes app*
+- **SHA256 chain** — `install.ps1` only runs a script whose hash matches [CHECKSUMS.txt](CHECKSUMS.txt), and starts exactly those bytes from a folder only administrators can write to
+- **No background process, no telemetry** — the check for reverted tweaks runs only when you start the app. The one network request: at start, a look at GitHub for a newer release (nothing is sent)
 - **Open source** — one readable PowerShell file; every action is logged to `%TEMP%\GameOptimizerPro_*.log`
 
 ## 📋 Requirements
@@ -172,13 +171,13 @@ A preset only ticks the boxes — you review the list and click **Apply selected
 <details>
 <summary><b>How do I undo everything?</b></summary>
 
-**Backups & Log → Revert all** sets every tweak back to the Windows default. Removed apps come back through the restore point *GameOptimizerPro Backup* (created before app removals) in Windows System Restore.
+**Backups & Log → Revert all** sets every tweak GameOptimizerPro applied back to the Windows default; settings you made yourself stay. Removed apps come back through the Microsoft Store or the restore point *GameOptimizerPro Backup* (created before app removals) in Windows System Restore.
 </details>
 
 <details>
 <summary><b>Some tweaks have a grey dot instead of a green or empty one.</b></summary>
 
-Grey means there is nothing lasting to check (one-time cleanups), the tweak doesn't apply to this PC (AMD tweaks on an NVIDIA card, no NVMe drive, a network adapter without that setting) or Windows can't report the status right now — for example while it is installing updates. The counters list one-time actions and “n/a” separately. **Verify status** checks again.
+Grey means there is nothing lasting to check (one-time cleanups), the tweak doesn't apply to this PC (AMD tweaks on an NVIDIA card, a network adapter without that setting) or Windows can't report the status right now — for example while it is installing updates. The counters list one-time actions and “n/a” separately. **Verify status** checks again.
 </details>
 
 <details>
