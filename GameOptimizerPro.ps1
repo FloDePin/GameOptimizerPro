@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.2.6
+    1.2.7
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.2.6"
+$Script:AppVersion = "1.2.7"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -64,9 +64,12 @@ try {
 } catch { }
 
 # -----------------------------------------
-# ADMIN CHECK
+# ADMIN CHECK + WINDOWS POWERSHELL
+# The app is written for Windows PowerShell 5.1 (Get-WmiObject, WPF on an STA thread).
+# Started from PowerShell 7 (pwsh) it opens itself again in powershell.exe.
 # -----------------------------------------
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+$Script:IsCorePS = $PSVersionTable.PSEdition -eq 'Core'
+if ($Script:IsCorePS -or -not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     # Started directly (right-click > Run with PowerShell): ask for elevation once and
     # start again as administrator. The message only appears if that is declined, or if
     # the script was not started from a file (irm ... | iex has no path to restart).
@@ -76,9 +79,25 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
             exit
         } catch { }
     }
-    [System.Windows.MessageBox]::Show("Please run this script as Administrator!", "GameOptimizerPro - Admin Required", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+    $why = if ($Script:IsCorePS) { "GameOptimizerPro runs in Windows PowerShell (powershell.exe), not in PowerShell 7. Please start it there as Administrator." } else { "Please run this script as Administrator!" }
+    [System.Windows.MessageBox]::Show($why, "GameOptimizerPro - Admin Required", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     exit
 }
+
+# -----------------------------------------
+# ONE COPY AT A TIME -- a second start (a second click while the first one is still loading)
+# would apply and revert next to the first one: two backups, two restore points, one baseline.
+# -----------------------------------------
+$Script:InstanceMutex = $null
+try {
+    $Script:InstanceMutex = New-Object System.Threading.Mutex($false, 'Global\GameOptimizerPro-v1')
+    $owned = $false
+    try { $owned = $Script:InstanceMutex.WaitOne(0) } catch { $owned = $true }   # abandoned: the last copy ended without closing
+    if (-not $owned) {
+        try { [System.Windows.MessageBox]::Show("GameOptimizerPro is already running (it may still be loading) -- its window is in the taskbar.", "GameOptimizerPro", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null } catch { }
+        exit
+    }
+} catch { $Script:InstanceMutex = $null }   # no named mutex possible here: start without the guard
 foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] Admin-Check OK" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
 Write-Host "[$(Get-Date -f 'HH:mm:ss')] Admin-Check OK" -ForegroundColor DarkGray
 
@@ -124,10 +143,88 @@ try {
 # -----------------------------------------
 # HARDWARE DETECTION
 # -----------------------------------------
+# A registry value, $null when the key or the value is missing. Read through .NET: Get-ItemProperty
+# raises (and the catch swallows) an error for every missing value -- 1.5 ms a call, 3.5 ms for a
+# missing key -- and the status checks read a few hundred values at every start. Same results:
+# DWORD / QWORD as Get-ItemProperty returns them (signed while they fit, unsigned above that:
+# 0xFFFFFFFF = 4294967295, not -1), REG_EXPAND_SZ expanded, arrays as before. Names are literal:
+# driver keys like Ndi\params\*EEE contain a '*' (as a wildcard it would match AdvancedEEE ...).
 function Get-RegVal($Path, $Name) {
-    # -LiteralPath: driver keys like Ndi\params\*EEE contain a '*' -- as a normal path that
-    # is a wildcard, matches *EEE, AdvancedEEE, ... and returns a list instead of the value
+    if ("$Path" -match '^(?:Microsoft\.PowerShell\.Core\\)?(?:Registry::)?(HKLM|HKEY_LOCAL_MACHINE|HKCU|HKEY_CURRENT_USER|HKCR|HKEY_CLASSES_ROOT|HKU|HKEY_USERS):?(?:\\(.*))?$') {
+        $hiveName = $matches[1]; $sub = "$($matches[2])".Trim('\')
+        $hive = switch ($hiveName) {
+            { $_ -in 'HKLM', 'HKEY_LOCAL_MACHINE' } { [Microsoft.Win32.Registry]::LocalMachine }
+            { $_ -in 'HKCU', 'HKEY_CURRENT_USER' }  { [Microsoft.Win32.Registry]::CurrentUser }
+            { $_ -in 'HKCR', 'HKEY_CLASSES_ROOT' }  { [Microsoft.Win32.Registry]::ClassesRoot }
+            default                                 { [Microsoft.Win32.Registry]::Users }
+        }
+        $k = $null
+        try {
+            $k = if ($sub) { $hive.OpenSubKey($sub, $false) } else { $hive }
+            if (-not $k) { return $null }
+            $n = if ("$Name" -eq '(default)') { '' } else { "$Name" }
+            $v = $k.GetValue($n)
+            if ($null -eq $v) { return $null }
+            if ($v -is [int32] -and $v -lt 0 -and $k.GetValueKind($n) -eq 'DWord') { return [BitConverter]::ToUInt32([BitConverter]::GetBytes($v), 0) }
+            if ($v -is [int64] -and $v -lt 0 -and $k.GetValueKind($n) -eq 'QWord') { return [BitConverter]::ToUInt64([BitConverter]::GetBytes($v), 0) }
+            return $v
+        } catch { return $null } finally { if ($k -and $sub) { $k.Close() } }
+    }
     try { (Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop).$Name } catch { $null }
+}
+
+# A WMI query with a time limit. Get-WmiObject waits as long as the provider does -- with a damaged
+# WMI repository or a hanging storage driver the splash stayed on screen for good. Returns the same
+# objects as Get-WmiObject; throws when the provider doesn't answer within $TimeoutSec (the status
+# checks then show "unknown"). After one timeout the next queries wait 2 s at most: a WMI that
+# hung once mostly keeps hanging, and the window should still open.
+$Script:WmiTimedOut = $false
+function Get-WmiSafe([string]$Query, [string]$Namespace = 'root\cimv2', [int]$TimeoutSec = 10) {
+    if ($Script:WmiTimedOut) { $TimeoutSec = [math]::Min($TimeoutSec, 2) }
+    $s = New-Object System.Management.ManagementObjectSearcher($Namespace, $Query)
+    $s.Options.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
+    try { @($s.Get()) }
+    catch {
+        $x = $_.Exception; while ($x -and $x -isnot [System.Management.ManagementException]) { $x = $x.InnerException }
+        if ($x -and $x.ErrorCode -eq [System.Management.ManagementStatus]::Timedout) { $Script:WmiTimedOut = $true }
+        throw
+    } finally { $s.Dispose() }
+}
+
+# A slow read-only query on a background thread while the window is being built.
+# Receive-Background waits at most $WaitMs; a query that hangs is left behind (it ends with
+# the app) and the caller goes on without its answer.
+function Start-Background([scriptblock]$Code) {
+    try { $ps = [powershell]::Create(); [void]$ps.AddScript($Code.ToString()); @{ Ps = $ps; Handle = $ps.BeginInvoke() } } catch { $null }
+}
+function Receive-Background($Job, [int]$WaitMs = 3000) {
+    if (-not $Job -or -not $Job.Handle) { return }
+    try {
+        if (-not $Job.Handle.AsyncWaitHandle.WaitOne($WaitMs)) { return }
+        $out = @($Job.Ps.EndInvoke($Job.Handle))
+        $Job.Ps.Dispose()
+        $out
+    } catch { }
+}
+
+# Three slow reads that only five status checks need -- each loads a module of its own (Appx,
+# MMAgent, DISM), and the app list of every account takes seconds on some PCs. They start on a
+# background thread right after the splash; the status pass at startup takes them over for its
+# last checks (Add-PrefetchToPass). Each holds the value, or the error the check would have got.
+function Start-Prefetch {
+    Start-Background {
+        $r = @{}
+        try { $e = $null; $l = @(Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue -ErrorVariable e); if (-not $l.Count -and $e) { throw $e[0] }; $r.Appx = $l } catch { $r.Appx = @($_) }
+        try { $r.MMAgent = @(Get-MMAgent -ErrorAction Stop) } catch { $r.MMAgent = @($_) }
+        try { $r.Reserved = @(Get-WindowsReservedStorageState -ErrorAction Stop) } catch { $r.Reserved = @($_) }
+        $r
+    }
+}
+function Add-PrefetchToPass {
+    $pre = @(Receive-Background $Script:Prefetch 8000) | Select-Object -First 1
+    $Script:Prefetch = $null
+    if ($null -eq $Script:PassCache -or $pre -isnot [hashtable]) { return }   # not done in time: the checks read it themselves
+    foreach ($k in @($pre.Keys)) { $Script:PassCache[$k] = @($pre[$k]) }
 }
 
 # The gaming GPU. On AM5 / Intel desktops the iGPU often stays enabled next to the
@@ -260,13 +357,42 @@ function Reset-ProviderDns([string]$Provider, [string[]]$Servers) {
     Write-Log "Revert: $Provider DNS -- $n adapter(s) back to their previous DNS ($auto automatic), $kept with servers of their own left alone"
 }
 
+# One status pass (start, Verify, after Apply / Revert, snapshot): what several checks read --
+# the packages of every account, the connected adapters -- is read once and shared. Outside a
+# pass every read is fresh (an Apply changes them). Start-StatusPass also drops a pass that
+# was left open, so nothing stale survives into the next one.
+$Script:PassCache = $null
+function Start-StatusPass { $Script:PassCache = @{} }
+function Stop-StatusPass { $Script:PassCache = $null }
+function Get-PassCached([string]$Key, [scriptblock]$Read) {
+    if ($null -eq $Script:PassCache) { return (& $Read) }
+    if (-not $Script:PassCache.ContainsKey($Key)) {
+        # a failed read is kept as well: the next check of this pass gets the same error at once
+        $val = $null
+        try { $val = @(& $Read) } catch { $val = @($_) }
+        $Script:PassCache[$Key] = $val
+    }
+    $v = $Script:PassCache[$Key]
+    if ($v.Count -eq 1 -and $v[0] -is [System.Management.Automation.ErrorRecord]) { throw $v[0] }
+    $v
+}
+
 # Connected adapters the network status checks look at. Physical ones only when there
 # are any: Hyper-V / WSL (vEthernet), VPN and other virtual adapters can be listed
 # first and would otherwise decide the status. Falls back to every connected adapter.
+# Read from MSFT_NetAdapter, the class Get-NetAdapter shows (Status "Up" = operational
+# status 1) -- the NetAdapter module itself takes ~0.6 s to load at the first call.
 function Get-UpAdapters {
-    $up = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" })
+    $up = @(Get-PassCached 'UpAdapters' { Get-WmiSafe 'SELECT * FROM MSFT_NetAdapter' 'root\StandardCimv2' | Where-Object { $_.InterfaceOperationalStatus -eq 1 } })
     $phys = @($up | Where-Object { $_.HardwareInterface })
     if ($phys.Count) { $phys } else { $up }
+}
+
+# DNS servers of one adapter and address family (2 = IPv4, 23 = IPv6) as Windows reports
+# them: MSFT_DNSClientServerAddress, the class Get-DnsClientServerAddress reads, without
+# loading its module (~0.3 s).
+function Get-DnsServers([uint32]$Index, [int]$Family) {
+    @(Get-WmiSafe "SELECT ServerAddresses FROM MSFT_DNSClientServerAddress WHERE InterfaceIndex=$Index AND AddressFamily=$Family" 'root\StandardCimv2' | ForEach-Object { $_.ServerAddresses } | Where-Object { $_ })
 }
 
 # The apps "Remove Other Bloatware" removes -- the status check looks for the same list,
@@ -287,7 +413,19 @@ function Get-BloatPatterns {
 # its status check). Windows' own system packages (NonRemovable) don't count.
 function Get-BloatApps {
     $pats = Get-BloatPatterns
-    @(Get-AppxPackage -AllUsers -ErrorAction Stop | Where-Object { $n = $_.Name; -not $_.NonRemovable -and @($pats | Where-Object { $n -like $_ }).Count })
+    @(Get-AllAppx | Where-Object { $n = $_.Name; -not $_.NonRemovable -and @($pats | Where-Object { $n -like $_ }).Count })
+}
+
+# Every app package of every account. The three app-removal checks share one read within a
+# status pass (each Get-AppxPackage -AllUsers lists all packages, filter or not). Nothing
+# readable at all (no admin rights, the deployment service busy) throws: status unknown.
+function Get-AllAppx {
+    Get-PassCached 'Appx' {
+        $e = $null
+        $l = @(Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue -ErrorVariable e)
+        if (-not $l.Count -and $e) { throw $e[0] }
+        $l
+    }
 }
 
 # The packages "Remove Xbox Apps" removes. Exact names: the old "*XboxTCUI*" never matched
@@ -443,10 +581,24 @@ function Get-AudioRenderIds { Initialize-AudioPolicy; @([GOPAudio.Fx]::RenderIds
 function Get-AudioFx([string]$Id) { Initialize-AudioPolicy; [GOPAudio.Fx]::GetUInt($Id, $true, '{1da5d803-d492-4edd-8c23-e0c0ffee7f0e}', 5) }
 function Set-AudioFx([string]$Id, [uint32]$Value) { Initialize-AudioPolicy; [GOPAudio.Fx]::SetUInt($Id, $true, '{1da5d803-d492-4edd-8c23-e0c0ffee7f0e}', 5, $Value) }
 
+# NVMe drives. Most of them do NOT say "NVMe" in their model string (e.g. "Samsung SSD 980 PRO
+# 1TB", "WD_BLACK SN850X"). With the inbox stornvme driver the PNP ID carries VEN_NVME; drives on
+# a vendor driver are caught via the storage stack's BusType (17 = NVMe), matched back by friendly
+# name. The storage provider (MSFT_PhysicalDisk) needs up to a second when Windows hasn't loaded
+# it yet, so it runs on a background thread while the window is built (Resolve-NVMeDisks).
+$Script:NvmeProbe = Start-Background { @(Get-WmiObject -Namespace 'root\Microsoft\Windows\Storage' -Class MSFT_PhysicalDisk -ErrorAction Stop | Where-Object { "$($_.BusType)" -eq 'NVMe' -or "$($_.BusType)" -eq '17' } | ForEach-Object { "$($_.FriendlyName)" }) }
+function Resolve-NVMeDisks {
+    $names = @(Receive-Background $Script:NvmeProbe 4000)
+    $Script:NvmeProbe = $null
+    try { @(Get-WmiSafe "SELECT * FROM Win32_DiskDrive" | Where-Object { $_.Model -match "NVMe" -or $_.PNPDeviceID -match "VEN_NVME" -or ($names -contains $_.Model) }) } catch { }
+}
+$NVMeDisks = @(); $HasNVMe = $false; $NVMeInfo = "NVMe: ?"   # filled in before the dashboard
+$Script:Prefetch = Start-Prefetch
+
 # The WMI results are kept in $Script:VideoCtrls / $Script:GpuObj / $Script:CpuObj and
 # reused by the dashboard, so every class is queried only once per start.
 try {
-    $Script:VideoCtrls = @(Get-WmiObject Win32_VideoController)
+    $Script:VideoCtrls = @(Get-WmiSafe "SELECT * FROM Win32_VideoController")
     $Script:GpuObj = Select-PrimaryGpu $Script:VideoCtrls
     $GPU = $Script:GpuObj.Name
 } catch { $GPU = $null; $Script:VideoCtrls = @(); $Script:GpuObj = $null }
@@ -455,37 +607,20 @@ if ([string]::IsNullOrWhiteSpace($GPU)) { $GPU = "Unknown GPU" }
 try {
     # Only the properties we need: a full Win32_Processor query also samples the CPU
     # load, which alone costs ~1 s on every start.
-    $Script:CpuObj = Get-WmiObject -Query "SELECT Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed FROM Win32_Processor" | Select-Object -First 1
+    $Script:CpuObj = Get-WmiSafe "SELECT Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed FROM Win32_Processor" | Select-Object -First 1
     $CPU = $Script:CpuObj.Name
 } catch { $CPU = $null }
 if ([string]::IsNullOrWhiteSpace($CPU)) { $CPU = "Unknown CPU" } else { $CPU = ($CPU -replace '\s+', ' ').Trim() }   # WMI pads the name with spaces
 
 try {
-    $RAM = [math]::Round((Get-WmiObject Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+    $RAM = [math]::Round((Get-WmiSafe "SELECT TotalPhysicalMemory FROM Win32_ComputerSystem" | Select-Object -First 1).TotalPhysicalMemory / 1GB)
 } catch { $RAM = 0 }
 
 $IsNVIDIA   = $GPU -match "NVIDIA"
 $IsAMD      = $GPU -match "AMD|Radeon"
 
 try {
-    # Most NVMe drives do NOT say "NVMe" in their model string (e.g. "Samsung SSD
-    # 980 PRO 1TB", "WD_BLACK SN850X"), so matching the model alone missed them and
-    # silently skipped the NVMe tweak. With the inbox stornvme driver the PNP ID
-    # carries VEN_NVME; drives on a vendor driver are caught via the storage
-    # stack's BusType (17 = NVMe) matched back by friendly name. MSFT_PhysicalDisk is
-    # read straight from WMI -- Get-PhysicalDisk returns the same objects but loads
-    # the Storage module first (~0.5 s).
-    $nvmeNames = @()
-    try { $nvmeNames = @(Get-WmiObject -Namespace "root\Microsoft\Windows\Storage" -Class MSFT_PhysicalDisk -ErrorAction Stop | Where-Object { "$($_.BusType)" -eq "NVMe" -or "$($_.BusType)" -eq "17" } | ForEach-Object { $_.FriendlyName }) } catch { }
-    $NVMeDisks = @(Get-WmiObject -Query "SELECT * FROM Win32_DiskDrive" | Where-Object {
-        $_.Model -match "NVMe" -or $_.PNPDeviceID -match "VEN_NVME" -or ($nvmeNames -contains $_.Model)
-    })
-} catch { $NVMeDisks = @() }
-$HasNVMe  = $NVMeDisks.Count -gt 0
-$NVMeInfo = if ($HasNVMe) { "NVMe: $($NVMeDisks.Count)x" } else { "NVMe: none" }
-
-try {
-    $OSInfo  = Get-WmiObject Win32_OperatingSystem -ErrorAction Stop
+    $OSInfo  = Get-WmiSafe "SELECT BuildNumber, Caption FROM Win32_OperatingSystem" | Select-Object -First 1
     $OSBuild = [int]$OSInfo.BuildNumber
     $OSName  = $OSInfo.Caption
 } catch { $OSBuild = 0; $OSName = "Unknown OS" }
@@ -526,7 +661,7 @@ function Get-NetSummary {
     return $best
 }
 
-$HWInfo  ="GPU: $GPU   |   CPU: $CPU   |   RAM: $RAM GB   |   $NVMeInfo   |   $OSShort"
+$HWInfo  = "GPU: $GPU   |   CPU: $CPU   |   RAM: $RAM GB   |   $OSShort"   # + NVMe once known (before the dashboard)
 foreach ($p in $logPaths) { try { "[$(Get-Date -f 'HH:mm:ss')] Hardware erkannt: $HWInfo" | Out-File $p -Append -ErrorAction SilentlyContinue } catch { } }
 Write-Host "[$(Get-Date -f 'HH:mm:ss')] Hardware erkannt: $HWInfo" -ForegroundColor DarkGray
 Set-Splash "Loading tweak definitions ..." 15
@@ -735,8 +870,8 @@ function Backup-Registry {
     # write-cache flushing write under each disk. Add their Device Parameters.
     $keys = @($Script:RegistryBackupKeys)
     try {
-        $devIds  = @(Get-WmiObject Win32_VideoController -ErrorAction Stop | Where-Object { $_.Name -notmatch "Microsoft" } | ForEach-Object { $_.PNPDeviceID })
-        $devIds += @(Get-WmiObject -Query "SELECT * FROM Win32_DiskDrive" -ErrorAction Stop | ForEach-Object { $_.PNPDeviceID })
+        $devIds  = @(Get-WmiSafe "SELECT Name, PNPDeviceID FROM Win32_VideoController" | Where-Object { $_.Name -notmatch "Microsoft" } | ForEach-Object { $_.PNPDeviceID })
+        $devIds += @(Get-WmiSafe "SELECT PNPDeviceID FROM Win32_DiskDrive" | ForEach-Object { $_.PNPDeviceID })
         foreach ($id in ($devIds | Where-Object { $_ } | Select-Object -Unique)) {
             $keys += "HKLM\SYSTEM\CurrentControlSet\Enum\$id\Device Parameters"
         }
@@ -3056,12 +3191,12 @@ $CheckFunctions = @{
 
     # BLOATWARE
     # Every package the Apply removes, for every account (Microsoft.XboxGameCallableUI is part of Windows)
-    "Remove Xbox Apps"                   = { $pats = Get-XboxPatterns; $null -eq (Get-AppxPackage -AllUsers "Microsoft.Xbox*" -EA Stop | Where-Object { $pats -contains $_.Name -and -not $_.NonRemovable } | Select-Object -First 1) }
+    "Remove Xbox Apps"                   = { $pats = Get-XboxPatterns; $null -eq (Get-AllAppx | Where-Object { $pats -contains $_.Name -and -not $_.NonRemovable } | Select-Object -First 1) }
     # Check the APP, not the policy: Microsoft marks TurnOffWindowsCopilot as deprecated
     # and it doesn't apply to the new Copilot app -- the policy could stay green while
     # an update had quietly reinstalled Copilot. NonRemovable system packages are
-    # skipped because the Apply can't remove them either.
-    "Remove Copilot"                     = { $null -eq (Get-AppxPackage -AllUsers "*Copilot*" -EA SilentlyContinue | Where-Object { -not $_.NonRemovable } | Select-Object -First 1) }
+    # skipped because the Apply can't remove them either. Unreadable = unknown (it showed "active").
+    "Remove Copilot"                     = { $null -eq (Get-AllAppx | Where-Object { $_.Name -like "*Copilot*" -and -not $_.NonRemovable } | Select-Object -First 1) }
     # per-user install (AppData) or machine-wide (Program Files)
     "Remove OneDrive"                    = { -not (@("$env:LOCALAPPDATA\Microsoft\OneDrive\OneDrive.exe", "$env:ProgramFiles\Microsoft OneDrive\OneDrive.exe", "${env:ProgramFiles(x86)}\Microsoft OneDrive\OneDrive.exe") | Where-Object { Test-Path $_ }) }
     "Remove Windows Recall"              = { ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableAIDataAnalysis") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "AllowRecallEnablement") -eq 0) }
@@ -3098,7 +3233,7 @@ $CheckFunctions = @{
     }
     # Active when the threshold is at least the RAM size (what the Apply writes) and not the Windows
     # default 0x380000 = 3,670,016 KB -- "> 380000" was true on every untouched Windows
-    "Process Count Reduction (Svchost)" = { $v = Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control" "SvcHostSplitThresholdInKB"; $ram = [math]::Round((Get-WmiObject Win32_ComputerSystem).TotalPhysicalMemory / 1024); ($null -ne $v) -and ($ram -gt 0) -and ([int64]$v -ne 3670016) -and ([int64]$v -ge $ram) }
+    "Process Count Reduction (Svchost)" = { $v = Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control" "SvcHostSplitThresholdInKB"; $ram = [math]::Round((Get-WmiSafe 'SELECT TotalPhysicalMemory FROM Win32_ComputerSystem' | Select-Object -First 1).TotalPhysicalMemory / 1024); ($null -ne $v) -and ($ram -gt 0) -and ([int64]$v -ne 3670016) -and ([int64]$v -ge $ram) }
     "Disable Startup App Delay" = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize" "StartupDelayInMSec") -eq 0 }
     "Block Background Apps (Policy)" = { if (Test-HomeEdition) { return $null }; (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" "LetAppsRunInBackground") -eq 2 }
     "Stop Background Apps (All Editions)" = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" "GlobalUserDisabled") -eq 1 }
@@ -3129,7 +3264,7 @@ $CheckFunctions = @{
     # QUALITY OF LIFE
     "Show File Extensions"               = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "HideFileExt") -eq 0 }
     "Show Hidden Files"                  = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "Hidden") -eq 1 }
-    "Disable Reserved Storage"           = { try { (Get-WindowsReservedStorageState -ErrorAction Stop).ReservedStorageState -eq "Disabled" } catch { $null } }
+    "Disable Reserved Storage"           = { try { $s = @(Get-PassCached 'Reserved' { Get-WindowsReservedStorageState -ErrorAction Stop }) | Select-Object -First 1; if (-not $s) { return $null }; $s.ReservedStorageState -eq "Disabled" } catch { $null } }
     "Disable Storage Sense"              = { (Get-RegVal "HKLM:\Software\Policies\Microsoft\Windows\StorageSense" "AllowStorageSenseGlobal") -eq 0 }
     # Windows rewrites this value at every sign-out with the CURRENT keyboard state
     # ("2" when NumLock was on), so test the NumLock bit (2), not the exact string --
@@ -3229,9 +3364,11 @@ $CheckFunctions = @{
         $ifaces = Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\*" -EA SilentlyContinue
         ($ifaces | Where-Object { $_.TCPNoDelay -eq 1 } | Select-Object -First 1) -ne $null
     }
-    # Network checks: every connected physical adapter (Get-UpAdapters), like the Apply
+    # Network checks: every connected physical adapter (Get-UpAdapters), like the Apply.
+    # LSO from MSFT_NetAdapterLsoSettingData -- what Get-NetAdapterLso shows, without its module.
     "Disable Large Send Offload (LSO)"   = {
-        $lso = @(Get-UpAdapters | ForEach-Object { Get-NetAdapterLso -Name $_.Name -EA SilentlyContinue } | Where-Object { $_ })
+        $names = @(Get-UpAdapters | ForEach-Object { "$($_.Name)" })
+        $lso = @(Get-WmiSafe 'SELECT * FROM MSFT_NetAdapterLsoSettingData' 'root\StandardCimv2' | Where-Object { $names -contains "$($_.Name)" })
         if (-not $lso.Count) { return $null }   # no connected adapter offers LSO
         @($lso | Where-Object { $_.IPv4Enabled -or $_.IPv6Enabled }).Count -eq 0
     }
@@ -3240,8 +3377,8 @@ $CheckFunctions = @{
     "Set DNS to Cloudflare (1.1.1.1)" = {
         $ad = @(Get-UpAdapters); if (-not $ad.Count) { return $null }
         @($ad | Where-Object {
-            $v4 = @((Get-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4 -EA SilentlyContinue).ServerAddresses)
-            $v6 = @((Get-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv6 -EA SilentlyContinue).ServerAddresses)
+            $v4 = @(Get-DnsServers $_.InterfaceIndex 2)
+            $v6 = @(Get-DnsServers $_.InterfaceIndex 23)
             ($v4 -notcontains "1.1.1.1") -or ($v6.Count -and ($v6 -notcontains "2606:4700:4700::1111"))
         }).Count -eq 0
     }
@@ -3249,13 +3386,19 @@ $CheckFunctions = @{
     "Set DNS to Google (8.8.8.8)" = {
         $ad = @(Get-UpAdapters); if (-not $ad.Count) { return $null }
         @($ad | Where-Object {
-            $v4 = @((Get-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4 -EA SilentlyContinue).ServerAddresses)
-            $v6 = @((Get-DnsClientServerAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv6 -EA SilentlyContinue).ServerAddresses)
+            $v4 = @(Get-DnsServers $_.InterfaceIndex 2)
+            $v6 = @(Get-DnsServers $_.InterfaceIndex 23)
             ($v4 -notcontains "8.8.8.8") -or ($v6.Count -and ($v6 -notcontains "2001:4860:4860::8888"))
         }).Count -eq 0
     }
     "Flush DNS Cache"                    = { $null }
-    "Disable TCP Auto-Tuning"            = { (Get-NetTCPSetting -SettingName Internet -EA SilentlyContinue).AutoTuningLevelLocal -eq "Disabled" }
+    # MSFT_NetTCPSetting, what Get-NetTCPSetting shows (without its module, ~0.45 s, time-limited):
+    # AutoTuningLevelLocal 0 = Disabled. Unreadable = unknown, not "switched back".
+    "Disable TCP Auto-Tuning"            = {
+        $t = Get-WmiSafe "SELECT AutoTuningLevelLocal FROM MSFT_NetTCPSetting WHERE SettingName='Internet'" 'root\StandardCimv2' | Select-Object -First 1
+        if ($null -eq $t -or $null -eq $t.AutoTuningLevelLocal) { return $null }
+        [int]$t.AutoTuningLevelLocal -eq 0
+    }
     "Disable Network Adapter Power Saving" = {
         # Physical adapters only (NCF_PHYSICAL = 0x4 in Characteristics): virtual ones
         # (WAN Miniport, Wi-Fi Direct, Bluetooth PAN, ...) have no power saving that
@@ -3273,10 +3416,10 @@ $CheckFunctions = @{
     "Disable Interrupt Moderation"       = { $ps = @(Get-NicParams 'InterruptModeration'); if (-not $ps.Count) { return $null }; @($ps | Where-Object { $_.Current -ne '0' }).Count -eq 0 }
 
     # RAM & STORAGE
-    "Optimize PageFile (System Managed)" = { (($cs=Get-WmiObject Win32_ComputerSystem -EA SilentlyContinue) -and $cs.AutomaticManagedPagefile -eq $true) }
+    "Optimize PageFile (System Managed)" = { (($cs = Get-WmiSafe 'SELECT AutomaticManagedPagefile FROM Win32_ComputerSystem' | Select-Object -First 1) -and $cs.AutomaticManagedPagefile -eq $true) }
     "Clear PageFile on Shutdown"         = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "ClearPageFileAtShutdown") -eq 1 }
     "Disable Memory Compression"         = {
-        try { $m = Get-MMAgent -EA Stop; -not $m.MemoryCompression } catch { $null }
+        try { $m = @(Get-PassCached 'MMAgent' { Get-MMAgent -EA Stop }) | Select-Object -First 1; if (-not $m) { return $null }; -not $m.MemoryCompression } catch { $null }
     }
     # Current Windows prints TWO lines (NTFS + ReFS) -> -match returned an array and the
     # dot stayed "unknown". Read the NTFS line (older builds print a single line).
@@ -3288,7 +3431,7 @@ $CheckFunctions = @{
     "Disable Scheduled Defragmentation"  = { (Get-TaskState "\Microsoft\Windows\Defrag" "ScheduledDefrag") -eq "Disabled" }
     "Disable Write-Cache Buffer Flushing" = {
         # The Apply writes to every fixed disk -- active only if every one has it
-        $d = @(Get-WmiObject -Query "SELECT * FROM Win32_DiskDrive" -EA SilentlyContinue | Where-Object { $null -eq $_.MediaType -or $_.MediaType -eq 3 -or $_.MediaType -eq 4 -or $_.MediaType -eq 'Fixed hard disk media' })
+        $d = @(Get-WmiSafe "SELECT * FROM Win32_DiskDrive" | Where-Object { $null -eq $_.MediaType -or $_.MediaType -eq 3 -or $_.MediaType -eq 4 -or $_.MediaType -eq 'Fixed hard disk media' })
         if (-not $d.Count) { return $null }
         $on = @($d | Where-Object { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Enum\$($_.PNPDeviceID)\Device Parameters\Disk" "CacheIsPowerProtected") -eq 1 })
         $on.Count -eq $d.Count
@@ -4130,53 +4273,58 @@ function Brush([string]$Hex) {
     }
     $Script:BrushCache[$Hex]
 }
+$Script:MixCache = @{}
 function Mix-Hex([string]$A, [string]$B, [double]$T) {
-    $ca = [Windows.Media.ColorConverter]::ConvertFromString($A); $cb = [Windows.Media.ColorConverter]::ConvertFromString($B)
-    '#{0:x2}{1:x2}{2:x2}' -f [int][math]::Round($ca.R + ($cb.R - $ca.R) * $T), [int][math]::Round($ca.G + ($cb.G - $ca.G) * $T), [int][math]::Round($ca.B + ($cb.B - $ca.B) * $T)
+    $key = "$A|$B|$T"   # the same few mixes are asked for on every row
+    if (-not $Script:MixCache.ContainsKey($key)) {
+        $ca = [Windows.Media.ColorConverter]::ConvertFromString($A); $cb = [Windows.Media.ColorConverter]::ConvertFromString($B)
+        $Script:MixCache[$key] = '#{0:x2}{1:x2}{2:x2}' -f [int][math]::Round($ca.R + ($cb.R - $ca.R) * $T), [int][math]::Round($ca.G + ($cb.G - $ca.G) * $T), [int][math]::Round($ca.B + ($cb.B - $ca.B) * $T)
+    }
+    $Script:MixCache[$key]
 }
-function Th { param([double[]]$V) if ($V.Count -eq 1) { New-Object Windows.Thickness($V[0]) } else { New-Object Windows.Thickness($V[0], $V[1], $V[2], $V[3]) } }
+function Th { param([double[]]$V) if ($V.Count -eq 1) { [Windows.Thickness]::new($V[0]) } else { [Windows.Thickness]::new($V[0], $V[1], $V[2], $V[3]) } }
 function New-Text {
     param([string]$Text, [double]$Size = 13, [string]$Color = $Script:UI.TEXT, [string]$Weight = 'Normal', [switch]$Wrap, [double[]]$Margin, [switch]$Mono)
-    $tb = New-Object Windows.Controls.TextBlock
+    $tb = [Windows.Controls.TextBlock]::new()
     $tb.Text = $Text; $tb.FontSize = $Size; $tb.Foreground = Brush $Color; $tb.FontWeight = $Weight
     if ($Wrap) { $tb.TextWrapping = [Windows.TextWrapping]::Wrap }
     if ($Margin) { $tb.Margin = Th $Margin }
-    if ($Mono) { $tb.FontFamily = New-Object Windows.Media.FontFamily("Consolas") }
+    if ($Mono) { $tb.FontFamily = [Windows.Media.FontFamily]::new("Consolas") }
     $tb.VerticalAlignment = 'Center'
     $tb
 }
 function New-Icon {
     param([int]$Glyph, [double]$Size = 14, [string]$Color = $Script:UI.DIM, [double[]]$Margin)
-    $tb = New-Object Windows.Controls.TextBlock
+    $tb = [Windows.Controls.TextBlock]::new()
     $tb.Text = [string][char]$Glyph; $tb.FontFamily = $Script:IconFont; $tb.FontSize = $Size; $tb.Foreground = Brush $Color
     $tb.VerticalAlignment = 'Center'
     if ($Margin) { $tb.Margin = Th $Margin }
     $tb
 }
 function New-HStack { param([object[]]$Children, [double[]]$Margin)
-    $sp = New-Object Windows.Controls.StackPanel; $sp.Orientation = 'Horizontal'
+    $sp = [Windows.Controls.StackPanel]::new(); $sp.Orientation = 'Horizontal'
     foreach ($c in $Children) { if ($c) { $sp.Children.Add($c) | Out-Null } }
     if ($Margin) { $sp.Margin = Th $Margin }
     $sp
 }
 function New-VStack { param([object[]]$Children, [double[]]$Margin)
-    $sp = New-Object Windows.Controls.StackPanel
+    $sp = [Windows.Controls.StackPanel]::new()
     foreach ($c in $Children) { if ($c) { $sp.Children.Add($c) | Out-Null } }
     if ($Margin) { $sp.Margin = Th $Margin }
     $sp
 }
 function New-Card {
     param($Child, [double[]]$Margin = @(0, 0, 0, 14), [double[]]$Padding = @(18, 16, 18, 16), [string]$Background = $Script:UI.CARD)
-    $b = New-Object Windows.Controls.Border
+    $b = [Windows.Controls.Border]::new()
     $b.Background = Brush $Background; $b.BorderBrush = Brush $Script:UI.BORDER; $b.BorderThickness = Th 1
-    $b.CornerRadius = New-Object Windows.CornerRadius(10); $b.Padding = Th $Padding; $b.Margin = Th $Margin
+    $b.CornerRadius = [Windows.CornerRadius]::new(10); $b.Padding = Th $Padding; $b.Margin = Th $Margin
     $b.Child = $Child
     $b
 }
 function New-CardTitle {
     param([string]$Title, [string]$Accent, $Right)
-    $g = New-Object Windows.Controls.Grid; $g.Margin = Th 0, 0, 0, 12
-    $bar = New-Object Windows.Controls.Border; $bar.Width = 3; $bar.Height = 16; $bar.CornerRadius = New-Object Windows.CornerRadius(2)
+    $g = [Windows.Controls.Grid]::new(); $g.Margin = Th 0, 0, 0, 12
+    $bar = [Windows.Controls.Border]::new(); $bar.Width = 3; $bar.Height = 16; $bar.CornerRadius = [Windows.CornerRadius]::new(2)
     $bar.Background = Brush $Accent; $bar.Margin = Th 0, 0, 10, 0
     $g.Children.Add((New-HStack @($bar, (New-Text $Title 15 $Script:UI.TEXT 'SemiBold')))) | Out-Null
     if ($Right) { $Right.HorizontalAlignment = 'Right'; $g.Children.Add($Right) | Out-Null }
@@ -4184,8 +4332,8 @@ function New-CardTitle {
 }
 function New-Badge {
     param([string]$Text, [string]$Fg, [string]$Bg, [int]$Glyph = 0)
-    $b = New-Object Windows.Controls.Border
-    $b.CornerRadius = New-Object Windows.CornerRadius(4); $b.Background = Brush $Bg; $b.Padding = Th 6, 1, 6, 2
+    $b = [Windows.Controls.Border]::new()
+    $b.CornerRadius = [Windows.CornerRadius]::new(4); $b.Background = Brush $Bg; $b.Padding = Th 6, 1, 6, 2
     $b.Margin = Th 0, 0, 0, 3; $b.HorizontalAlignment = 'Right'
     $ic = if ($Glyph) { New-Icon $Glyph 10 $Fg @(0, 0, 4, 0) } else { $null }
     $b.Child = New-HStack @($ic, (New-Text $Text 11 $Fg))
@@ -4193,14 +4341,14 @@ function New-Badge {
 }
 function New-Bar {
     param([double]$Pct, [string]$Color, [double]$Height = 6)
-    $g = New-Object Windows.Controls.Grid; $g.Height = $Height
-    $track = New-Object Windows.Controls.Border; $track.CornerRadius = New-Object Windows.CornerRadius($Height / 2)
+    $g = [Windows.Controls.Grid]::new(); $g.Height = $Height
+    $track = [Windows.Controls.Border]::new(); $track.CornerRadius = [Windows.CornerRadius]::new($Height / 2)
     $track.Background = Brush (Mix-Hex $Script:UI.CARD '#ffffff' 0.07)
     $g.Children.Add($track) | Out-Null
-    $inner = New-Object Windows.Controls.Grid
-    $c1 = New-Object Windows.Controls.ColumnDefinition; $c2 = New-Object Windows.Controls.ColumnDefinition
+    $inner = [Windows.Controls.Grid]::new()
+    $c1 = [Windows.Controls.ColumnDefinition]::new(); $c2 = [Windows.Controls.ColumnDefinition]::new()
     $inner.ColumnDefinitions.Add($c1); $inner.ColumnDefinitions.Add($c2)
-    $fill = New-Object Windows.Controls.Border; $fill.CornerRadius = New-Object Windows.CornerRadius($Height / 2); $fill.Background = Brush $Color
+    $fill = [Windows.Controls.Border]::new(); $fill.CornerRadius = [Windows.CornerRadius]::new($Height / 2); $fill.Background = Brush $Color
     $inner.Children.Add($fill) | Out-Null
     $g.Children.Add($inner) | Out-Null
     $g.Tag = @{ C1 = $c1; C2 = $c2; Fill = $fill }
@@ -4209,13 +4357,13 @@ function New-Bar {
 }
 function Set-Bar($Bar, [double]$Pct, [string]$Color) {
     $p = [math]::Max(0, [math]::Min(100, $Pct))
-    $Bar.Tag.C1.Width = New-Object Windows.GridLength([math]::Max(0.0001, $p), [Windows.GridUnitType]::Star)
-    $Bar.Tag.C2.Width = New-Object Windows.GridLength([math]::Max(0.0001, 100 - $p), [Windows.GridUnitType]::Star)
+    $Bar.Tag.C1.Width = [Windows.GridLength]::new([math]::Max(0.0001, $p), [Windows.GridUnitType]::Star)
+    $Bar.Tag.C2.Width = [Windows.GridLength]::new([math]::Max(0.0001, 100 - $p), [Windows.GridUnitType]::Star)
     if ($Color) { $Bar.Tag.Fill.Background = Brush $Color }
 }
 function New-Btn {
     param([string]$Label, [string]$Bg = $Script:UI.CARD2, [string]$Fg = $Script:UI.TEXT, [int]$Glyph = 0, [switch]$Bold, [double[]]$Margin = @(8, 0, 0, 0))
-    $btn = New-Object Windows.Controls.Button
+    $btn = [Windows.Controls.Button]::new()
     $btn.Style = $Script:BtnStyle; $btn.Background = Brush $Bg; $btn.Foreground = Brush $Fg
     $btn.BorderBrush = Brush $(if ($Bg -eq $Script:UI.CARD2) { $Script:UI.BORDER2 } else { $Bg })
     $btn.Margin = Th $Margin
@@ -4225,13 +4373,13 @@ function New-Btn {
 }
 function New-PageHeader {
     param([string]$Title, [string]$Sub, [string]$Accent, [object[]]$Right)
-    $g = New-Object Windows.Controls.Grid; $g.Margin = Th 0, 0, 4, 18
+    $g = [Windows.Controls.Grid]::new(); $g.Margin = Th 0, 0, 4, 18
     foreach ($w in @('Auto', '*', 'Auto')) {
-        $cd = New-Object Windows.Controls.ColumnDefinition
-        $cd.Width = if ($w -eq '*') { New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star) } else { [Windows.GridLength]::Auto }
+        $cd = [Windows.Controls.ColumnDefinition]::new()
+        $cd.Width = if ($w -eq '*') { [Windows.GridLength]::new(1, [Windows.GridUnitType]::Star) } else { [Windows.GridLength]::Auto }
         $g.ColumnDefinitions.Add($cd)
     }
-    $bar = New-Object Windows.Controls.Border; $bar.Width = 3; $bar.CornerRadius = New-Object Windows.CornerRadius(2)
+    $bar = [Windows.Controls.Border]::new(); $bar.Width = 3; $bar.CornerRadius = [Windows.CornerRadius]::new(2)
     $bar.Background = Brush $Accent; $bar.Margin = Th 0, 2, 16, 2
     $g.Children.Add($bar) | Out-Null
     # (not "$sub": PowerShell names are case-insensitive, that would be the [string] parameter $Sub)
@@ -4246,14 +4394,14 @@ function New-PageHeader {
 }
 function New-SectionTitle {
     param([string]$Text, [string]$Color, [string]$RightText = '', [double[]]$Margin = @(0, 6, 0, 8))
-    $g = New-Object Windows.Controls.Grid; $g.Margin = Th $Margin
+    $g = [Windows.Controls.Grid]::new(); $g.Margin = Th $Margin
     foreach ($w in @('Auto', '*', 'Auto')) {
-        $cd = New-Object Windows.Controls.ColumnDefinition
-        $cd.Width = if ($w -eq '*') { New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star) } else { [Windows.GridLength]::Auto }
+        $cd = [Windows.Controls.ColumnDefinition]::new()
+        $cd.Width = if ($w -eq '*') { [Windows.GridLength]::new(1, [Windows.GridUnitType]::Star) } else { [Windows.GridLength]::Auto }
         $g.ColumnDefinitions.Add($cd)
     }
     $g.Children.Add((New-Text $Text.ToUpper() 11.5 $Color 'SemiBold')) | Out-Null
-    $line = New-Object Windows.Controls.Border; $line.Height = 1; $line.Background = Brush $Script:UI.BORDER; $line.Margin = Th 12, 0, 12, 0
+    $line = [Windows.Controls.Border]::new(); $line.Height = 1; $line.Background = Brush $Script:UI.BORDER; $line.Margin = Th 12, 0, 12, 0
     $line.VerticalAlignment = 'Center'; [Windows.Controls.Grid]::SetColumn($line, 1); $g.Children.Add($line) | Out-Null
     $right = New-Text $RightText 11.5 $Script:UI.DIM
     [Windows.Controls.Grid]::SetColumn($right, 2); $g.Children.Add($right) | Out-Null
@@ -4262,10 +4410,10 @@ function New-SectionTitle {
 }
 function New-Banner {
     param([string]$Text, [string]$Color, [int]$Glyph = 0xE946)
-    $b = New-Object Windows.Controls.Border
+    $b = [Windows.Controls.Border]::new()
     $b.Background = Brush (Mix-Hex $Script:UI.APP $Color 0.10); $b.BorderBrush = Brush (Mix-Hex $Script:UI.APP $Color 0.35)
-    $b.BorderThickness = Th 1; $b.CornerRadius = New-Object Windows.CornerRadius(8); $b.Padding = Th 12, 8, 12, 8; $b.Margin = Th 0, 0, 0, 12
-    $g = New-Object Windows.Controls.DockPanel
+    $b.BorderThickness = Th 1; $b.CornerRadius = [Windows.CornerRadius]::new(8); $b.Padding = Th 12, 8, 12, 8; $b.Margin = Th 0, 0, 0, 12
+    $g = [Windows.Controls.DockPanel]::new()
     $ic = New-Icon $Glyph 13 $Color @(0, 1, 10, 0); $ic.VerticalAlignment = 'Top'
     [Windows.Controls.DockPanel]::SetDock($ic, 'Left'); $g.Children.Add($ic) | Out-Null
     $g.Children.Add((New-Text $Text 12 $Color 'Normal' -Wrap)) | Out-Null
@@ -4274,14 +4422,14 @@ function New-Banner {
 }
 function New-Grid2 {
     # Two equal columns; Add-Grid2 places elements row by row (heights follow the content)
-    $g = New-Object Windows.Controls.Grid
-    foreach ($i in 0, 1) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $g.ColumnDefinitions.Add($cd) }
+    $g = [Windows.Controls.Grid]::new()
+    foreach ($i in 0, 1) { $cd = [Windows.Controls.ColumnDefinition]::new(); $cd.Width = [Windows.GridLength]::new(1, [Windows.GridUnitType]::Star); $g.ColumnDefinitions.Add($cd) }
     $g.Tag = @{ N = 0 }
     $g
 }
 function Add-Grid2($Grid, $Element) {
     $n = $Grid.Tag.N
-    if ($n % 2 -eq 0) { $rd = New-Object Windows.Controls.RowDefinition; $rd.Height = [Windows.GridLength]::Auto; $Grid.RowDefinitions.Add($rd) }
+    if ($n % 2 -eq 0) { $rd = [Windows.Controls.RowDefinition]::new(); $rd.Height = [Windows.GridLength]::Auto; $Grid.RowDefinitions.Add($rd) }
     [Windows.Controls.Grid]::SetRow($Element, [math]::Floor($n / 2)); [Windows.Controls.Grid]::SetColumn($Element, $n % 2)
     $Element.Margin = if ($n % 2 -eq 0) { Th 0, 0, 6, 12 } else { Th 6, 0, 0, 12 }
     $Grid.Children.Add($Element) | Out-Null
@@ -4292,8 +4440,7 @@ function Add-Grid2($Grid, $Element) {
 $gpuShort = ($GPU -replace '^(NVIDIA|AMD|Intel\(R\))\s+', '' -replace '^GeForce\s+', '' -replace '\(TM\)|\(R\)', '').Trim()
 $cpuShort = ($CPU -replace '\(TM\)|\(R\)', '' -replace '\s+\d+-Core Processor', '' -replace '\s+CPU\s+@.*$', '' -replace '\s{2,}', ' ').Trim()
 $osLine   = if ($IsWin11 -or $IsWin10) { "$(if ($IsWin11) { 'Win 11' } else { 'Win 10' })$($Script:Mid)Build $OSBuild" } else { $OSShort }
-$HwInfoText.Text = "$gpuShort`n$cpuShort`n$RAM GB RAM$($Script:Mid)$NVMeInfo`n$osLine"
-$HwInfoText.ToolTip = "GPU: $GPU`nCPU: $CPU`nRAM: $RAM GB`n$NVMeInfo`n$OSShort"
+# ($HwInfoText is filled in once the NVMe drives are known, before the dashboard)
 $SubtitleText.Text = "v$($Script:AppVersion)$($Script:Mid)by FloDePin"
 
 # =============================================================================
@@ -4334,23 +4481,24 @@ function New-TweakRow {
     $isEntOnly   = ($Script:EnterpriseOnly -contains $name) -and (-not (Test-EnterpriseEdition))
     $isProOnly   = ($Script:ProOnly -contains $name) -and (Test-HomeEdition)
 
-    $card = New-Object Windows.Controls.Border
+    $card = [Windows.Controls.Border]::new()
     $card.Background = Brush $U.CARD; $card.BorderBrush = Brush $U.BORDER; $card.BorderThickness = Th 1
-    $card.CornerRadius = New-Object Windows.CornerRadius(8); $card.Padding = Th 14, 9, 12, 9; $card.Margin = Th 0, 0, 0, 6
+    $card.CornerRadius = [Windows.CornerRadius]::new(8); $card.Padding = Th 14, 9, 12, 9; $card.Margin = Th 0, 0, 0, 6
 
-    $grid = New-Object Windows.Controls.Grid
-    foreach ($w in 22, 32) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength($w); $grid.ColumnDefinitions.Add($cd) }
-    $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $grid.ColumnDefinitions.Add($cd)
-    $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = [Windows.GridLength]::Auto; $grid.ColumnDefinitions.Add($cd)
+    $grid = [Windows.Controls.Grid]::new()
+    foreach ($w in 22, 32) { $cd = [Windows.Controls.ColumnDefinition]::new(); $cd.Width = [Windows.GridLength]::new($w); $grid.ColumnDefinitions.Add($cd) }
+    $cd = [Windows.Controls.ColumnDefinition]::new(); $cd.Width = [Windows.GridLength]::new(1, [Windows.GridUnitType]::Star); $grid.ColumnDefinitions.Add($cd)
+    $cd = [Windows.Controls.ColumnDefinition]::new(); $cd.Width = [Windows.GridLength]::Auto; $grid.ColumnDefinitions.Add($cd)
 
-    $dot = New-Object Windows.Shapes.Ellipse; $dot.Width = 8; $dot.Height = 8; $dot.VerticalAlignment = 'Center'; $dot.HorizontalAlignment = 'Left'
+    $dot = [Windows.Shapes.Ellipse]::new(); $dot.Width = 8; $dot.Height = 8; $dot.VerticalAlignment = 'Center'; $dot.HorizontalAlignment = 'Left'
     $grid.Children.Add($dot) | Out-Null
 
-    $cb = New-Object Windows.Controls.CheckBox; $cb.Style = $Script:CheckStyle; $cb.Tag = $name; $cb.VerticalAlignment = 'Center'
+    $cb = [Windows.Controls.CheckBox]::new(); $cb.Style = $Script:CheckStyle; $cb.Tag = $name; $cb.VerticalAlignment = 'Center'
     [Windows.Controls.Grid]::SetColumn($cb, 1); $grid.Children.Add($cb) | Out-Null
 
-    $desc = New-Text (Get-TweakDesc $Tweak) 12 $U.DESC 'Normal' -Wrap -Margin 0, 2, 0, 0
-    $desc.MaxHeight = 34; $desc.TextTrimming = [Windows.TextTrimming]::CharacterEllipsis; $desc.ToolTip = (Get-TweakDesc $Tweak)
+    $d = Get-TweakDesc $Tweak
+    $desc = New-Text $d 12 $U.DESC 'Normal' -Wrap -Margin 0, 2, 0, 0
+    $desc.MaxHeight = 34; $desc.TextTrimming = [Windows.TextTrimming]::CharacterEllipsis; $desc.ToolTip = $d
     $text = New-VStack @((New-Text $name 13.5 $U.TEXT 'SemiBold'), $desc) @(2, 0, 14, 0)
     # Long descriptions (with their warnings) can be opened in the row, not only in the tooltip.
     # Shown for texts longer than about two lines in the current language (see Set-DescLanguage).
@@ -4359,17 +4507,13 @@ function New-TweakRow {
     if ([math]::Max($Tweak.Desc.Length, $en.Length) -gt 240) {
         $more = New-Text 'Show more' 11.5 $U.ACC 'SemiBold' -Margin 0, 2, 0, 0
         $more.Cursor = [System.Windows.Input.Cursors]::Hand; $more.HorizontalAlignment = 'Left'
-        $more.Visibility = $(if ((Get-TweakDesc $Tweak).Length -gt 240) { 'Visible' } else { 'Collapsed' })
-        $descRef = $desc
-        # Handled: the click must not also tick the row's checkbox
-        $more.Add_MouseLeftButtonUp({ param($s, $e) $e.Handled = $true
-            if ($descRef.MaxHeight -lt 1000) { $descRef.MaxHeight = [double]::PositiveInfinity; $s.Text = 'Show less' } else { $descRef.MaxHeight = 34; $s.Text = 'Show more' } }.GetNewClosure())
+        $more.Visibility = $(if ($d.Length -gt 240) { 'Visible' } else { 'Collapsed' })
+        $more.Tag = $desc; $more.Add_MouseLeftButtonUp($Script:RowMoreClick)
         $text.Children.Add($more) | Out-Null
     }
     $text.VerticalAlignment = 'Center'; $text.Cursor = [System.Windows.Input.Cursors]::Hand; $text.Background = [Windows.Media.Brushes]::Transparent
     [Windows.Controls.Grid]::SetColumn($text, 2); $grid.Children.Add($text) | Out-Null
-    $cbRef = $cb
-    $text.Add_MouseLeftButtonUp({ if ($cbRef.IsEnabled) { $cbRef.IsChecked = -not ($cbRef.IsChecked -eq $true) } }.GetNewClosure())
+    $text.Tag = $cb; $text.Add_MouseLeftButtonUp($Script:RowTextClick)
 
     $badges = New-VStack @(); $badges.VerticalAlignment = 'Center'; $badges.MinWidth = 96
     if ($Script:AppRemovals -contains $name)   { $badges.Children.Add((New-Badge 'removes app' $U.AMBER (Mix-Hex $U.CARD $U.AMBER 0.14) 0xE74D)) | Out-Null }
@@ -4390,9 +4534,14 @@ function New-TweakRow {
     $Script:TweakDots[$name]      = $dot
     $Script:TweakBadges[$name]    = $active
     $Script:TweakRows[$name]      = @{ Card = $card; Desc = $desc; Tweak = $Tweak; More = $more }
-    Update-TweakDot $dot $name | Out-Null
-    return $card
+    return $card   # its status comes from the status pass after all rows are built
 }
+# One handler for every row (a scriptblock per row costs ~0.3 ms to create; the row's own
+# controls travel in .Tag). Clicking the text ticks the checkbox; "Show more" opens the
+# description -- Handled, so that click doesn't also tick the checkbox.
+$Script:RowTextClick = { param($s, $e) $c = $s.Tag; if ($c.IsEnabled) { $c.IsChecked = -not ($c.IsChecked -eq $true) } }
+$Script:RowMoreClick = { param($s, $e) $e.Handled = $true; $dd = $s.Tag
+    if ($dd.MaxHeight -lt 1000) { $dd.MaxHeight = [double]::PositiveInfinity; $s.Text = 'Show less' } else { $dd.MaxHeight = 34; $s.Text = 'Show more' } }
 
 # Shared status update (build time, Verify, Apply, Revert): dot + "active" badge + state table
 function Update-TweakDot($dot, $tweakName) {
@@ -4475,7 +4624,7 @@ function Apply-TweakFilter {
     }
     foreach ($n in $Script:CatNotices) { $n.Visibility = 'Collapsed' }
     foreach ($c in $Script:Cats) {
-        $any = @($AllTweaks | Where-Object { $_.Category -eq $c.Key -and $Script:TweakRows[$_.Name].Card.Visibility -eq 'Visible' }).Count
+        $any = @($c.Names | Where-Object { $Script:TweakRows[$_].Card.Visibility -eq 'Visible' }).Count
         $c.Panel.Visibility = $(if ($any) { 'Visible' } else { 'Collapsed' }); $c.Title.Visibility = 'Visible'
     }
     $SearchEmpty.Visibility = $(if ($hits) { 'Collapsed' } else { 'Visible' })
@@ -4515,6 +4664,7 @@ function Invoke-Verify {
     $StatusText.Text = "Verifying tweak status..."
     $Window.Dispatcher.Invoke([Action] {}, [System.Windows.Threading.DispatcherPriority]::Render)
     $active = 0; $inactive = 0; $unknown = 0; $i = 0; $n = @($AllTweaks).Count
+    Start-StatusPass
     foreach ($tweak in $AllTweaks) {
         $i++
         if ($i % 12 -eq 0) { Set-Status "Verifying tweak status ... $i / $n" }
@@ -4536,7 +4686,7 @@ function Invoke-Verify {
     $checkable = $active + $inactive
     $c = Get-StateCounts
     $StatusText.Text = "Verify complete: $active of $checkable checkable tweaks active (ticked)$($Script:Mid)$($c.OneTime) one-time actions" + $(if ($c.NA) { "$($Script:Mid)$($c.NA) not applicable here" } else { "" }) + "$($Script:Mid)verified $(Get-Date -Format 'HH:mm')"
-    } finally { Set-Busy $false }
+    } finally { Stop-StatusPass; Set-Busy $false }
 }
 
 # =============================================================================
@@ -4562,7 +4712,11 @@ function Show-Page([string]$Key) {
         $p.Txt.FontWeight  = $(if ($on) { 'SemiBold' } else { 'Normal' })
     }
     $Script:CurrentPage = $Key
-    if ($Key -eq 'bios' -and -not $Script:BiosDetectDone -and (Get-Command Invoke-BiosDetect -ErrorAction SilentlyContinue)) { Invoke-BiosDetect }
+    if ($Key -eq 'bios' -and (Get-Command Invoke-BiosDetect -ErrorAction SilentlyContinue)) {
+        # built on the first visit -- ~0.2 s less at every start for a page many never open
+        if (-not $Script:BiosListBuilt) { Build-BiosPlatformList; Update-BiosPlatformList; $Script:BiosListBuilt = $true }
+        if (-not $Script:BiosDetectDone) { Invoke-BiosDetect }
+    }
     if ($Key -eq 'backups' -and (Get-Command Build-BackupsPage -ErrorAction SilentlyContinue)) { Build-BackupsPage }
 }
 foreach ($k in @($Script:Pages.Keys)) {
@@ -4571,11 +4725,21 @@ foreach ($k in @($Script:Pages.Keys)) {
 }
 
 # =============================================================================
-# BUILD TWEAK PAGE  (category tabs + panels + rows)
+# BUILD TWEAK PAGE  (category tabs + panels + rows, then the status of every row in one pass)
 # =============================================================================
+# Tweaks by category and group, in list order -- one pass instead of a Where-Object per group
+$Script:TweaksByCat = [ordered]@{}
+foreach ($t in $AllTweaks) {
+    if (-not $Script:TweaksByCat.Contains($t.Category)) { $Script:TweaksByCat[$t.Category] = [ordered]@{} }
+    $cg = $Script:TweaksByCat[$t.Category]
+    if (-not $cg.Contains($t.Group)) { $cg[$t.Group] = New-Object System.Collections.ArrayList }
+    [void]$cg[$t.Group].Add($t)
+}
 foreach ($c in $Script:Cats) {
     $cat = $c
-    $count = @($AllTweaks | Where-Object { $_.Category -eq $cat.Key }).Count
+    $catGroups = if ($Script:TweaksByCat.Contains($cat.Key)) { $Script:TweaksByCat[$cat.Key] } else { [ordered]@{} }
+    $c.Names = @(foreach ($g in $catGroups.Values) { foreach ($t in $g) { $t.Name } })
+    $count = $c.Names.Count
     $lbl = New-Text $cat.Label 12.5 $Script:UI.TEXT2
     $cnt = New-Text " $count" 11.5 $Script:UI.MUTED 'Normal' -Margin 3, 1, 0, 0
     $tab = New-Object Windows.Controls.Button
@@ -4612,22 +4776,38 @@ foreach ($c in $Script:Cats) {
         $panel.Children.Add($n) | Out-Null; $Script:CatNotices += $n
     }
 
-    $groups = $AllTweaks | Where-Object { $_.Category -eq $cat.Key } | Select-Object -ExpandProperty Group -Unique
     $first = $true
-    foreach ($group in $groups) {
-        $names = @($AllTweaks | Where-Object { $_.Category -eq $cat.Key -and $_.Group -eq $group } | ForEach-Object { $_.Name })
+    foreach ($group in $catGroups.Keys) {
+        $tws = $catGroups[$group]
         $hdr = New-SectionTitle $group $Script:UI.WIN11 '' $(if ($first) { @(0, 2, 0, 8) } else { @(0, 10, 0, 8) })
         $first = $false
         $panel.Children.Add($hdr) | Out-Null
-        $Script:GroupHeaders += @{ Root = $hdr; Names = $names; Cat = $cat.Key }
-        foreach ($tweak in ($AllTweaks | Where-Object { $_.Category -eq $cat.Key -and $_.Group -eq $group })) {
+        $Script:GroupHeaders += @{ Root = $hdr; Names = @($tws | ForEach-Object { $_.Name }); Cat = $cat.Key }
+        foreach ($tweak in $tws) {
             $panel.Children.Add((New-TweakRow $tweak)) | Out-Null
             $Script:SplashRows++
-            if ($Script:SplashRows % 4 -eq 0) { Set-Splash "Checking tweak status ... $($Script:SplashRows) / $($AllTweaks.Count)" (25 + [int](60 * $Script:SplashRows / $AllTweaks.Count)) }
+            if ($Script:SplashRows % 8 -eq 0) { Set-Splash "Building the tweak list ... $($Script:SplashRows) / $($AllTweaks.Count)" (25 + [int](20 * $Script:SplashRows / $AllTweaks.Count)) }
         }
     }
 }
 $SearchBox.Add_TextChanged({ Apply-TweakFilter })
+
+# The status of every row, as one status pass. The checks that need the app list of every
+# account, the memory manager or the reserved storage go last: those reads (a module of
+# their own each; the app list takes seconds on some PCs) have been running on a background
+# thread since the start (Start-Prefetch) and get the whole pass to finish.
+$late = @('Remove Xbox Apps', 'Remove Copilot', 'Remove Other Bloatware', 'Disable Memory Compression', 'Disable Reserved Storage')
+$order = @($AllTweaks | Where-Object { $late -notcontains $_.Name }) + @($AllTweaks | Where-Object { $late -contains $_.Name })
+Start-StatusPass
+try {
+    $seeded = $false; $i = 0
+    foreach ($t in $order) {
+        if (-not $seeded -and $late -contains $t.Name) { $seeded = $true; Add-PrefetchToPass }
+        Update-TweakDot $Script:TweakDots[$t.Name] $t.Name | Out-Null
+        $i++
+        if ($i % 6 -eq 0) { Set-Splash "Checking tweak status ... $i / $($order.Count)" (45 + [int](40 * $i / $order.Count)) }
+    }
+} finally { Stop-StatusPass; $Script:Prefetch = $null }
 
 # -----------------------------------------
 # BASELINE / DRIFT DETECTION
@@ -4753,7 +4933,7 @@ function Test-TweakActive([string]$Name) {
 function Test-SystemProtection {
     $list = @(Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SPP\Clients" '{09F7EDC5-294E-4180-AF6A-FB0E6A0E9513}' | Where-Object { $_ })
     if (-not $list.Count) { return $false }
-    $vol = try { "$((Get-CimInstance Win32_Volume -Filter "DriveLetter='$env:SystemDrive'" -ErrorAction Stop).DeviceID)" } catch { '' }
+    $vol = try { "$((Get-WmiSafe "SELECT DeviceID FROM Win32_Volume WHERE DriveLetter='$env:SystemDrive'" | Select-Object -First 1).DeviceID)" } catch { '' }
     $guid = if ($vol -match '(\{[0-9a-fA-F-]+\})') { $matches[1] } else { $null }
     [bool]@($list | Where-Object { ($guid -and "$_".IndexOf($guid, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or "$_".IndexOf("($env:SystemDrive", [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count
 }
@@ -5157,7 +5337,7 @@ function Get-BiosVendor([string]$Manufacturer) {
 function Get-BiosDetection {
     $r = @{}
     try {
-        $m = Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop | Sort-Object ConfiguredClockSpeed -Descending | Select-Object -First 1
+        $m = Get-WmiSafe "SELECT ConfiguredClockSpeed, SMBIOSMemoryType FROM Win32_PhysicalMemory" | Sort-Object ConfiguredClockSpeed -Descending | Select-Object -First 1
         $speed = [int]$m.ConfiguredClockSpeed; $mtype = [int]$m.SMBIOSMemoryType
         $ddr = if ($mtype -eq 34) { 'DDR5' } elseif ($mtype -eq 26) { 'DDR4' } elseif ($mtype -eq 24) { 'DDR3' } elseif ($speed -gt 4000) { 'DDR5' } else { 'DDR4' }
         # Some older SMBIOS tables give the clock (MHz) instead of the data rate (MT/s),
@@ -5205,7 +5385,7 @@ $Script:BiosCats = @(
     @{ Key = 'Memory'; Label = 'Memory'; Color = $Script:UI.VIOLET }, @{ Key = 'CPU'; Label = 'CPU'; Color = $Script:UI.ACC },
     @{ Key = 'GPU'; Label = 'GPU'; Color = $Script:UI.GREEN }, @{ Key = 'Power'; Label = 'Power'; Color = $Script:UI.AMBER },
     @{ Key = 'Boot'; Label = 'Boot & security'; Color = $Script:UI.SLATE })
-$boardInfo = try { Get-WmiObject Win32_BaseBoard -ErrorAction Stop | Select-Object -First 1 } catch { $null }
+$boardInfo = try { Get-WmiSafe "SELECT Manufacturer, Product FROM Win32_BaseBoard" | Select-Object -First 1 } catch { $null }
 $Script:Bios = @{
     Detected       = Get-BiosProfileId $CPU
     DetectedVendor = Get-BiosVendor "$($boardInfo.Manufacturer)"
@@ -5469,7 +5649,7 @@ function Show-UpdateNotice([string]$Tag) {
 }
 
 function Get-SecurityStatus {
-    $dg = try { Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction Stop } catch { $null }
+    $dg = try { Get-WmiSafe "SELECT * FROM Win32_DeviceGuard" 'root\Microsoft\Windows\DeviceGuard' | Select-Object -First 1 } catch { $null }
     $hv = if ($dg) { @($dg.SecurityServicesRunning) } else { $null }
     $mi = if ($null -eq $hv) {
         @{ Value = 'not readable'; Warn = $false; Hint = 'Windows Security > Device security > Core isolation shows it.' }
@@ -5523,7 +5703,7 @@ function Build-DashboardPage {
     # ---- hardware cards ----
     $cpuO = $Script:CpuObj                                   # read once at startup
     $gpuO = $Script:GpuObj                                   # the gaming GPU, not the iGPU (Select-PrimaryGpu)
-    $memO = @(Get-WmiObject Win32_PhysicalMemory -ErrorAction SilentlyContinue)
+    $memO = @(try { Get-WmiSafe "SELECT ConfiguredClockSpeed, SMBIOSMemoryType FROM Win32_PhysicalMemory" } catch { })
     $vram = 0
     try { $vram = [math]::Round([int64]$gpuO.VramBytes / 1GB) } catch { }
     $ddr = switch ([int]($memO | Select-Object -First 1).SMBIOSMemoryType) { 34 { 'DDR5' } 26 { 'DDR4' } 24 { 'DDR3' } default { '' } }
@@ -5684,7 +5864,8 @@ function Build-DashboardPage {
     if ($snapState.Snap) { $resultPanel.Children.Add((New-Text "Saved snapshot from $($snapState.Snap.Time.ToString('dd.MM.yyyy HH:mm')) -- click Compare." 12 $U.DIM)) | Out-Null }
     $btnSnapshot.Add_Click({
         $states = @{}
-        foreach ($tweak in $AllTweaks) { if ($CheckFunctions.ContainsKey($tweak.Name)) { try { $states[$tweak.Name] = & $CheckFunctions[$tweak.Name] } catch { $states[$tweak.Name] = $null } } }
+        Start-StatusPass
+        try { foreach ($tweak in $AllTweaks) { if ($CheckFunctions.ContainsKey($tweak.Name)) { try { $states[$tweak.Name] = & $CheckFunctions[$tweak.Name] } catch { $states[$tweak.Name] = $null } } } } finally { Stop-StatusPass }
         $snapState.Snap = @{ Time = Get-Date; States = $states }
         $kept = Save-Snapshot $snapState.Snap
         $resultPanel.Children.Clear()
@@ -5696,6 +5877,8 @@ function Build-DashboardPage {
         $since = if ($snapState.Snap.Time.Date -eq (Get-Date).Date) { $snapState.Snap.Time.ToString('HH:mm:ss') } else { $snapState.Snap.Time.ToString('dd.MM.yyyy HH:mm') }
         $resultPanel.Children.Add((New-Text "Changes since $($since):" 12 $U.TEXT 'SemiBold' -Margin 0, 0, 0, 4)) | Out-Null
         $changeCount = 0
+        Start-StatusPass
+        try {
         foreach ($tweak in $AllTweaks) {
             if (-not $CheckFunctions.ContainsKey($tweak.Name) -or -not $snapState.Snap.States.ContainsKey($tweak.Name)) { continue }
             $before = $snapState.Snap.States[$tweak.Name]
@@ -5708,6 +5891,7 @@ function Build-DashboardPage {
                 $resultPanel.Children.Add((New-Text "$($tweak.Name): $lblBefore -> $lblAfter" 12 $U.TEXT2 -Margin 0, 1, 0, 1)) | Out-Null
             }
         }
+        } finally { Stop-StatusPass }
         if ($changeCount -eq 0) { $resultPanel.Children.Add((New-Text "No changes detected since the snapshot." 12 $U.DIM)) | Out-Null }
     }.GetNewClosure())
 
@@ -5773,9 +5957,8 @@ function Update-ScoreCard {
     $D.ScoreLine.Text = "$a of $c tweaks of the recommended Balanced preset are active"
     $D.ScoreSub.Text = "All tweaks: $($sc.Active) active$($Script:Mid)$($sc.Inactive) inactive" + $(if ($sc.NA) { "$($Script:Mid)$($sc.NA) not applicable here" } else { "" }) + "$($Script:Mid)drift check at every start"
     Set-Bar $D.ScoreBar $score $col
-    $bk = Get-BackupSummary
-    $D.SafeBackup.Text = $bk.Last
-    $D.SafeBase.Text = Get-BaselineSummary
+    if ($D.SafeBackup) { $D.SafeBackup.Text = (Get-BackupSummary).Last }   # missing: the dashboard was not built completely
+    if ($D.SafeBase) { $D.SafeBase.Text = Get-BaselineSummary }
 }
 
 # =============================================================================
@@ -5902,7 +6085,7 @@ function Update-PresetCards {
         $c.Card.BorderBrush = Brush $(if ($name -eq $V.Preview) { (Mix-Hex $Script:UI.CARD $c.Color 0.55) } else { $Script:UI.BORDER })
     }
     foreach ($c in $Script:Cats) {
-        $names = @($AllTweaks | Where-Object { $_.Category -eq $c.Key } | ForEach-Object { $_.Name })
+        $names = @($c.Names)
         $chk = @($names | Where-Object { $Script:TweakState[$_] -and $Script:TweakState[$_] -ne 'unknown' })
         $on = @($chk | Where-Object { $Script:TweakState[$_] -eq 'active' }).Count
         $V.Cats[$c.Key].Cnt.Text = "$on/$($chk.Count)"
@@ -5912,12 +6095,13 @@ function Update-PresetCards {
     $V.PreviewTitle.Text = "Preview: $pv"
     $V.PreviewBar.Background = Brush $V.Cards[$pv].Color
     $V.PreviewWrap.Children.Clear()
-    foreach ($t in ($AllTweaks | Where-Object { (Get-PresetList $pv) -contains $_.Name })) {
+    $pl = @(Get-PresetList $pv)
+    foreach ($t in ($AllTweaks | Where-Object { $pl -contains $_.Name })) {
         $s = $Script:TweakState[$t.Name]
-        $e = New-Object Windows.Shapes.Ellipse; $e.Width = 6; $e.Height = 6; $e.Margin = Th 0, 0, 6, 0; $e.VerticalAlignment = 'Center'
+        $e = [Windows.Shapes.Ellipse]::new(); $e.Width = 6; $e.Height = 6; $e.Margin = Th 0, 0, 6, 0; $e.VerticalAlignment = 'Center'
         $e.Fill = Brush $(if ($s -eq 'active') { $Script:UI.GREEN } else { $Script:UI.MUTED })
-        $chip = New-Object Windows.Controls.Border
-        $chip.CornerRadius = New-Object Windows.CornerRadius(6); $chip.Background = Brush $Script:UI.CARD2; $chip.BorderBrush = Brush $Script:UI.BORDER
+        $chip = [Windows.Controls.Border]::new()
+        $chip.CornerRadius = [Windows.CornerRadius]::new(6); $chip.Background = Brush $Script:UI.CARD2; $chip.BorderBrush = Brush $Script:UI.BORDER
         $chip.BorderThickness = Th 1; $chip.Padding = Th 8, 3, 8, 3; $chip.Margin = Th 0, 0, 6, 6
         $chip.Child = New-HStack @($e, (New-Text $t.Name 11.5 $Script:UI.TEXT2))
         if ($CheckBoxMap.ContainsKey($t.Name) -and -not $CheckBoxMap[$t.Name].IsEnabled) { $chip.Opacity = 0.45; $chip.ToolTip = 'Not available on this PC -- skipped' }
@@ -6037,16 +6221,25 @@ function Set-Preset {
 # =============================================================================
 # BUILD THE PAGES  (here, because the Presets page needs the preset lists above)
 # =============================================================================
+# NVMe drives -- the storage provider was read on a background thread meanwhile
+$NVMeDisks = @(Resolve-NVMeDisks)
+$HasNVMe   = $NVMeDisks.Count -gt 0
+$NVMeInfo  = if ($HasNVMe) { "NVMe: $($NVMeDisks.Count)x" } else { "NVMe: none" }
+$HWInfo    = "GPU: $GPU   |   CPU: $CPU   |   RAM: $RAM GB   |   $NVMeInfo   |   $OSShort"
+$HwInfoText.Text    = "$gpuShort`n$cpuShort`n$RAM GB RAM$($Script:Mid)$NVMeInfo`n$osLine"
+$HwInfoText.ToolTip = "GPU: $GPU`nCPU: $CPU`nRAM: $RAM GB`n$NVMeInfo`n$OSShort"
+
 Set-Splash "Building the dashboard ..." 88
-Build-DashboardPage
+# The dashboard only shows things. If a part of it fails (an unexpected WMI answer, a broken
+# Windows component), that goes to the log and the app opens on the tweak list instead.
+$dashOk = $true
+try { Build-DashboardPage } catch { $dashOk = $false; Write-Log "Startup: the dashboard could not be built completely -- $($_.Exception.Message) (line $($_.InvocationInfo.ScriptLineNumber))" }
 Build-PresetsPage
-Build-BiosPlatformList
-Update-BiosPlatformList
-Render-BiosPage
+# (the BIOS guide is built when its page is opened for the first time -- see Show-Page)
 Update-LangButton
 Update-Counts
 Select-Category 'Windows'
-Show-Page 'dashboard'
+Show-Page $(if ($dashOk) { 'dashboard' } else { 'tweaks' })
 
 # -----------------------------------------
 # UI HELPERS FOR LONG OPERATIONS
@@ -6112,11 +6305,14 @@ function Invoke-ProcessWithUi([string]$FilePath, [string]$Arguments, [string]$Wh
 # Re-reads every tweak's status (dots, counts, $Script:CheckRaw) with a visible progress
 function Update-AllDots([string]$Label) {
     $i = 0; $n = @($AllTweaks).Count
-    foreach ($tweak in $AllTweaks) {
-        $i++
-        if ($i % 12 -eq 0) { Set-Status "$Label $i / $n ..." }
-        if ($Script:TweakDots.ContainsKey($tweak.Name)) { Update-TweakDot $Script:TweakDots[$tweak.Name] $tweak.Name | Out-Null }
-    }
+    Start-StatusPass
+    try {
+        foreach ($tweak in $AllTweaks) {
+            $i++
+            if ($i % 12 -eq 0) { Set-Status "$Label $i / $n ..." }
+            if ($Script:TweakDots.ContainsKey($tweak.Name)) { Update-TweakDot $Script:TweakDots[$tweak.Name] $tweak.Name | Out-Null }
+        }
+    } finally { Stop-StatusPass }
     Update-Counts
 }
 
@@ -6177,7 +6373,8 @@ $BtnApply.Add_Click({
     # Tweaks already in effect are left alone. Running them again re-deleted every folder view,
     # restarted Explorer and asked for a restore point for apps that were long gone (after
     # "Verify" every active tweak is ticked). One-time actions (cleanups) always run.
-    $already = @($selected | Where-Object { $Script:OneTimeNames -notcontains $_.Name -and (Test-TweakActive $_.Name) })
+    Start-StatusPass
+    try { $already = @($selected | Where-Object { $Script:OneTimeNames -notcontains $_.Name -and (Test-TweakActive $_.Name) }) } finally { Stop-StatusPass }
     $selected = @($selected | Where-Object { $already -notcontains $_ })
     if ($selected.Count -eq 0) {
         [System.Windows.MessageBox]::Show("All $($already.Count) ticked tweak(s) are already active -- nothing to do.", "GameOptimizerPro", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
@@ -6509,7 +6706,7 @@ $BtnLang.Add_Click({
     $LangState.Current  = if ($LangState.Current -eq "EN") { "DE" } else { "EN" }
     Update-LangButton
     Set-DescLanguage
-    Render-BiosPage
+    if ($Script:BiosDetectDone) { Render-BiosPage }   # not built yet: it opens in the new language
     if ($SearchBox.Text) { Apply-TweakFilter }
     $StatusText.Text = if ($LangState.Current -eq "DE") { "Descriptions now in German. The interface stays English." } else { "Descriptions now in English." }
 })
@@ -7454,6 +7651,7 @@ $Window.ShowDialog() | Out-Null
 # block below keeps the process alive so the error MessageBox can be read.
 # -----------------------------------------
 Write-Log "GameOptimizerPro v$($Script:AppVersion) closed by user"
+try { if ($Script:InstanceMutex) { $Script:InstanceMutex.ReleaseMutex() } } catch { }
 Stop-Process -Id $PID -Force -ErrorAction SilentlyContinue
 
 } catch {

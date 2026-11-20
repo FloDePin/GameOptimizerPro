@@ -164,7 +164,7 @@ Ein Preset setzt nur die Haken — du prüfst die Liste und klickst selbst auf *
 ## 📋 Voraussetzungen
 
 - **Windows 11** oder **Windows 10 22H2** (reine Windows-11-Tweaks sind unter Windows 10 ausgegraut; Richtlinien, die Windows Home oder Pro ignoriert, sind dort ausgegraut und mit *Pro and up* / *Enterprise only* markiert)
-- **Windows PowerShell 5.1** — in Windows enthalten
+- **Windows PowerShell 5.1** — in Windows enthalten (aus PowerShell 7 gestartet, öffnet sich das Tool dort neu)
 - **Administratorrechte** — der Installer fragt danach
 - GPU-Tab: nur Grafikkarten von **AMD** (alle anderen Tweaks funktionieren mit jeder Karte)
 

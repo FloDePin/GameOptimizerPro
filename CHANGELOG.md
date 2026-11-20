@@ -6,6 +6,32 @@ All notable changes to GameOptimizerPro (the PowerShell edition), newest first. 
 
 ---
 
+## [1.2.7] — 2026-11-20
+
+A faster and sturdier start: the window is there in about 2 seconds instead of 6 to 7, with the same checks and the same results, and a Windows component that hangs no longer keeps the splash on screen.
+
+- **Starts about three times faster** — from the first line of the script to the open window 2.2 s instead of 6.5 s (dev PC, measured offscreen); the status checks of all 108 tweaks take 0.5 s instead of 3.5 s.
+- **Registry values read directly** — the status checks read a few hundred registry values at every start through Get-ItemProperty, which raises (and swallows) an error for every value that isn't set: 1.5–3.5 ms each. They are read through .NET now — about 20× faster, with exactly the same values (also 0xFFFFFFFF, binary and multi-string values, `*` names).
+- **Network checks without three modules** — LSO, both DNS checks and TCP auto-tuning read the WMI classes that Get-NetAdapter, Get-DnsClientServerAddress and Get-NetTCPSetting show, without loading their modules (together ~1.4 s at every start).
+- **Slow reads on a background thread** — the app list of every account (seconds on some PCs, and read three times per round of checks until now), memory compression, reserved storage and the NVMe drives are read while the window is built; the five checks that need them run last. Values several checks share (connected adapters, app list) are read once per round.
+- **No endless splash** — the WMI queries at startup and in the status checks have a time limit (10 s, 2 s once one has hung): a value that can't be read shows "unknown" and the window opens. A part of the dashboard that fails goes to the log, and the app opens on the tweak list.
+- **One copy at a time** — a second start (a second click while the first one is still loading) says the app is already running, instead of applying and reverting next to it.
+- **PowerShell 7** — started from pwsh, the script opens itself in Windows PowerShell 5.1, which it needs.
+- **"Unknown" instead of a wrong answer** — *Remove Copilot* showed "active" when the app list couldn't be read, *Disable TCP Auto-Tuning* "not active" when its setting couldn't be read (a false "switched back" notice at the next start). Both say "unknown" now.
+- **BIOS guide built when it is opened** — 0.2 s less at every start for a page many never open.
+
+<details>
+<summary><b>Development log — 1.2.7</b></summary>
+
+- **Measured first** — a profiling copy of the app (offscreen, read only) timed every startup phase and every status check: loading the NetAdapter (0.66 s), NetTCPIP (0.44 s) and DnsClient (0.25 s) modules and the Get-ItemProperty errors were most of the 3.5 s of checks; building the rows took 0.5 s. PowerShell itself needs ~0.55 s to start, parsing the script 0.08 s.
+- **Same results** — Get-RegVal compared with Get-ItemProperty on 29 real values (DWORD above 0x7FFFFFFF, QWORD, binary, multi-string, expandable string, `(default)`, `*` names, PSPath forms, missing keys): identical; 200 missing values in 14 ms instead of 311 ms. The WMI network reads compared with the cmdlets on the dev PC: the same adapters, DNS servers (IPv4 + IPv6), TCP and LSO values.
+- **Rows** — one event handler for all rows instead of a new script block per row (~0.3 ms each), `::new()` instead of New-Object, the colour mixes cached; first all rows, then the status of all of them in one round.
+- **Tests** — new unit tests: single instance, PowerShell 7 restart, the shared reads of a round (errors kept too), the background reads taken over, a hanging background read given up after the wait, the WMI time limit and its 2 s breaker. The test PCs model the new reads; a gate stops tweak code that reads the registry or WMI directly past the mocks. The test copies write their logs into the test folder, not into `%TEMP%`.
+
+</details>
+
+---
+
 ## [1.2.6] — 2026-11-14
 
 A full audit of 1.2.5 — every tweak, revert, status check and button read again, and the new parts checked against the PC itself (read only). Everything it found is fixed; tweaks without a documented effect are gone (114 → 108).

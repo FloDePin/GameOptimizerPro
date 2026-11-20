@@ -162,7 +162,7 @@ A preset only ticks the boxes — you review the list and click **Apply selected
 ## 📋 Requirements
 
 - **Windows 11** or **Windows 10 22H2** (Windows-11-only tweaks are greyed out on Windows 10; policies Windows Home or Pro ignore are greyed out there, marked *Pro and up* / *Enterprise only*)
-- **Windows PowerShell 5.1** — built into Windows
+- **Windows PowerShell 5.1** — built into Windows (started from PowerShell 7, the app reopens itself there)
 - **Administrator rights** — the installer asks for them
 - GPU tab: **AMD** graphics cards only (all other tweaks work with any card)
 
