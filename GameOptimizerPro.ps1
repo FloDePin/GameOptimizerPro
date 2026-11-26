@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.2.8
+    1.2.9
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.2.8"
+$Script:AppVersion = "1.2.9"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -1013,7 +1013,8 @@ function Backup-Registry {
     # too (same labels) -- GameOptimizerPro v2 has written to a folder of its own since v2.1
     # (GameOptimizerPro-v2\RegistryBackups), so nothing here belongs to it any more.
     try {
-        Get-ChildItem -LiteralPath $Script:RegistryBackupRoot -Directory -ErrorAction Stop | Where-Object { $_.Name -match '^\d{8}_\d{6}_(v1-)?(PreApply|PreRevert|PreRevertSelected|PreDriftReapply|Backup)$' } | Sort-Object Name -Descending |
+        # (a junction with a backup's name is never followed: links are left out)
+        Get-ChildItem -LiteralPath $Script:RegistryBackupRoot -Directory -ErrorAction Stop | Where-Object { $_.Name -match '^\d{8}_\d{6}_(v1-)?(PreApply|PreRevert|PreRevertSelected|PreDriftReapply|Backup)$' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object Name -Descending |
             Select-Object -Skip 20 | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue; Write-Log "Old registry backup removed: $($_.Name)" }
     } catch { }
     return $backupDir
@@ -1964,16 +1965,17 @@ $AllTweaks = @(
         Action   = {
             if ($IsNVIDIA) {
                 $nvcache = "$env:LOCALAPPDATA\NVIDIA\DXCache"
-                if (Test-Path $nvcache) { Remove-Item "$nvcache\*" -Recurse -Force -ErrorAction SilentlyContinue }
+                if (Test-Path $nvcache) { Remove-ItemsNoFollow "$nvcache\*" }
                 $nvcache2 = "$env:LOCALAPPDATA\NVIDIA\GLCache"
-                if (Test-Path $nvcache2) { Remove-Item "$nvcache2\*" -Recurse -Force -ErrorAction SilentlyContinue }
+                if (Test-Path $nvcache2) { Remove-ItemsNoFollow "$nvcache2\*" }
             }
             if ($IsAMD) {
                 $amdcache = "$env:TEMP\AMD"
-                if (Test-Path $amdcache) { Remove-Item "$amdcache\*" -Recurse -Force -ErrorAction SilentlyContinue }
+                if (Test-Path $amdcache) { Remove-ItemsNoFollow "$amdcache\*" }
             }
             $dxcache = "$env:LOCALAPPDATA\D3DSCache"
-            if (Test-Path $dxcache) { Remove-Item "$dxcache\*" -Recurse -Force -ErrorAction SilentlyContinue }
+            # 1.2.8: like every cleanup, never through a junction / symbolic link (see Remove-ItemsNoFollow)
+            if (Test-Path $dxcache) { Remove-ItemsNoFollow "$dxcache\*" }
             Write-Log "Shader Cache cleared"
         }
     },

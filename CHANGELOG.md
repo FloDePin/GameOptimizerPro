@@ -6,6 +6,23 @@ All notable changes to GameOptimizerPro (the PowerShell edition), newest first. 
 
 ---
 
+## [1.2.9] — 2026-11-26
+
+A second check of the 1.2.8 fixes, the same way the audit ran, found two more places of the junction kind.
+
+- **Clear Shader Cache** empties the NVIDIA, AMD and DirectX shader caches through the same safe cleanup as the other cleanups — never through a junction or symbolic link.
+- **Old registry backups** — the pruning of old backup folders leaves out links: a junction with a backup's name is never followed.
+
+<details>
+<summary><b>Development log — 1.2.9</b></summary>
+
+- **Second pass** — every place where the app (as administrator) deletes, starts a program or reads a file from the user profile listed and checked again; the two places above were the only ones left with the old delete pattern. Also checked against Microsoft Learn: Windows' *Administrator protection* really runs elevated apps under a hidden, profile-separated account (the 1.2.8 account warning names it).
+- **Tests** — new scenario: shader cache with a junction inside (cache gone, the junction's target kept). Both test PCs, the unit tests and the offscreen app test pass; the real system unchanged.
+
+</details>
+
+---
+
 ## [1.2.8] — 2026-11-26
 
 A second full audit — the code, the presets and every claim in the descriptions checked again, against Microsoft's documentation where Windows decides. Everything it found is fixed.
