@@ -136,9 +136,9 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 | Preset | Tweaks | For whom |
 |---|:---:|---|
-| 🟢 **Minimal** | 18 | Safe basics: privacy, gaming priority, network latency. No app removal — the ideal first run. |
-| 🟠 **Balanced** | 70 | Minimal + Ultimate Performance, timer, GPU and audio tweaks, light debloat (Copilot, Recall, tips & ads) and the Windows AI and privacy switches. The recommended all-round setup. |
-| 🔴 **Aggressive** | 86 | Everything, incl. Xbox and OneDrive removal, no background Store apps, no drivers from Windows Update, no hibernation, no memory compression, the telemetry block in the hosts file. For experienced users. Tweaks Microsoft documents as debugging settings (dynamic tick, GPU timeout) and *Disable Write-Cache Buffer Flushing* (risk of data loss) are in no preset. |
+| 🟢 **Minimal** | 17 | Safe basics: privacy, gaming priority, network latency. No app removal — the ideal first run. |
+| 🟠 **Balanced** | 68 | Minimal + Ultimate Performance, timer, GPU and audio tweaks, light debloat (Copilot, Recall, tips & ads) and the Windows AI and privacy switches. The recommended all-round setup. |
+| 🔴 **Aggressive** | 84 | Balanced plus Xbox and OneDrive removal, no background Store apps, no drivers from Windows Update, no hibernation, no memory compression, the telemetry block in the hosts file. For experienced users. Tweaks Microsoft documents as debugging settings (dynamic tick, GPU timeout), *Disable Write-Cache Buffer Flushing* (risk of data loss) and two that Microsoft measured as making things slower or no faster (Prefetch / SysMain off, fullscreen optimizations off) are in no preset. |
 
 A preset only ticks the boxes — you review the list and click **Apply selected** yourself. Tweaks that are already active are left as they are. On purpose in no preset: turning off automatic Windows updates or TCP auto-tuning, the scheduled drive optimization, holding feature updates, the DNS providers and a few matters of taste.
 

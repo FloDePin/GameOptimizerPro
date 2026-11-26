@@ -138,9 +138,9 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 | Preset | Tweaks | Für wen |
 |---|:---:|---|
-| 🟢 **Minimal** | 18 | Sichere Grundlagen: Datenschutz, Gaming-Priorität, Netzwerk-Latenz. Keine App-Entfernung — ideal für den ersten Lauf. |
-| 🟠 **Balanced** | 70 | Minimal + Ultimate Performance, Timer, GPU- und Audio-Tweaks, leichtes Debloat (Copilot, Recall, Tipps & Werbung) und die Windows-KI- und Datenschutz-Schalter. Die empfohlene Allround-Einstellung. |
-| 🔴 **Aggressive** | 86 | Alles, inkl. Entfernen von Xbox-Apps und OneDrive, keine Store-Apps im Hintergrund, keine Treiber über Windows Update, kein Ruhezustand, keine Speicherkomprimierung, die Telemetrie-Sperre in der hosts-Datei. Für erfahrene Nutzer. Tweaks, die Microsoft als Einstellungen zur Fehlersuche beschreibt (Dynamic Tick, GPU-Timeout), und *Disable Write-Cache Buffer Flushing* (Datenverlust möglich) sind in keinem Preset. |
+| 🟢 **Minimal** | 17 | Sichere Grundlagen: Datenschutz, Gaming-Priorität, Netzwerk-Latenz. Keine App-Entfernung — ideal für den ersten Lauf. |
+| 🟠 **Balanced** | 68 | Minimal + Ultimate Performance, Timer, GPU- und Audio-Tweaks, leichtes Debloat (Copilot, Recall, Tipps & Werbung) und die Windows-KI- und Datenschutz-Schalter. Die empfohlene Allround-Einstellung. |
+| 🔴 **Aggressive** | 84 | Balanced und dazu das Entfernen von Xbox-Apps und OneDrive, keine Store-Apps im Hintergrund, keine Treiber über Windows Update, kein Ruhezustand, keine Speicherkomprimierung, die Telemetrie-Sperre in der hosts-Datei. Für erfahrene Nutzer. Tweaks, die Microsoft als Einstellungen zur Fehlersuche beschreibt (Dynamic Tick, GPU-Timeout), *Disable Write-Cache Buffer Flushing* (Datenverlust möglich) und zwei, die laut Microsoft eher bremsen oder nichts bringen (Prefetch / SysMain aus, Vollbildoptimierungen aus), sind in keinem Preset. |
 
 Ein Preset setzt nur die Haken — du prüfst die Liste und klickst selbst auf **Apply selected**. Schon aktive Tweaks bleiben, wie sie sind. Bewusst in keinem Preset: automatische Windows-Updates oder TCP-Auto-Tuning abschalten, die geplante Laufwerksoptimierung, Funktionsupdates anhalten, die DNS-Anbieter und ein paar Geschmacksfragen.
 

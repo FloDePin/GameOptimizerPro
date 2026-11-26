@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.2.9
+    1.2.10
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.2.9"
+$Script:AppVersion = "1.2.10"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -522,6 +522,15 @@ function Test-EnterpriseEdition {
 function Test-HomeEdition {
     (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" "EditionID") -match '^Core'
 }
+# Win32PrioritySeparation on a client Windows (Microsoft: a 6-bit mask AABBCC). AA: 01 = long
+# quanta, else short; BB: 10 = fixed, else variable; CC: 10/11 = foreground 3:1 (00 = equal and
+# fixed). $true = "Programs" -- short, variable, 3:1 (the default 2 and 0x26), $null = not readable.
+function Test-ProgramsScheduling($Value) {
+    if ($null -eq $Value) { return $null }
+    $v = 0L; if (-not [int64]::TryParse("$Value", [ref]$v)) { return $null }
+    $aa = ($v -shr 4) -band 3; $bb = ($v -shr 2) -band 3; $cc = $v -band 3
+    ($aa -ne 1) -and ($bb -ne 2) -and ($cc -ge 2)
+}
 
 # Audio enhancements through the Windows audio API. Windows 11 refuses direct writes to the
 # endpoint stores (MMDevices\...\FxProperties: "requested registry access is not allowed",
@@ -752,14 +761,22 @@ function Get-PathItemsSize {
 # C:\Windows\Temp could otherwise lead the cleanup to files anywhere on the PC. Links are neither
 # entered nor deleted, and a folder that holds one is emptied instead of removed as a whole.
 # -Skip: names (wildcards) left alone, with everything below them.
+# 1.2.10: outside the user's own profile (Windows\Temp, the error-report queues) RedirectionGuard
+# goes on first -- a link found while listing is skipped, but between listing and deleting a
+# standard user could still swap a folder of their own there for a junction (see Enable-RedirectionGuard).
+# Large folders: the window keeps answering (the dispatcher runs every few hundred items).
 function Remove-ItemsNoFollow([string]$Path, [string]$Skip = '') {
+    if (-not $env:USERPROFILE -or -not $Path.StartsWith($env:USERPROFILE.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { $null = Enable-RedirectionGuard }
     $files = New-Object System.Collections.Generic.List[object]
     $dirs  = New-Object System.Collections.Generic.List[object]
     $keep  = @{}   # folders that (somewhere below) hold a link or a skipped item
     $todo  = New-Object System.Collections.Stack
+    $pump  = { try { $Window.Dispatcher.Invoke([Action] {}, [System.Windows.Threading.DispatcherPriority]::Background) } catch { } }
     foreach ($i in @(Get-ChildItem -Path $Path -Force -ErrorAction SilentlyContinue)) { $todo.Push($i) }
+    $seen = 0
     while ($todo.Count) {
         $i = $todo.Pop()
+        if ((++$seen % 500) -eq 0) { & $pump }
         if (($i.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($Skip -and $i.Name -like $Skip)) {
             $p = Split-Path $i.FullName -Parent
             while ($p -and -not $keep.ContainsKey($p)) { $keep[$p] = 1; $p = Split-Path $p -Parent }
@@ -770,18 +787,45 @@ function Remove-ItemsNoFollow([string]$Path, [string]$Skip = '') {
             foreach ($c in @(Get-ChildItem -LiteralPath $i.FullName -Force -ErrorAction SilentlyContinue)) { $todo.Push($c) }
         } else { $files.Add($i) }
     }
-    if ($files.Count) { $files | Remove-Item -Force -ErrorAction SilentlyContinue }
+    for ($k = 0; $k -lt $files.Count; $k += 300) {
+        $files.GetRange($k, [Math]::Min(300, $files.Count - $k)) | Remove-Item -Force -ErrorAction SilentlyContinue
+        & $pump
+    }
     # deepest first; a folder with nothing to keep below it has no link in it any more
     foreach ($d in @($dirs | Sort-Object { $_.FullName.Length } -Descending)) {
         if (-not $keep.ContainsKey($d.FullName)) { Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
+# RedirectionGuard (Microsoft, Windows 11): this process no longer follows junctions that a
+# non-admin account created -- opening a path through one fails instead. Without it an elevated
+# cleanup of a folder every user may write to (Windows\Temp) can be redirected: it lists a folder
+# a standard user made there, that user swaps it for a junction to C:\Windows\System32, and the
+# delete of the listed file hits the file of the same name there. Switched on once, before the
+# first such cleanup; Windows can't switch it off again, so it stays on until the app closes
+# (junctions an administrator or Windows made still work). Where Windows doesn't have it: logged,
+# the cleanups still skip the links they find.
+$Script:RedirectionGuard = $null
+function Enable-RedirectionGuard {
+    if ($null -ne $Script:RedirectionGuard) { return $Script:RedirectionGuard }
+    $Script:RedirectionGuard = $false
+    try {
+        if (-not ('GOP.Mitigation' -as [type])) {
+            Add-Type -Namespace GOP -Name Mitigation -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true)] public static extern bool SetProcessMitigationPolicy(int policy, ref int buffer, IntPtr length);' -ErrorAction Stop
+        }
+        $flags = 1   # ProcessRedirectionTrustPolicy (16): EnforceRedirectionTrust
+        if ([GOP.Mitigation]::SetProcessMitigationPolicy(16, [ref]$flags, [IntPtr]4)) {
+            $Script:RedirectionGuard = $true
+            Write-Log "RedirectionGuard on: junctions made by non-admin accounts are no longer followed (cleanup outside the user profile)"
+        } else { Write-Log "RedirectionGuard is not available on this Windows (error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())) -- the cleanups still skip the links they find" }
+    } catch { Write-Log "RedirectionGuard could not be switched on: $_" }
+    $Script:RedirectionGuard
+}
 function Clear-PathItems {
-    param([string[]]$Paths)
+    param([string[]]$Paths, [string]$Skip = '')
     [int64]$freed = 0
     foreach ($p in $Paths) {
         $before = Get-PathItemsSize $p
-        Remove-ItemsNoFollow $p
+        Remove-ItemsNoFollow $p -Skip $Skip
         $after  = Get-PathItemsSize $p
         # Clamp: an app may write new files meanwhile (after > before) -- never report negative
         if ($before -gt $after) { $freed += ($before - $after) }
@@ -941,8 +985,8 @@ function Remove-RetiredTweakValues {
 function Backup-Registry {
     param([string]$Label = "Backup")
     $stamp     = Get-Date -Format 'yyyyMMdd_HHmmss'
-    # "v1-" marks this app's backups: GameOptimizerPro v2 writes to the same folder with the
-    # same labels, and only our own are ever pruned below
+    # "v1-" marks this app's backups (folders of 1.2.5 and older have no mark; GameOptimizerPro v2
+    # keeps its own in a folder of its own since v2.1 -- see the pruning below)
     $backupDir = Join-Path $Script:RegistryBackupRoot "${stamp}_v1-$Label"
     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
 
@@ -1503,7 +1547,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Prefetch & Superfetch"
-        Desc     = "Deaktiviert Prefetch und SysMain (Superfetch). Sinnvoll bei SSDs - auf HDDs nicht empfohlen. Reduziert Hintergrund-Schreibzugriffe und leichten RAM-Verbrauch."
+        Desc     = "Schaltet Prefetch und den Dienst SysMain (Superfetch) ab. Laut Microsoft halten beide Windows schnell: Windows und oft genutzte Apps und Spiele werden vorab in den freien Arbeitsspeicher geladen und starten dadurch schneller - auch von SSDs. Ein Vorteil fürs Spielen durch das Abschalten ist nicht belegt; Windows und Programme starten danach eher etwas langsamer. Den Arbeitsspeicher, den SysMain füllt, nutzt Windows nur als Zwischenspeicher - er wird sofort frei, wenn ein Spiel ihn braucht. Nur sinnvoll, wenn SysMain bei dir nachweislich Probleme macht. In keinem Preset."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -1893,17 +1937,20 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "CPU Priority for Games (Win32Priority)"
-        Desc     = "Setzt Win32PrioritySeparation auf 26 (Hex). Windows gibt dann aktiven Spielen deutlich mehr CPU-Zeit und reduziert Hintergrundprozesse. Spuerbar bei CPU-limitierten Spielen."
+        Desc     = "Stellt die Prozessorzeitplanung auf 'Programme' (Win32PrioritySeparation 0x26): kurze, variable Zeitscheiben, das Programm im Vordergrund - also das Spiel - bekommt dreimal so lange Rechenzeit am Stück wie Hintergrundprozesse. Das ist bei Windows Home und Pro schon der Standard (Wert 2); der Tweak stellt es sicher, falls ein anderes Tool oder die Einstellung 'Hintergrunddienste' es geändert hat. Bis 1.2.9 schrieb GameOptimizerPro hier versehentlich dezimal 26 (= 0x1A: lange, feste Zeitscheiben ohne Vorrang für das Spiel) - ein erneutes Anwenden behebt das."
         Category = "Gaming"
         Group    = "In-Game Boosts"
         Action   = {
-            reg add "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" /v Win32PrioritySeparation /t REG_DWORD /d 26 /f | Out-Null
-            Write-Log "CPU Priority set for gaming"
+            # 38 = 0x26 (bits 10 01 10: short, variable, foreground 3:1 -- Microsoft, Win32PrioritySeparation).
+            # Until 1.2.9 this wrote "/d 26", i.e. DECIMAL 26 = 0x1A = long, fixed quanta and no
+            # foreground boost -- close to "Background services", the opposite of what it said.
+            reg add "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" /v Win32PrioritySeparation /t REG_DWORD /d 38 /f | Out-Null
+            Write-Log "Processor scheduling: Programs (Win32PrioritySeparation 0x26 -- short, variable, foreground 3:1)"
         }
     },
     [PSCustomObject]@{
         Name     = "MMCSS Gaming Profile (High Priority)"
-        Desc     = "Setzt die Multimedia Class Scheduler Service (MMCSS) Profile für Spiele auf High Priority. Windows priorisiert dann Audio und Timer-Interrupts für besseres Gaming-Erlebnis."
+        Desc     = "Setzt die MMCSS-Aufgabe 'Games' (Multimedia Class Scheduler) auf hohe Priorität: Priorität 6 statt 2, Planungskategorie 'High' statt 'Medium'. Das wirkt nur auf Threads, die sich bei Windows ausdrücklich als Spiele-Thread anmelden - das tun nur manche Spiele und Engines, alle anderen merken nichts davon. Audio hat eine eigene MMCSS-Aufgabe ('Optimize MMCSS Audio Profile'); Interrupts ändert der Tweak nicht."
         Category = "Gaming"
         Group    = "In-Game Boosts"
         Action   = {
@@ -1915,7 +1962,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Fullscreen Optimizations"
-        Desc     = "Deaktiviert die Windows Fullscreen Optimizations global. Manche Spiele laufen im 'Borderless Windowed' statt echtem Fullscreen - dieser Tweak erzwingt echtes Fullscreen für niedrigeren Input-Lag."
+        Desc     = "Schaltet die Vollbildoptimierungen für alle Spiele ab (Werte in GameConfigStore), damit Vollbild-Spiele wieder exklusiv laufen. Laut Microsoft sind Spiele mit Vollbildoptimierungen bei fast allen Nutzern genauso schnell wie im exklusiven Vollbild, dazu mit schnellerem Alt+Tab und funktionierenden Overlays - einen allgemeinen Gewinn gibt es also nicht. Hilft nur bei einzelnen, meist älteren Spielen mit Problemen; dafür nennt Microsoft das Häkchen pro Spiel (Rechtsklick auf die .exe > Eigenschaften > Kompatibilität). Den globalen Schalter dokumentiert Microsoft nicht. In keinem Preset."
         Category = "Gaming"
         Group    = "In-Game Boosts"
         Action   = {
@@ -1929,7 +1976,7 @@ $AllTweaks = @(
     # == GAMING / GPU & DRIVER ============================================
     [PSCustomObject]@{
         Name     = "Enable MSI Mode (Message Signaled Interrupts)"
-        Desc     = "Aktiviert MSI-Modus (Message Signaled Interrupts) für die primäre GPU. Reduziert Interrupt-Latenz erheblich. Standard-Windows nutzt Line-Based Interrupts - MSI ist moderner und schneller. Reboot empfohlen."
+        Desc     = "Schaltet für die Gaming-Grafikkarte den MSI-Modus (Message Signaled Interrupts) ein statt der älteren leitungsbasierten Interrupts. Aktuelle NVIDIA- und AMD-Treiber nutzen MSI meist schon von selbst - dann ändert sich nichts. Nur wenn die Karte noch leitungsbasierte Interrupts nutzt, sinkt die Interrupt-Latenz etwas. Neustart nötig."
         Category = "Gaming"
         Group    = "GPU & Driver"
         Action   = {
@@ -1998,7 +2045,7 @@ $AllTweaks = @(
     # == NETWORK / LATENCY ================================================
     [PSCustomObject]@{
         Name     = "Disable Nagle's Algorithm (TCPNoDelay)"
-        Desc     = "Deaktiviert Nagles Algorithmus auf allen Netzwerkadaptern. Nagle bündelt kleine Datenpakete um Effizienz zu steigern - auf Kosten von Latenz. Deaktivieren senkt Ping in Online-Spielen spürbar."
+        Desc     = "Setzt auf allen Netzwerkadaptern TcpAckFrequency=1 und TCPNoDelay=1: Windows bestätigt jedes empfangene TCP-Paket sofort, statt bis zu 200 ms auf ein zweites zu warten (laut Microsoft), und soll kleine Pakete nicht mehr bündeln (Nagle - dieser Wert ist für aktuelles Windows nicht dokumentiert). Das betrifft nur TCP: Spiele, die TCP nutzen (z. B. manche MMOs), können kleine Verzögerungen verlieren. Die meisten Online-Shooter nutzen UDP - dort und beim angezeigten Ping ändert sich nichts. Etwas mehr Netzwerkpakete."
         Category = "Network"
         Group    = "Latency"
         Action   = {
@@ -2162,7 +2209,7 @@ $AllTweaks = @(
     # == RAM & STORAGE / MEMORY ===========================================
     [PSCustomObject]@{
         Name     = "Disable Memory Compression"
-        Desc     = "Deaktiviert die RAM-Komprimierung in Windows. Memory Compression verbraucht CPU-Ressourcen um RAM-Inhalte zu komprimieren. Bei ausreichend RAM (16GB+) bringt Deaktivieren weniger CPU-Last während des Spielens."
+        Desc     = "Schaltet die Speicherkomprimierung ab. Windows komprimiert Inhalte im Arbeitsspeicher nur, wenn er knapp wird - statt sie auf die Festplatte auszulagern. Mit reichlich RAM (16 GB und mehr) passiert das beim Spielen selten, das Abschalten spart dann kaum etwas; wird der RAM doch knapp, lagert Windows ohne Komprimierung mehr aus, und das ist langsamer. Neustart nötig."
         Category = "RAM & Storage"
         Group    = "Memory"
         Action   = {
@@ -2329,7 +2376,7 @@ $AllTweaks = @(
                 "$env:LOCALAPPDATA\CrashDumps\*",
                 "$env:ProgramData\Microsoft\Windows\WER\ReportQueue\*",
                 "$env:ProgramData\Microsoft\Windows\WER\ReportArchive\*"
-            )
+            ) -Skip "GameOptimizerPro*"   # like Clean Temp Files: the installer's folder in Windows\Temp stays
             Write-Log ("System logs & crash dumps cleaned (~" + (Format-FreedMB $freed) + " MB freed)")
         }
     },
@@ -2484,7 +2531,7 @@ $AllTweaks = @(
     # == GPU TWEAKS (AMD) =================================================
     [PSCustomObject]@{
         Name     = "AMD: Disable ULPS (Ultra Low Power State)"
-        Desc     = "AMD only: Deaktiviert Ultra Low Power State. ULPS versetzt inaktive GPUs (Multi-GPU) in extremen Stromsparmodus und kann beim Aufwachen zu Stottern führen. Auch bei Single-GPU sinnvoll deaktivieren."
+        Desc     = "Nur AMD: Schaltet ULPS (Ultra Low Power State) ab. ULPS versetzt eine gerade nicht genutzte zweite Grafikkarte (CrossFire, Laptops mit zwei GPUs) in einen tiefen Stromsparzustand; beim Aufwachen kann es kurz stocken. Mit nur einer AMD-Karte ist ein Nutzen nicht belegt. Etwas höherer Stromverbrauch im Leerlauf."
         Category = "GPU Tweaks"
         Group    = "AMD"
         Action   = {
@@ -2541,12 +2588,12 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Set Display Sleep = 15 Minutes"
-        Desc     = "Setzt den Monitor-Schlaf-Timer auf 15 Minuten (AC) und 5 Minuten (Akku). Verhindert dass der Monitor mitten im Spielen abschaltet, spart aber trotzdem Energie bei längerer Pause."
+        Desc     = "Setzt den Monitor-Schlaf-Timer auf 15 Minuten. Verhindert, dass der Monitor mitten im Spielen abschaltet, spart aber trotzdem Energie bei längeren Pausen."
         Category = "Power Plan"
         Group    = "Display"
         Action   = {
             Set-PowerAllSchemes "SUB_VIDEO" "VIDEOIDLE" 900 300
-            Write-Log "Display Sleep set to 15 min AC / 5 min DC (all power schemes)"
+            Write-Log "Display Sleep set to 15 min (all power schemes)"
         }
     },
     [PSCustomObject]@{
@@ -3031,7 +3078,7 @@ $RevertActions = @{
         reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 10 /f | Out-Null
         reg delete "HKLM\SOFTWARE\GameOptimizerPro" /v SR_NetworkThrottle /f 2>$null
         # Restore the SHARED SystemResponsiveness to default only if the Audio-priority
-        # tweak isn't still relying on it (both tweaks set it to 0).
+        # tweak isn't still relying on it (both tweaks set it to 10).
         if (-not (Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "SR_AudioPriority")) {
             reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 20 /f | Out-Null
         }
@@ -3196,7 +3243,7 @@ $RevertActions = @{
     "Set Audio Service High Priority" = {
         reg delete "HKLM\SOFTWARE\GameOptimizerPro" /v SR_AudioPriority /f 2>$null
         # Restore the SHARED SystemResponsiveness to default only if the Network-throttle
-        # tweak isn't still relying on it (both tweaks set it to 0).
+        # tweak isn't still relying on it (both tweaks set it to 10).
         if (-not (Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "SR_NetworkThrottle")) {
             reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 20 /f | Out-Null
         }
@@ -3441,7 +3488,10 @@ $CheckFunctions = @{
     # GAMING IN-GAME
     "Enable Game Mode"                   = { (Get-RegVal "HKCU:\Software\Microsoft\GameBar" "AutoGameModeEnabled") -ne 0 }   # no value = Windows default = on
     "Disable Xbox Game Bar"              = { ((Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR" "AppCaptureEnabled") -eq 0) -and ((Get-RegVal "HKCU:\Software\Microsoft\GameBar" "UseNexusForGameBarEnabled") -eq 0) }
-    "CPU Priority for Games (Win32Priority)" = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation") -eq 26 }
+    # Active = what the value means on a client Windows, not one exact number: short + variable
+    # quanta + foreground 3:1 (2, the default, and 0x26 both mean exactly that). The 26 decimal
+    # (0x1A) older versions wrote is long + fixed -> not active, so the drift check offers the fix.
+    "CPU Priority for Games (Win32Priority)" = { Test-ProgramsScheduling (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation") }
     "MMCSS Gaming Profile (High Priority)" = { (Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" "Scheduling Category") -eq "High" }
     "Disable Fullscreen Optimizations"   = { (Get-RegVal "HKCU:\System\GameConfigStore" "GameDVR_FSEBehaviorMode") -eq 2 }
     "Disable Automatic Windows Updates" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" "NoAutoUpdate") -eq 1 }
@@ -3766,7 +3816,7 @@ $TweakDescEN = @{
     "Ultimate Performance Plan"                   = "Activates the 'Ultimate Performance' power plan and sets it to always-on: Windows stops throttling CPU cores AND the PC no longer sleeps -- display, disks and system stay on (no timeout). Maximum performance at all times. Increases power consumption. On laptops 'always on' applies only while plugged in."
     "Disable Dynamic Tick (bcdedit)"   = "Formerly 'Disable HPET'. Uses bcdedit to turn off the 'dynamic tick' (the timer keeps ticking while the PC is idle) and to make Windows use the platform clock for the tick (useplatformtick). A forced HPET (useplatformclock) is removed -- the tweak does not switch HPET itself off, only the BIOS can. Some gamers report smoother frame times, which is not proven; Microsoft documents both options as debugging settings, and the PC draws a bit more power at idle. That's why it is in no preset. Restart required."
     "Allow Global Timer Resolution (Windows 11)"                  = "Since Windows 10 2004 a raised timer resolution only applies to the program that requests it - on Windows 11 not even while that program is minimized. This restores the old system-wide behavior. It is the prerequisite for timer tools such as TimerResolution or ISLC; it does NOT set a resolution by itself - games request their ~1 ms anyway. Restart required."
-    "Disable Prefetch & Superfetch"               = "Disables Prefetch and SysMain (Superfetch). Recommended for SSDs  --  not for HDDs. Reduces background disk writes and RAM usage."
+    "Disable Prefetch & Superfetch"               = "Turns off Prefetch and the SysMain (Superfetch) service. According to Microsoft both keep Windows fast: Windows and frequently used apps and games are loaded into free memory ahead of time and start faster -- from SSDs too. A gain for gaming from turning them off is not proven; Windows and programs tend to start a little slower afterwards. The memory SysMain fills is only a cache Windows frees the moment a game needs it. Only worth it if SysMain demonstrably causes trouble on your PC. In no preset."
     "Optimize Visual Effects (Performance Mode)" = "Turns off the Windows animations and visual effects like 'Adjust for best performance' (System Properties > Performance Options): window, menu and taskbar animations, fades, shadows under windows and the mouse pointer, window contents while dragging, the translucent selection rectangle and icon label shadows. Font smoothing (ClearType) stays on so text stays sharp. Takes full effect after signing out and in again. Windows feels noticeably snappier, especially on weaker systems."
     "Disable Startup App Delay" = "Windows starts autostart programs a few seconds after you sign in. With this tweak they start right away -- Discord, Steam and co. are there sooner, the desktop is a little slower in the first seconds instead. Not officially documented, but confirmed by users up to Windows 11 26H2; a big Windows update can remove the value (the drift check reports it). Works on every edition."
     "Disable Windows Search Indexing"             = "Disables the Windows Search Indexer (WSearch). Reduces constant background disk activity. Search still works but slower without index."
@@ -3777,14 +3827,14 @@ $TweakDescEN = @{
     "Alt+Tab Without Browser Tabs" = "Alt+Tab shows windows only, no single Edge tabs any more (Settings > System > Multitasking > 'Show tabs from apps when snapping or pressing Alt+Tab': don't show tabs). Works on every edition."
     "Enable Game Mode"                            = "Enables Windows Game Mode. Windows prioritizes CPU/GPU resources for the active game and suppresses Windows Update restarts while gaming."
     "Disable Xbox Game Bar" = "Disables the Xbox Game Bar (Win+G overlay). Prevents the Game Bar from running in the background consuming resources. The Xbox button on a controller no longer opens the Game Bar. Game Mode remains unaffected."
-    "CPU Priority for Games (Win32Priority)"      = "Sets Win32PrioritySeparation to 26. Windows gives active games significantly more CPU time and reduces background process priority."
-    "MMCSS Gaming Profile (High Priority)"        = "Sets Multimedia Class Scheduler (MMCSS) profiles for games to High Priority. Better audio and timer interrupt handling while gaming."
-    "Disable Fullscreen Optimizations"            = "Disables Windows Fullscreen Optimizations globally. Forces true exclusive fullscreen for lower input lag in games."
-    "Enable MSI Mode (Message Signaled Interrupts)" = "Enables MSI mode for the primary GPU. Significantly reduces interrupt latency compared to Line-Based Interrupts. Reboot recommended."
+    "CPU Priority for Games (Win32Priority)"      = "Sets processor scheduling to 'Programs' (Win32PrioritySeparation 0x26): short, variable time slices, and the program in the foreground -- the game -- gets three times as long a turn on the CPU as background processes. That is already the default on Windows Home and Pro (value 2); the tweak makes sure of it in case another tool or the 'Background services' setting changed it. Up to 1.2.9 GameOptimizerPro wrote decimal 26 here by mistake (= 0x1A: long, fixed time slices with no priority for the game) -- applying it again fixes that."
+    "MMCSS Gaming Profile (High Priority)"        = "Sets the MMCSS task 'Games' (Multimedia Class Scheduler) to high priority: priority 6 instead of 2, scheduling category 'High' instead of 'Medium'. It only affects threads that register with Windows as a game thread -- only some games and engines do, everything else notices nothing. Audio has an MMCSS task of its own ('Optimize MMCSS Audio Profile'); the tweak doesn't change interrupts."
+    "Disable Fullscreen Optimizations"            = "Turns fullscreen optimizations off for all games (values in GameConfigStore), so fullscreen games run exclusive again. According to Microsoft, games with fullscreen optimizations run as fast as in exclusive fullscreen for almost all users, with faster Alt+Tab and working overlays on top -- so there is no general gain. Only helps single, mostly older games with problems; for those Microsoft names the checkbox per game (right-click the .exe > Properties > Compatibility). Microsoft does not document the global switch. In no preset."
+    "Enable MSI Mode (Message Signaled Interrupts)" = "Switches the gaming graphics card to MSI mode (message signaled interrupts) instead of the older line-based interrupts. Current NVIDIA and AMD drivers mostly use MSI on their own already -- then nothing changes. Only if the card still uses line-based interrupts does the interrupt latency drop a little. Restart required."
     "Enable Hardware-Accelerated GPU Scheduling (HAGS)" = "Enables HAGS -- Windows hands GPU scheduling directly to the hardware instead of the software. Reduces CPU overhead and slightly lowers input lag. Needs NVIDIA RTX 2000+ or AMD RX 5000+ and Windows 10 2004+. Usually on already on current Windows 11 PCs; DLSS Frame Generation needs it. Revert puts back what was set before."
     "Clear Shader Cache"                          = "Clears the NVIDIA/AMD shader cache on disk. Forces fresh shader compilation on next game launch. Useful after driver updates or graphical glitches."
     "Increase GPU Timeout Tolerance (TDR)"             = "Raises the GPU timeout tolerance (TDR delay 2s -> 10s) so Windows doesn't reset the graphics driver prematurely when the GPU stalls briefly under heavy load. Can prevent black screens / driver resets in demanding games and when overclocking. No FPS gain. Microsoft documents the TDR values as settings for testing and debugging only that end users shouldn't change -- that's why it is in no preset. Only worth it if Windows keeps reporting that the display driver was reset."
-    "Disable Nagle's Algorithm (TCPNoDelay)"      = "Disables Nagle's Algorithm on all network adapters. Nagle buffers small packets at the cost of latency. Disabling noticeably reduces ping in online games."
+    "Disable Nagle's Algorithm (TCPNoDelay)"      = "Sets TcpAckFrequency=1 and TCPNoDelay=1 on every network adapter: Windows acknowledges every TCP packet it receives right away instead of waiting up to 200 ms for a second one (according to Microsoft), and is meant to stop bundling small packets (Nagle -- this value isn't documented for current Windows). That only concerns TCP: games that use TCP (e.g. some MMOs) can lose small delays. Most online shooters use UDP -- there, and in the ping you see, nothing changes. Slightly more network packets."
     "Disable Large Send Offload (LSO)"            = "Disables Large Send Offload on all active network adapters. Can reduce ping spikes on some systems in online games."
     "Disable Network Throttling Index"            = "Disables Windows' network throttling index, which slows down network packets under high CPU load. Most useful for latency-sensitive gaming while the CPU is busy. Also sets SystemResponsiveness to 10 (the smallest value Windows accepts; smaller values are treated like 20)."
     "Set DNS to Cloudflare (1.1.1.1)"            = "Sets DNS to Cloudflare 1.1.1.1 / 1.0.0.1 (IPv4) plus the matching IPv6 servers (2606:4700:4700::1111/::1001) so IPv6 lookups also go through Cloudflare. One of the fastest and most privacy-friendly DNS providers worldwide. Revert brings back the DNS servers you had before (e.g. a Pi-hole) -- or automatic."
@@ -3797,7 +3847,7 @@ $TweakDescEN = @{
     "Disable Delivery Optimization (P2P Windows Update)" = "Disables Windows Delivery Optimization. Windows only downloads updates directly from Microsoft instead of sharing bandwidth with other PCs on your network/the internet (P2P). Prevents unexpected bandwidth usage while gaming."
     "Optimize PageFile (System Managed)"          = "Sets the pagefile to system managed. Windows dynamically adjusts it to RAM needs  --  prevents both too-small and too-large pagefiles."
     "Clear PageFile on Shutdown"                  = "Clears the pagefile on every shutdown. Prevents sensitive data from remaining on disk after reboot. Good for privacy."
-    "Disable Memory Compression"                  = "Disables RAM compression in Windows. Saves CPU cycles during gaming. Recommended when you have enough RAM (16GB+)."
+    "Disable Memory Compression"                  = "Turns off memory compression. Windows only compresses memory contents when RAM runs low -- instead of paging them out to disk. With plenty of RAM (16 GB and more) that rarely happens while gaming, so turning it off saves next to nothing; if RAM does run low, Windows pages out more without compression, which is slower. Restart required."
     "Enable SSD TRIM"                             = "Enables TRIM for all connected SSDs. Informs the SSD about unused blocks  --  maintains SSD performance long-term and extends lifespan."
     "Disable Scheduled Defragmentation"           = "Turns off the weekly 'Optimize drives' task. On hard disks (HDD) that is defragmentation, on SSDs only a 'retrim' that tells the SSD which blocks are free -- Windows does not defragment SSDs. Only useful if you want to start the optimization yourself (Optimize drives > Optimize); not recommended for SSDs. In no preset."
     "Disable Write-Cache Buffer Flushing"         = "Disables forced write-cache buffer flushing for SSDs. Noticeably improves write speed (same as the checkbox in Device Manager). WARNING: on a power cut or a hard reset (holding the power button after a freeze) data still in the drive's cache is lost and the file system can be damaged -- Windows itself warns about this in Device Manager. Practically no gain for gaming. Only with a UPS; in no preset, and the Apply asks once more."
@@ -3820,12 +3870,12 @@ $TweakDescEN = @{
     "Optimize MMCSS Audio Profile"                = "Optimizes Multimedia Class Scheduler profile for audio. Sets Latency Sensitive with High scheduling priority. Reduces audio stuttering under CPU load."
     "Set Audio Service High Priority"             = "Gives audio, games and other multimedia tasks more CPU time: SystemResponsiveness goes from 20 to 10, so Windows reserves only 10 % instead of 20 % of the CPU for background tasks. 10 is the smallest value Windows accepts -- smaller values (0 in older versions) are treated like 20 according to Microsoft, i.e. like no tweak at all. Helps against audio dropouts while other processes load the CPU -- noticeable when gaming and streaming at once."
     "Disable Windows Sound Scheme"                = "Disables all Windows system sounds (startup, errors, notifications). No unexpected sound interruptions during gaming or streaming."
-    "AMD: Disable ULPS (Ultra Low Power State)"   = "AMD only: Disables Ultra Low Power State. ULPS puts inactive GPUs into extreme power saving and can cause stuttering on wake. Also useful for single GPU."
+    "AMD: Disable ULPS (Ultra Low Power State)"   = "AMD only: turns off ULPS (Ultra Low Power State). ULPS puts a second graphics card that isn't in use (CrossFire, laptops with two GPUs) into a deep power-saving state; waking it up can cause a short stutter. With a single AMD card a benefit is not proven. Slightly higher power use at idle."
     "Disable USB Selective Suspend"               = "Disables USB Selective Suspend globally. Windows no longer puts USB devices to sleep. Prevents disconnections with USB mice, headsets and controllers under load."
     "Disable USB 3 Link Power Management" = "Turns off the power-saving states of USB 3 links (U1/U2) in every power plan. The link to USB 3 devices (headset DACs, capture cards, external SSDs, VR headsets) no longer has to wake up first -- helps against dropouts and short stutters. Complements 'Disable USB Selective Suspend' (that one puts whole devices to sleep, this one only the link). Windows hides this setting in Power Options. Slightly higher power use."
     "Disable PCI-E Link State Power Management"   = "Disables PCI-E ASPM. Prevents the GPU from putting its PCI Express connection into power saving mode. Reduces GPU latency spikes under load."
     "Disable Hard Disk Sleep"                     = "Sets disk sleep timeout to never (0). Prevents the known stuttering after inactivity when an HDD/SSD wakes from sleep."
-    "Set Display Sleep = 15 Minutes"              = "Sets monitor sleep timer to 15 minutes (AC) and 5 minutes (battery). Prevents monitor from turning off mid-game while still saving power on breaks."
+    "Set Display Sleep = 15 Minutes"              = "Sets the monitor sleep timer to 15 minutes. Prevents the monitor from turning off mid-game while still saving power on longer breaks."
     "Disable Sleep (System)"                      = "Completely disables system sleep mode. The PC never sleeps after inactivity. Recommended for desktop PCs running downloads or servers in the background."
     "Disable Wake Timers" = "Scheduled tasks (e.g. restarts after Windows updates and automatic maintenance) can no longer wake the PC from sleep -- no more PC that starts up by itself at night. Waking by mouse, keyboard or network (Wake-on-LAN) still works. Applies to every power plan; only matters if the PC goes to sleep."
     "CPU Minimum Processor State = 100%"          = "Sets minimum CPU state to 100%. CPU always runs at full clock speed without throttling. Eliminates the brief ramp-up delay from idle  --  important for consistent FPS."
@@ -6108,8 +6158,8 @@ function Build-PresetsPage {
 
     $defs = @(
         @{ Name = 'Minimal';    Color = $U.GREEN; Fg = '#ffffff'; Desc = 'Safe basics only: privacy, gaming priority, network latency. No app removal, nothing you would miss. Ideal first run.' }
-        @{ Name = 'Balanced';   Color = $U.AMBER; Fg = '#1a1205'; Desc = 'Minimal + Ultimate Performance, HPET / timer, GPU and audio tweaks, light debloat (Copilot, Recall, tips & ads) and the Windows AI and privacy switches. The recommended all-round setup.' }
-        @{ Name = 'Aggressive'; Color = $U.RED;   Fg = '#ffffff'; Desc = 'Everything: + Xbox / OneDrive removal, no background Store apps, no drivers from Windows Update, no hibernation, no memory compression. For experienced users -- removed apps need System Restore.' }
+        @{ Name = 'Balanced';   Color = $U.AMBER; Fg = '#1a1205'; Desc = 'Minimal + Ultimate Performance, timer, GPU and audio tweaks, light debloat (Copilot, Recall, tips & ads) and the Windows AI and privacy switches. The recommended all-round setup.' }
+        @{ Name = 'Aggressive'; Color = $U.RED;   Fg = '#ffffff'; Desc = 'Balanced + Xbox / OneDrive removal, no background Store apps, no drivers from Windows Update, no hibernation, no memory compression, the hosts-file telemetry block. For experienced users -- removed apps come back through the Microsoft Store or System Restore.' }
     )
     $grid = New-Object Windows.Controls.Grid; $grid.Margin = Th 0, 0, -14, 0
     foreach ($i in 0..2) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $grid.ColumnDefinitions.Add($cd) }
@@ -6290,7 +6340,7 @@ $Script:PresetMinimal = @(
     "Disable Location Tracking","Disable Scheduled Telemetry Tasks",
     "Prevent Device Companion Apps","Disable Consumer Features","Disable Windows Platform Binary Table (WPBT)",
     "Disable Power Throttling",
-    "Enable Game Mode","CPU Priority for Games (Win32Priority)","MMCSS Gaming Profile (High Priority)","Disable Fullscreen Optimizations",
+    "Enable Game Mode","CPU Priority for Games (Win32Priority)","MMCSS Gaming Profile (High Priority)",
     "Disable Mouse Acceleration","Show File Extensions",
     "Disable Nagle's Algorithm (TCPNoDelay)","Disable Network Throttling Index",
     "Disable Delivery Optimization (P2P Windows Update)"
@@ -6301,7 +6351,7 @@ $Script:PresetBalanced = $Script:PresetMinimal + @(
     "Disable Click to Do & Settings Agent (AI)","Disable AI in Paint & Notepad","Disable Text & Image Generation (AI)",
     "Disable Input & Speech Data Collection","Disable Remote Assistance",
     "Ultimate Performance Plan","Allow Global Timer Resolution (Windows 11)",
-    "Disable Prefetch & Superfetch","Optimize Visual Effects (Performance Mode)","Disable Startup App Delay","Disable Bing in Windows Search",
+    "Optimize Visual Effects (Performance Mode)","Disable Startup App Delay","Disable Bing in Windows Search",
     "Disable Store Recommended Search Results","Disable File Explorer Automatic Folder Discovery",
     "Disable Xbox Game Bar",
     "Enable MSI Mode (Message Signaled Interrupts)","Enable Hardware-Accelerated GPU Scheduling (HAGS)",
@@ -6338,6 +6388,9 @@ $Script:PresetAggressive = $Script:PresetBalanced + @(
 # 'Disable Dynamic Tick (bcdedit)' and 'Increase GPU Timeout Tolerance (TDR)' left Balanced
 # (Microsoft documents both as settings for debugging / testing only), and 'Block Telemetry
 # Hosts' moved from Balanced to Aggressive (Microsoft Defender reports it as HostsFileHijack).
+# 1.2.10: 'Disable Fullscreen Optimizations' left Minimal (Microsoft measured them as fast as
+# exclusive fullscreen for almost everyone) and 'Disable Prefetch & Superfetch' left Balanced
+# (Microsoft: SysMain and app launch prefetching make Windows and apps start faster).
 
 function Set-Preset {
     param([string[]]$Names, [string]$Label)
@@ -6968,7 +7021,9 @@ function Get-StartupEntries {
         if (-not (Test-Path $src.Path)) { continue }
         try {
             Get-ItemProperty $src.Path | ForEach-Object {
-                $_.PSObject.Properties | Where-Object { $_.Name -notlike "PS*" } | ForEach-Object {
+                # only PowerShell's own five fields are left out -- until 1.2.9 "PS*" also hid real
+                # entries whose name starts with PS (PS Remote Play, PSPad ...)
+                $_.PSObject.Properties | Where-Object { $_.Name -notin 'PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider' } | ForEach-Object {
                     $name    = $_.Name
                     $cmd     = if ($_.Value -and $_.Value.Length -gt 65) { $_.Value.Substring(0,62)+"..." } else { $_.Value }
                     $enabled = $true
@@ -7344,8 +7399,8 @@ $BtnServices.Add_Click({
     $KnownServices = @{
         "DiagTrack"              = @{ Desc="Telemetry & Diagnostics -- sends usage data to Microsoft.";        Safe=$true;  Cat="Privacy" }
         "dmwappushservice"       = @{ Desc="WAP Push Message Routing -- part of the telemetry infrastructure.";     Safe=$true;  Cat="Privacy" }
-        "SysMain"                = @{ Desc="Superfetch -- preloads apps into RAM. Unnecessary on SSDs.";            Safe=$true;  Cat="Performance" }
-        "WSearch"                = @{ Desc="Windows Search -- indexes your drives. High CPU/disk load.";       Safe=$true;  Cat="Performance" }
+        "SysMain"                = @{ Desc="Superfetch -- preloads often used apps into free RAM so they start faster (according to Microsoft from SSDs too). Turning it off brings no proven gain.";            Safe=$true;  Cat="Performance" }
+        "WSearch"                = @{ Desc="Windows Search -- indexes your drives for fast search in Start, File Explorer and Outlook. Indexing causes disk activity now and then; without it search is slower.";       Safe=$true;  Cat="Performance" }
         "RemoteRegistry"         = @{ Desc="Remote Registry -- allows remote access to the registry. Security risk."; Safe=$true;  Cat="Security" }
         "Fax"                    = @{ Desc="Fax service -- used by almost nobody.";                 Safe=$true;  Cat="Bloat" }
         "MapsBroker"             = @{ Desc="Maps Broker -- for the Windows Maps app. Rarely used.";             Safe=$true;  Cat="Bloat" }
@@ -7370,7 +7425,7 @@ $BtnServices.Add_Click({
         "WdiServiceHost"         = @{ Desc="Diagnostic Service Host -- Windows diagnostic tools.";             Safe=$true;  Cat="Bloat" }
         "icssvc"                 = @{ Desc="Windows Mobile Hotspot -- mobile hotspot. Usually unnecessary.";     Safe=$true;  Cat="Bloat" }
         "vmicvss"                = @{ Desc="Hyper-V VSS -- only for Hyper-V VMs.";                          Safe=$true;  Cat="Bloat" }
-        "HvHost"                 = @{ Desc="Hyper-V Host -- only for Hyper-V VMs.";                          Safe=$true;  Cat="Bloat" }
+        "HvHost"                 = @{ Desc="Hyper-V Host -- for virtual machines (Hyper-V, WSL 2, Windows Sandbox).";                          Safe=$true;  Cat="Bloat" }
     }
 
     # Build XAML sub-window
@@ -7802,6 +7857,16 @@ $Window.Dispatcher.Add_UnhandledException({
     try { Set-Busy $false } catch { }
     try { [System.Windows.MessageBox]::Show("Something went wrong:`n$m`n`nThe app keeps running. Details are in the log:`n$LogFile", "GameOptimizerPro -- Error", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null } catch { }
 })
+# 1.2.10: the long steps keep the window answering (1.2.8), so it could also be closed in the
+# middle of an Apply or Revert -- the work then went on without a window, its result popped up
+# later, and starting the app again meanwhile said "already running". Closing waits for the end.
+$Window.Add_Closing({
+    param($s, $e)
+    if ($Script:Busy) {
+        $e.Cancel = $true
+        try { $StatusText.Text = "Still working -- the window can be closed as soon as this step is done." } catch { }
+    }
+})
 
 # --- Started with another account's admin rights? (a parent types the admin password on a
 # child's account: "over-the-shoulder" elevation) Then HKCU and %LOCALAPPDATA% are the admin's:
@@ -7845,6 +7910,10 @@ try {
         $why = if ($blv -ne $Script:AppVersion) {
             "A Windows update, another program or a change in Settings switched them back -- or this version of GameOptimizerPro (v$($Script:AppVersion)) checks more of their settings than the version you applied them with$(if ($blv) { " (v$blv)" })."
         } else { "A Windows update, another program or a change in Settings switched them back." }
+        # 1.2.10: the processor-scheduling tweak wrote a wrong value until 1.2.9 -- say so plainly
+        if ($drifted -contains "CPU Priority for Games (Win32Priority)" -and (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl" "Win32PrioritySeparation") -eq 26) {
+            $why += "`n`n'CPU Priority for Games': GameOptimizerPro up to 1.2.9 wrote a wrong value there (decimal 26 instead of 0x26) -- long, fixed time slices with no priority for the game in the foreground. Re-applying sets 'Programs' (0x26), the Windows default for Home and Pro."
+        }
         $r = [System.Windows.MessageBox]::Show(
             "$($drifted.Count) tweak(s) GameOptimizerPro applied are no longer fully in effect:`n`n$list`n`n$why`n`nRe-apply them now? (A registry backup is created first.)`n`nNo = keep the current settings -- you won't be asked about these again.",
             "GameOptimizerPro -- Tweaks no longer in effect",

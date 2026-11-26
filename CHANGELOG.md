@@ -6,6 +6,30 @@ All notable changes to GameOptimizerPro (the PowerShell edition), newest first. 
 
 ---
 
+## [1.2.10] — 2026-11-27
+
+A third audit, run the same way as the one before 1.2.8 — and started over after every round of fixes until it found nothing more.
+
+- **"CPU Priority for Games" did the opposite** — it wrote 26 as a decimal number instead of 0x26. Windows reads decimal 26 as long, fixed time slices with no priority for the program in the foreground — close to the "Background services" setting. It now sets "Programs" (0x26: short, variable time slices, the game in the foreground gets three times as long a turn), which is also the Windows default on Home and Pro. Where GameOptimizerPro recorded the tweak, the next start offers the fix ("no longer in effect") and says why; otherwise tick it and apply it again.
+- **Two tweaks left the presets** — *Disable Fullscreen Optimizations* (Minimal) and *Disable Prefetch & Superfetch* (Balanced): Microsoft measured fullscreen optimizations as fast as exclusive fullscreen for almost all players, and documents Prefetch / SysMain as making Windows and apps start faster, from SSDs too. Both stay available by hand, with honest descriptions. Presets: 17 / 68 / 84 tweaks.
+- **Honest descriptions** — Nagle (only TCP; most online shooters use UDP), MMCSS gaming profile (only for games that register as game threads), MSI mode (current drivers mostly use it already), AMD ULPS (no proven gain with a single card), memory compression (only works when RAM runs low), display sleep (the battery value was never set on laptops). The Services Manager no longer calls SysMain "unnecessary on SSDs"; the Presets page no longer mentions HPET and calls Aggressive "Balanced +" instead of "Everything".
+- **Cleanups in shared folders** — before cleaning `Windows\Temp` or the error-report queues the app switches on Windows' *RedirectionGuard*: junctions a standard user made are not followed at all any more, so the moment between listing and deleting can't be used to redirect a delete either. *Clean System Logs & Crash Dumps* leaves the installer's folder alone (like *Clean Temp Files*), and big cleanups keep the window answering.
+- **The window waits for a running Apply / Revert** — since 1.2.8 the window keeps answering during long steps, and closing it then let the work go on without a window. Now it can be closed once the step is done.
+- **Startup Manager** — entries whose name starts with "PS" (e.g. *PS Remote Play*) were hidden; they are listed now.
+- **Installer** — removes only its own old folders in `Windows\Temp` (owned by the administrators, no links).
+
+<details>
+<summary><b>Development log — 1.2.10</b></summary>
+
+- **Rounds** — round 1: the code read again flow by flow (Apply, Revert, drift check, cleanups, installer, Services and Startup Manager) and every claim in the preset and tweak texts checked against Microsoft's documentation; round 2 found a missing-variable edge in the new cleanup code, round 3 the SysMain text in the Services Manager, round 4 the "PS" filter in the Startup Manager, round 5 nothing.
+- **Sources** — Microsoft Learn: Win32PrioritySeparation (the AABBCC bit fields), *Demystifying Fullscreen Optimizations* (DirectX blog), Enable-MMAgent (application launch prefetching), the VDI optimization guide (SysMain), TcpAckFrequency, PROCESS_MITIGATION_REDIRECTION_TRUST_POLICY and the MSRC blog on RedirectionGuard.
+- **Measured** — on the developer PC, read only: Windows PowerShell 5.1's `Remove-Item -Recurse` removes a junction itself, not what it points to — but a delete through a junction in the *path* hits the target, and that is what RedirectionGuard closes. RedirectionGuard tested in a separate process: a junction a standard user made is blocked, normal folders work.
+- **Tests** — new scenarios: processor scheduling (Windows default, the old 26, the drift offer, Apply, a decode table), RedirectionGuard only outside the user profile, the installer's folder kept by the system-log cleanup, preset contents and sizes; new unit tests: RedirectionGuard on real NTFS, startup entries named "PS…". Both test PCs: no failures, presets 17 / 68 / 84 without errors; the offscreen app test passes; the real system unchanged.
+
+</details>
+
+---
+
 ## [1.2.9] — 2026-11-26
 
 A second check of the 1.2.8 fixes, the same way the audit ran, found two more places of the junction kind.

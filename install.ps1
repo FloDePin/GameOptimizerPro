@@ -7,11 +7,11 @@ $dest = "$env:TEMP\GameOptimizerPro.ps1"
 # integrity check against corruption/tampering in transit -- it does not
 # replace reading the source, but lets users verify what they're about
 # to run with Admin rights without having to read the whole script by hand.
-$ExpectedHash = "3C26ADB6E2336F9696BF7BB7AFDE4DC209A4D07B90FF595D6B886833ECADA396"
+$ExpectedHash = "7DE177BF748BCF3E9D46A44E5D1995F535ECB4FCDCEB80E288FC7A1BA53D6825"
 
 # Keep this in sync with $Script:AppVersion in GameOptimizerPro.ps1. It also picks the
 # release tag the script is downloaded from (see below); integrity is $ExpectedHash.
-$ScriptVersion = "1.2.9"
+$ScriptVersion = "1.2.10"
 
 Write-Host ""
 Write-Host "  GameOptimizerPro v$ScriptVersion Installer" -ForegroundColor Red
@@ -75,7 +75,13 @@ try {
     $got = [BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', ''
     if ($got -ne '__HASH__') { throw "the downloaded file changed after the check (SHA256 $got)" }
     $root = Join-Path $env:SystemRoot 'Temp'
-    Get-ChildItem -LiteralPath $root -Directory -Filter 'GameOptimizerPro-*' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    # Old folders of this loader only: owned by the administrators (or SYSTEM / this account) and no
+    # junction. Every user may create folders in Windows\Temp -- one named like ours could otherwise
+    # make this elevated delete run through a link the user controls.
+    $mine = @('S-1-5-32-544', 'S-1-5-18', [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+    Get-ChildItem -LiteralPath $root -Directory -Filter 'GameOptimizerPro-*' -ErrorAction SilentlyContinue |
+        Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -and $mine -contains "$(try { (Get-Acl -LiteralPath $_.FullName -ErrorAction Stop).GetOwner([Security.Principal.SecurityIdentifier]).Value } catch { '' })" } |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     $acl = New-Object Security.AccessControl.DirectorySecurity
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($sid in 'S-1-5-32-544', 'S-1-5-18') {
