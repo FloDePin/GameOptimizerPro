@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.2.10
+    1.2.12
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.2.10"
+$Script:AppVersion = "1.2.12"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -6026,9 +6026,13 @@ function Build-DashboardPage {
     $D.SafeBackup = New-Text '' 12.5 $U.TEXT 'SemiBold'; $D.SafeBase = New-Text '' 12.5 $U.TEXT 'SemiBold'
     $safeRow = {
         param([int]$G, [string]$C, [string]$L, $ValueBlock)
+        # label and value in two columns: a long value wraps instead of running over the label
         $gr = New-Object Windows.Controls.Grid; $gr.Margin = Th 0, 5, 0, 0
+        $c0 = New-Object Windows.Controls.ColumnDefinition; $c0.Width = [Windows.GridLength]::Auto; $gr.ColumnDefinitions.Add($c0)
+        $c1 = New-Object Windows.Controls.ColumnDefinition; $c1.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $gr.ColumnDefinitions.Add($c1)
         $gr.Children.Add((New-HStack @((New-Icon $G 13 $C @(0, 0, 10, 0)), (New-Text $L 12.5 $Script:UI.TEXT2)))) | Out-Null
-        $ValueBlock.HorizontalAlignment = 'Right'; $gr.Children.Add($ValueBlock) | Out-Null
+        $ValueBlock.HorizontalAlignment = 'Right'; $ValueBlock.TextAlignment = 'Right'; $ValueBlock.TextWrapping = 'Wrap'; $ValueBlock.Margin = Th 14, 0, 0, 0
+        [Windows.Controls.Grid]::SetColumn($ValueBlock, 1); $gr.Children.Add($ValueBlock) | Out-Null
         $gr
     }
     $safeBody = New-VStack @((New-CardTitle 'Safety net' $U.GREEN),
@@ -6415,6 +6419,19 @@ $NVMeInfo  = if ($HasNVMe) { "NVMe: $($NVMeDisks.Count)x" } else { "NVMe: none" 
 $HWInfo    = "GPU: $GPU   |   CPU: $CPU   |   RAM: $RAM GB   |   $NVMeInfo   |   $OSShort"
 $HwInfoText.Text    = "$gpuShort`n$cpuShort`n$RAM GB RAM$($Script:Mid)$NVMeInfo`n$osLine"
 $HwInfoText.ToolTip = "GPU: $GPU`nCPU: $CPU`nRAM: $RAM GB`n$NVMeInfo`n$OSShort"
+
+# .GetNewClosure() handlers (live monitor, update check, page buttons, snapshot compare ...) look
+# functions up in the GLOBAL scope only. Started with -File the script runs there; started with
+# "& file" -- the installer does that since 1.2.6 -- or as .\GameOptimizerPro.ps1 from a PowerShell
+# window it runs in a scope of its own, and those handlers failed ("Set-Bar is not recognized",
+# the live monitor stayed at "--"). 1.2.10: this script's functions are made visible globally too
+# (here, before the first handler can run, and once more before the window opens).
+function Register-ClosureFunctions {
+    foreach ($fn in @(Get-ChildItem Function: | Where-Object { $_.ScriptBlock.File -and $_.ScriptBlock.File -eq $PSCommandPath })) {
+        Set-Item -Path "Function:\global:$($fn.Name)" -Value $fn.ScriptBlock
+    }
+}
+Register-ClosureFunctions
 
 Set-Splash "Building the dashboard ..." 88
 # The dashboard only shows things. If a part of it fails (an unexpected WMI answer, a broken
@@ -7846,6 +7863,16 @@ Write-Host "[$(Get-Date -f 'HH:mm:ss')] Alles OK  --  ShowDialog wird aufgerufen
 
 Set-Splash "Almost done ..." 97
 $Window.Add_ContentRendered({ Close-Splash })   # main window is on screen -> splash goes
+
+Register-ClosureFunctions   # the functions defined since the first call (see there)
+
+# 1.2.10: open as large as the dashboard needs -- no scrolling on a 1080p or 1440p screen -- but
+# never larger than the screen's work area (taskbar left out); smaller screens keep the minimum
+try {
+    $wa = [System.Windows.SystemParameters]::WorkArea
+    $Window.Height = [Math]::Max($Window.MinHeight, [Math]::Min(1040, $wa.Height - 20))
+    $Window.Width  = [Math]::Max($Window.MinWidth,  [Math]::Min(1400, $wa.Width - 20))
+} catch { }
 
 # 1.2.8: an error nobody caught in a button handler went up through ShowDialog and ended the app
 # with "STARTUP ERROR". Now it goes to the log and a message, and the window stays open.

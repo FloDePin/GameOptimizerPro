@@ -6,6 +6,24 @@ All notable changes to GameOptimizerPro (the PowerShell edition), newest first. 
 
 ---
 
+## [1.2.12] — 2026-11-27
+
+*1.2.11 was published by mistake on the 1.2.10 commit (its tag can't be moved) — 1.2.12 is the release with these changes.*
+
+- **Started through the installer, several parts of the window didn't work** — since 1.2.6 the installer starts the app in a way in which some button and timer handlers could not find the app's own functions: the sidebar buttons, the live monitor (it stayed at "--"), the notice about a newer version and *Compare* under Snapshot. Since 1.2.8 that showed up as "Set-Bar / Show-UpdateNotice is not recognized" messages. They work again however the app is started.
+- **Bigger window at the start** — it opens as large as the dashboard needs (up to 1400 × 1040), so nothing has to be scrolled on a 1080p or 1440p screen; smaller screens get the most the screen allows.
+- **Safety net card** — a long value (e.g. the drift record of an older version) no longer runs over its label; it wraps.
+
+<details>
+<summary><b>Development log — 1.2.12</b></summary>
+
+- **Cause** — handlers made with `.GetNewClosure()` look functions up in PowerShell's global scope only. Started with `-File` (the app's own restart paths, and the tests) the script runs there; started with `& file` (the installer since 1.2.6) or as `.\GameOptimizerPro.ps1` from a PowerShell window it runs in a scope of its own. The app now also publishes its functions globally before the first handler can run.
+- **Tests** — the offscreen app test now starts the app like the installer, clicks a real sidebar button, waits for the live monitor to show values, records every error the dispatcher catches (must be 0) and can never show a popup on the screen. Both test PCs, the unit tests and the app test pass; the real system unchanged.
+
+</details>
+
+---
+
 ## [1.2.10] — 2026-11-27
 
 A third audit, run the same way as the one before 1.2.8 — and started over after every round of fixes until it found nothing more.
