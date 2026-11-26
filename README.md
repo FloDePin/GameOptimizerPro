@@ -64,7 +64,7 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 | Category | Tweaks | Examples |
 |---|:---:|---|
-| 🪟 Windows | 53 | Debloat (Copilot, Recall, OneDrive, suggested apps, tips & ads), telemetry & privacy, the Windows AI switches, Windows Update control, background apps, Ultimate Performance, HPET / timer, quality of life |
+| 🪟 Windows | 53 | Debloat (Copilot, Recall, OneDrive, suggested apps, tips & ads), telemetry & privacy, the Windows AI switches, Windows Update control, background apps, Ultimate Performance, timer (dynamic tick), quality of life |
 | 🎮 Gaming | 9 | Game Mode, MMCSS, CPU priority, fullscreen optimizations, MSI mode, HAGS, GPU timeout (TDR) |
 | 🌐 Network | 11 | Nagle, LSO, network throttling, DNS (Cloudflare / Google, IPv4 + IPv6), TCP auto-tuning, Energy-Efficient Ethernet, interrupt moderation, adapter power saving |
 | 💾 RAM & Storage | 14 | Page file, memory compression, TRIM, write cache, hibernation + **Deep Clean** (6 cleanups, each shows the MB it freed) |
@@ -80,7 +80,7 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 
 - *Bloatware:* Remove Xbox Apps · Remove Copilot · Remove OneDrive · Remove Windows Recall · Remove Other Bloatware · Stop Auto-Installed Suggested Apps · Disable Tips, Ads & Suggestions · Stop OneDrive Folder Backup · Disable Get Started & Copilot Sign-in Screens
 - *Privacy:* Disable Telemetry & Data Collection · Disable Activity History · Disable Advertising ID · Disable Text & Image Generation (AI) · Disable Click to Do & Settings Agent (AI) · Disable AI in Paint & Notepad · Disable Location Tracking · Block Telemetry Hosts (hosts file) · Disable Scheduled Telemetry Tasks · Disable Input & Speech Data Collection · Disable Remote Assistance
-- *Performance:* Ultimate Performance Plan · Disable HPET (High Precision Event Timer) · Allow Global Timer Resolution (Windows 11) · Disable Prefetch & Superfetch · Optimize Visual Effects (Performance Mode) · Disable Startup App Delay · Disable Windows Search Indexing · Disable Power Throttling · Disable Bing in Windows Search · Process Count Reduction (Svchost) · Block Background Apps (Policy) · Stop Background Apps (All Editions)
+- *Performance:* Ultimate Performance Plan · Disable Dynamic Tick (bcdedit) · Allow Global Timer Resolution (Windows 11) · Disable Prefetch & Superfetch · Optimize Visual Effects (Performance Mode) · Disable Startup App Delay · Disable Windows Search Indexing · Disable Power Throttling · Disable Bing in Windows Search · Process Count Reduction (Svchost) · Block Background Apps (Policy) · Stop Background Apps (All Editions)
 - *Windows Update:* Exclude Drivers from Windows Update · Hold Feature Updates (Stay on Current Version) · Disable Automatic Windows Updates
 - *CTT Essentials:* Prevent Device Companion Apps · Disable Consumer Features · Disable Windows Platform Binary Table (WPBT) · Disable Store Recommended Search Results · Disable File Explorer Automatic Folder Discovery · Run Disk Cleanup
 - *Quality of Life:* Show File Extensions · Show Hidden Files · Disable Reserved Storage · Disable Storage Sense · Num Lock on Startup · Disable Lock Screen · Enable Long Paths
@@ -137,8 +137,8 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 | Preset | Tweaks | For whom |
 |---|:---:|---|
 | 🟢 **Minimal** | 18 | Safe basics: privacy, gaming priority, network latency. No app removal — the ideal first run. |
-| 🟠 **Balanced** | 73 | Minimal + Ultimate Performance, timer, GPU and audio tweaks, light debloat (Copilot, Recall, tips & ads) and the Windows AI and privacy switches. The recommended all-round setup. |
-| 🔴 **Aggressive** | 89 | Everything, incl. Xbox and OneDrive removal, no background Store apps, no drivers from Windows Update, no hibernation, no memory compression. For experienced users. |
+| 🟠 **Balanced** | 70 | Minimal + Ultimate Performance, timer, GPU and audio tweaks, light debloat (Copilot, Recall, tips & ads) and the Windows AI and privacy switches. The recommended all-round setup. |
+| 🔴 **Aggressive** | 86 | Everything, incl. Xbox and OneDrive removal, no background Store apps, no drivers from Windows Update, no hibernation, no memory compression, the telemetry block in the hosts file. For experienced users. Tweaks Microsoft documents as debugging settings (dynamic tick, GPU timeout) and *Disable Write-Cache Buffer Flushing* (risk of data loss) are in no preset. |
 
 A preset only ticks the boxes — you review the list and click **Apply selected** yourself. Tweaks that are already active are left as they are. On purpose in no preset: turning off automatic Windows updates or TCP auto-tuning, the scheduled drive optimization, holding feature updates, the DNS providers and a few matters of taste.
 
@@ -183,7 +183,7 @@ Grey means there is nothing lasting to check (one-time cleanups), the tweak does
 <details>
 <summary><b>Microsoft Defender reports "HostsFileHijack".</b></summary>
 
-That comes from *Block Telemetry Hosts*: Defender flags hosts entries that block Microsoft servers. Allow it in Defender, or revert the tweak — the other telemetry tweaks work without it.
+That comes from *Block Telemetry Hosts* (in the Aggressive preset): Defender flags hosts entries that block Microsoft servers. Allow it in Defender, or revert the tweak — the other telemetry tweaks work without it.
 </details>
 
 <details>

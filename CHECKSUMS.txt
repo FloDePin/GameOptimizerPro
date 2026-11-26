@@ -1,4 +1,4 @@
-# GameOptimizerPro v1.2.7 - Checksums (SHA256)
+# GameOptimizerPro v1.2.8 - Checksums (SHA256)
 #
 # Verify the file you downloaded matches the published version before
 # running it with Administrator rights:
@@ -10,4 +10,4 @@
 # Update this file (and the $ExpectedHash constant in install.ps1) every
 # time GameOptimizerPro.ps1 changes.
 
-BC72FC820A294E5EC18D3B81C137CBE63E600F6B855902E86AA8D85C7C39FCB7  GameOptimizerPro.ps1
+CF71FBE38D02889ECD4F9C02277895AD6CA111F68645D274258BFDF8AAF7711D  GameOptimizerPro.ps1

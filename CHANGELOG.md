@@ -6,6 +6,34 @@ All notable changes to GameOptimizerPro (the PowerShell edition), newest first. 
 
 ---
 
+## [1.2.8] — 2026-11-26
+
+A second full audit — the code, the presets and every claim in the descriptions checked again, against Microsoft's documentation where Windows decides. Everything it found is fixed.
+
+- **Safer presets** — *Disable Write-Cache Buffer Flushing* is no longer in *Aggressive*: a power cut or a hard reset after a freeze can lose data and damage the file system, for practically no gain in games. Ticked by hand it asks once more. *Disable Dynamic Tick* and *Increase GPU Timeout Tolerance (TDR)* left *Balanced* — Microsoft documents both as settings for debugging and testing only. *Block Telemetry Hosts* moved from *Balanced* to *Aggressive*: Microsoft Defender reports it as *HostsFileHijack*. Presets: 18 / 70 / 86 tweaks.
+- **"Disable HPET" is now "Disable Dynamic Tick (bcdedit)"** — it never switched HPET off (that only works in the BIOS); the new name and text say what it does. Old records and saved lists with the old name still work.
+- **Laptops** — on a PC with a battery the power plan tweaks and the Ultimate plan change only the "plugged in" values; sleep, CPU down-clocking and link power saving on battery stay as they are.
+- **Revert all and old records** — the record of 1.2.5 and older also listed settings that were already on before (Windows' or your own). Revert all no longer sets those back on its own: it ticks the ones still active, and you choose with *Revert selected*.
+- **Nothing lost when the app is closed mid-Apply** — every tweak is recorded the moment it runs (until now only after the last one), and app removals, the Recall removal and the OneDrive uninstall run in the background: no more "Not responding".
+- **Windows Home** — *Disable Lock Screen*, *Disable Storage Sense*, *Disable Activity History* and *Disable Widgets* are greyed out there (*Pro and up*): Home ignores those policies, and since 24H2 Windows blocks programs from flipping the Widgets switch. Until now they showed "active" on Home without any effect.
+- **Honest descriptions** — telemetry (fully off only exists in Enterprise / Education / Server), Copilot (the policy only affected the old Copilot sidebar — removing the app is what counts), Recall (the snapshot policy works on Enterprise / Education only), TDR, Clean Temp Files.
+- **Clean Temp Files** no longer empties Prefetch (that slowed the next starts down — *Clean Prefetch Data* does it on purpose), and no cleanup goes through a junction or symbolic link any more: as administrator, a link someone puts into `Windows\Temp` could otherwise have led it to files elsewhere.
+- **32-bit PowerShell** — started from "Windows PowerShell (x86)", the app reopens itself in the 64-bit one; in the 32-bit one several tweaks wrote to the wrong part of the registry while showing as active.
+- **Another account's admin rights** — started with an administrator password typed in on another account (or with Windows' *Administrator protection*), the app says so: the per-user tweaks would change that account's settings, not yours.
+- **Smaller fixes** — a restore point Windows refused with a warning no longer counts as created; *Revert selected* keeps what it couldn't set back in the record; the DNS revert leaves VPN and virtual adapters it never changed alone; the DNS servers from before a DNS tweak are kept where only administrators can write (until now a file in your profile); the app's own registry notes are in the registry backup; old backups from 1.2.5 and before are pruned with the others (20 are kept); the app list at startup is read once, not twice; an unexpected error in a button no longer closes the app.
+- **Installer** — starts the app without `-WindowStyle Hidden -ExecutionPolicy Bypass` on the command line (the pattern antivirus heuristics flag); the bug report form reminds you that the log shows your Windows user name.
+
+<details>
+<summary><b>Development log — 1.2.8</b></summary>
+
+- **Sources** — Microsoft Learn: BCDEdit /set (useplatformtick, disabledynamictick: debugging only), TDR registry keys (testing and debugging only), BitLocker and BCD settings (both bcdedit values are on the ignored list — no recovery prompt), Policy CSP edition tables (ADMX_ControlPanelDisplay, Storage, NewsAndInterests, Privacy, System, WindowsAI), WOW64 shared and redirected registry keys, Checkpoint-Computer (one point per 24 h, reported as a warning).
+- **Junction test on real NTFS** — a junction to a folder with files, inside the folder being cleaned and one level deeper: the files behind it stay, the links stay, everything else goes. Windows PowerShell 5.1's `Remove-Item -Recurse` was not trusted with this any more.
+- **Tests** — the test PCs now model junctions, batteries and wildcards that match one folder level (like the real file system); new scenarios: battery (AC only), junctions in `%TEMP%` and `Windows\Temp`, Prefetch left alone, the DNS record moved from the old file (broken lines dropped), the hosts tweak not offered again after Defender, preset contents, the four Home-gated policies. New unit tests: the junction cleanup on real NTFS, the background runspace, battery detection, the 32-bit relaunch path, the Explorer owner check (found a wrong `InvokeMethod` call before release). Both test PCs: no failures, the real system unchanged.
+
+</details>
+
+---
+
 ## [1.2.7] — 2026-11-20
 
 A faster and sturdier start: the window is there in about 2 seconds instead of 6 to 7, with the same checks and the same results, and a Windows component that hangs no longer keeps the splash on screen.

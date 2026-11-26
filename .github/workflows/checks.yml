@@ -1,0 +1,60 @@
+name: checks
+
+# Runs on every push and pull request: the two scripts must parse in Windows PowerShell 5.1,
+# keep their encoding (UTF-8 with BOM, LF), and every place that names the version and the
+# SHA256 of GameOptimizerPro.ps1 must agree -- otherwise the installer refuses to start the app.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse, encoding, version and hash
+        shell: powershell
+        run: |
+          $fail = @()
+          foreach ($f in 'GameOptimizerPro.ps1', 'install.ps1') {
+              $p = (Resolve-Path $f).Path
+              $t = $null; $e = $null
+              [void][Management.Automation.Language.Parser]::ParseFile($p, [ref]$t, [ref]$e)
+              if ($e.Count) { $fail += "${f}: $($e.Count) parse error(s), first: $($e[0].Message) (line $($e[0].Extent.StartLineNumber))" }
+              $b = [IO.File]::ReadAllBytes($p)
+              if ([Text.Encoding]::UTF8.GetString($b).Contains("`r`n")) { $fail += "${f}: CRLF line endings (must be LF)" }
+          }
+          $app = [IO.File]::ReadAllBytes((Resolve-Path 'GameOptimizerPro.ps1').Path)
+          if (-not ($app[0] -eq 0xEF -and $app[1] -eq 0xBB -and $app[2] -eq 0xBF)) { $fail += 'GameOptimizerPro.ps1: no UTF-8 BOM (Windows PowerShell 5.1 would misread the umlauts)' }
+
+          $src  = Get-Content -Raw 'GameOptimizerPro.ps1'
+          $inst = Get-Content -Raw 'install.ps1'
+          $sums = Get-Content -Raw 'CHECKSUMS.txt'
+          $v = @{
+              'AppVersion'     = [regex]::Match($src,  '(?m)^\$Script:AppVersion = "([^"]+)"').Groups[1].Value
+              '.VERSION block' = [regex]::Match($src,  '(?m)^\.VERSION\s*\n\s*(\S+)').Groups[1].Value
+              'install.ps1'    = [regex]::Match($inst, '(?m)^\$ScriptVersion = "([^"]+)"').Groups[1].Value
+              'CHECKSUMS.txt'  = [regex]::Match($sums, 'GameOptimizerPro v(\S+) - Checksums').Groups[1].Value
+          }
+          $v.GetEnumerator() | ForEach-Object { "version  {0,-15} {1}" -f $_.Key, $_.Value }
+          if (@($v.Values | Select-Object -Unique).Count -ne 1 -or -not $v['AppVersion']) { $fail += 'the version numbers differ' }
+
+          $hash = (Get-FileHash 'GameOptimizerPro.ps1' -Algorithm SHA256).Hash
+          $hInst = [regex]::Match($inst, '(?m)^\$ExpectedHash = "([0-9A-Fa-f]{64})"').Groups[1].Value
+          $hSums = [regex]::Match($sums, '(?m)^([0-9A-Fa-f]{64})\s+GameOptimizerPro\.ps1').Groups[1].Value
+          "sha256   file            $hash"
+          "sha256   install.ps1     $hInst"
+          "sha256   CHECKSUMS.txt   $hSums"
+          if ($hInst -ne $hash) { $fail += 'install.ps1 $ExpectedHash does not match GameOptimizerPro.ps1' }
+          if ($hSums -ne $hash) { $fail += 'CHECKSUMS.txt does not match GameOptimizerPro.ps1' }
+
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$($v['install.ps1'])") { $fail += "tag $env:GITHUB_REF_NAME does not match the installer version v$($v['install.ps1'])" }
+
+          if ($fail.Count) { $fail | ForEach-Object { Write-Host "::error::$_" }; exit 1 }
+          'all checks passed'

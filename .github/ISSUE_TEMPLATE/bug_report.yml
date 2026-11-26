@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting! The log file helps most: `%TEMP%\GameOptimizerPro_*.log` (paste the path into Explorer's address bar).
+        Thanks for reporting! The log file helps most: `%TEMP%\GameOptimizerPro_*.log` (paste the path into Explorer's address bar). It contains your Windows user name in folder paths -- see the note at the log box below.
   - type: input
     id: where
     attributes:
@@ -36,4 +36,4 @@ body:
     id: log
     attributes:
       label: Log file
-      description: Drag the newest `GameOptimizerPro_*.log` from `%TEMP%` into this box, or paste the relevant lines.
+      description: Drag the newest `GameOptimizerPro_*.log` from `%TEMP%` into this box, or paste the relevant lines. Issues are public, and the log shows your Windows user name in folder paths (`C:\Users\<name>\...`) -- open it in Notepad and replace the name (e.g. with `USER`) first if you don't want it public.

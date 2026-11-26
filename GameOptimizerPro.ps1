@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.2.7
+    1.2.8
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.2.7"
+$Script:AppVersion = "1.2.8"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -69,6 +69,24 @@ try {
 # Started from PowerShell 7 (pwsh) it opens itself again in powershell.exe.
 # -----------------------------------------
 $Script:IsCorePS = $PSVersionTable.PSEdition -eq 'Core'
+# 32-bit PowerShell on 64-bit Windows (SysWOW64, "Windows PowerShell (x86)") sees the 32-bit
+# registry view: values under HKLM\SOFTWARE landed in WOW6432Node where Windows never reads them,
+# while the status still showed them as active, and bcdedit is missing there. Start again in the
+# 64-bit powershell.exe -- through Sysnative and CreateProcess (no ShellExecute), the only way a
+# 32-bit process reaches it; the 64-bit copy then asks for admin rights itself.
+if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+    $ps64 = "$env:SystemRoot\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
+    if ($PSCommandPath -and (Test-Path -LiteralPath $ps64)) {
+        try {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo $ps64, "-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+            $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+            [void][System.Diagnostics.Process]::Start($psi)
+            exit
+        } catch { }
+    }
+    [System.Windows.MessageBox]::Show("This is the 32-bit Windows PowerShell. GameOptimizerPro needs the 64-bit one: start it from 'Windows PowerShell' (not '(x86)') as Administrator.", "GameOptimizerPro - 64-bit PowerShell required", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null
+    exit
+}
 if ($Script:IsCorePS -or -not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     # Started directly (right-click > Run with PowerShell): ask for elevation once and
     # start again as administrator. The message only appears if that is declined, or if
@@ -221,7 +239,15 @@ function Start-Prefetch {
     }
 }
 function Add-PrefetchToPass {
-    $pre = @(Receive-Background $Script:Prefetch 8000) | Select-Object -First 1
+    # The app list of every account can take long. 1.2.8: wait for the read that is already
+    # running (up to 30 s, the splash counts the seconds) -- until 1.2.7 the checks started the
+    # same read a second time after 8 s, next to the first one.
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ($Script:Prefetch -and $Script:Prefetch.Handle -and -not $Script:Prefetch.Handle.IsCompleted -and $sw.Elapsed.TotalSeconds -lt 30) {
+        if ($sw.Elapsed.TotalSeconds -gt 3) { try { Set-Splash ("Reading the installed apps ... {0} s" -f [int]$sw.Elapsed.TotalSeconds) ([int]$Script:SplashBar.Value) } catch { } }
+        Start-Sleep -Milliseconds 200
+    }
+    $pre = @(Receive-Background $Script:Prefetch 0) | Select-Object -First 1
     $Script:Prefetch = $null
     if ($null -eq $Script:PassCache -or $pre -isnot [hashtable]) { return }   # not done in time: the checks read it themselves
     foreach ($k in @($pre.Keys)) { $Script:PassCache[$k] = @($pre[$k]) }
@@ -294,15 +320,34 @@ function Get-StaticDns([string]$Guid) {
 
 # What each adapter had before a DNS tweak changed it ("guid|server,server", an empty list =
 # automatic), so a revert brings back a Pi-hole or company DNS instead of switching to automatic.
+# 1.2.8: kept in HKLM\SOFTWARE\GameOptimizerPro (DnsOriginal, "guid|servers;guid|servers"), where
+# only administrators can write. Until 1.2.7 it was a file in the user's profile that any program
+# of the user could edit, and the revert applied it with admin rights unchecked. Only well-formed
+# entries count: an adapter GUID and IP addresses.
 function Read-DnsOriginal {
     $m = @{}
-    try { foreach ($l in @(Get-Content $Script:DnsOriginalFile -ErrorAction Stop)) { $p = "$l".Split('|'); if ($p.Count -eq 2 -and $p[0]) { $m[$p[0]] = @($p[1].Split(',') | Where-Object { $_ }) } } } catch { }
+    $raw = Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "DnsOriginal"
+    $lines = @("$raw".Split(';') | Where-Object { $_ })
+    if ($null -eq $raw) {   # written by 1.2.7 or older: the file (moved over by Save-DnsOriginal)
+        try { $lines = @(Get-Content $Script:DnsOriginalFile -ErrorAction Stop) } catch { }
+    }
+    foreach ($l in $lines) {
+        $p = "$l".Trim().Split('|')
+        if ($p.Count -ne 2 -or $p[0] -notmatch '^\{[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}$') { continue }
+        $ips = @($p[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $bad = @($ips | Where-Object { $x = $null; -not [System.Net.IPAddress]::TryParse($_, [ref]$x) })
+        if ($bad.Count) { continue }
+        $m[$p[0]] = $ips
+    }
     $m
 }
 function Save-DnsOriginal($Map) {
+    $v = @($Map.Keys | Sort-Object | ForEach-Object { "$_|$(@($Map[$_]) -join ',')" }) -join ';'
     try {
-        New-Item -ItemType Directory -Path (Split-Path $Script:DnsOriginalFile) -Force -ErrorAction Stop | Out-Null
-        Set-Content -Path $Script:DnsOriginalFile -Value @($Map.Keys | Sort-Object | ForEach-Object { "$_|$(@($Map[$_]) -join ',')" }) -Encoding ASCII -ErrorAction Stop
+        if ($v) { reg add "HKLM\SOFTWARE\GameOptimizerPro" /v DnsOriginal /t REG_SZ /d $v /f | Out-Null }
+        else { reg delete "HKLM\SOFTWARE\GameOptimizerPro" /v DnsOriginal /f 2>$null | Out-Null }
+        if ($LASTEXITCODE -ne 0 -and $v) { throw "reg add returned $LASTEXITCODE" }
+        if (Test-Path $Script:DnsOriginalFile) { Remove-Item -LiteralPath $Script:DnsOriginalFile -Force -ErrorAction SilentlyContinue }
     } catch { Write-Log "DNS: the previous DNS servers could not be saved -- $_" }
 }
 
@@ -338,11 +383,16 @@ function Set-ProviderDns([string]$Provider, [string[]]$Servers) {
 function Reset-ProviderDns([string]$Provider, [string[]]$Servers) {
     $orig = Read-DnsOriginal
     $n = 0; $kept = 0; $auto = 0
+    # 1.2.8: the adapters the Apply and the status check look at (the physical ones), plus any
+    # adapter the Apply recorded -- a VPN / WARP adapter with 1.1.1.1 of its own is left alone
+    # (WMI not answering: every connected adapter, as until 1.2.7)
+    $scope = @(); try { $scope = @(Get-UpAdapters | ForEach-Object { [int]$_.InterfaceIndex }) } catch { }
     foreach ($a in @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Up" })) {
+        $g = "$($a.InterfaceGuid)"
+        if ($scope.Count -and $scope -notcontains [int]$a.InterfaceIndex -and -not ($g -and $orig.ContainsKey($g))) { continue }
         $cur = @(Get-DnsClientServerAddress -InterfaceIndex $a.InterfaceIndex -ErrorAction SilentlyContinue | ForEach-Object { $_.ServerAddresses })
         if (-not @($cur | Where-Object { $Servers -contains $_ }).Count) { continue }
         if (@($cur | Where-Object { $Servers -notcontains $_ }).Count) { $kept++; Write-Log "Revert: '$($a.Name)' also uses DNS servers of its own -- left as it is"; continue }
-        $g = "$($a.InterfaceGuid)"
         $back = @(if ($g -and $orig.ContainsKey($g)) { $orig[$g] })
         Set-DnsClientServerAddress -InterfaceIndex $a.InterfaceIndex -ResetServerAddresses -ErrorAction SilentlyContinue
         if ($back.Count) { Set-DnsClientServerAddress -InterfaceIndex $a.InterfaceIndex -ServerAddresses $back -ErrorAction SilentlyContinue } else { $auto++ }
@@ -697,12 +747,41 @@ function Get-PathItemsSize {
     $s = (Get-ChildItem -Path $Path -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer } | Measure-Object -Property Length -Sum).Sum
     return [int64]$s
 }
+# Deletes what $Path matches (wildcards allowed) and everything below it -- without ever going
+# through a junction or symbolic link: as administrator, a link a standard user puts into
+# C:\Windows\Temp could otherwise lead the cleanup to files anywhere on the PC. Links are neither
+# entered nor deleted, and a folder that holds one is emptied instead of removed as a whole.
+# -Skip: names (wildcards) left alone, with everything below them.
+function Remove-ItemsNoFollow([string]$Path, [string]$Skip = '') {
+    $files = New-Object System.Collections.Generic.List[object]
+    $dirs  = New-Object System.Collections.Generic.List[object]
+    $keep  = @{}   # folders that (somewhere below) hold a link or a skipped item
+    $todo  = New-Object System.Collections.Stack
+    foreach ($i in @(Get-ChildItem -Path $Path -Force -ErrorAction SilentlyContinue)) { $todo.Push($i) }
+    while ($todo.Count) {
+        $i = $todo.Pop()
+        if (($i.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($Skip -and $i.Name -like $Skip)) {
+            $p = Split-Path $i.FullName -Parent
+            while ($p -and -not $keep.ContainsKey($p)) { $keep[$p] = 1; $p = Split-Path $p -Parent }
+            continue
+        }
+        if ($i.PSIsContainer) {
+            $dirs.Add($i)
+            foreach ($c in @(Get-ChildItem -LiteralPath $i.FullName -Force -ErrorAction SilentlyContinue)) { $todo.Push($c) }
+        } else { $files.Add($i) }
+    }
+    if ($files.Count) { $files | Remove-Item -Force -ErrorAction SilentlyContinue }
+    # deepest first; a folder with nothing to keep below it has no link in it any more
+    foreach ($d in @($dirs | Sort-Object { $_.FullName.Length } -Descending)) {
+        if (-not $keep.ContainsKey($d.FullName)) { Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
 function Clear-PathItems {
     param([string[]]$Paths)
     [int64]$freed = 0
     foreach ($p in $Paths) {
         $before = Get-PathItemsSize $p
-        Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-ItemsNoFollow $p
         $after  = Get-PathItemsSize $p
         # Clamp: an app may write new files meanwhile (after > before) -- never report negative
         if ($before -gt $after) { $freed += ($before - $after) }
@@ -755,6 +834,8 @@ $Script:RegistryBackupKeys = @(
     "HKCU\Software\Policies\Microsoft\Windows\WindowsAI",
     "HKCU\System\GameConfigStore",
     "HKLM\SOFTWARE\ATI Technologies\CBT",
+    # the app's own notes: ownership markers, the Ultimate plan's GUID, the DNS servers before a DNS tweak
+    "HKLM\SOFTWARE\GameOptimizerPro",
     "HKLM\SOFTWARE\Microsoft\Dfrg\BootOptimizeFunction",
     "HKLM\SOFTWARE\Microsoft\DirectX",
     "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia",
@@ -928,10 +1009,11 @@ function Backup-Registry {
     }
     try { $vl | Set-Content -LiteralPath (Join-Path $backupDir '_values.reg') -Encoding Unicode -ErrorAction Stop } catch { }
     Write-Log "Registry backup ($Label): $saved keys saved, $($missing.Count) not present yet (listed in _remove-new-keys.reg), $($skipped - $missing.Count) failed -> $backupDir"
-    # Keep the newest 20 of this app's backups. Older folders without the "v1-" mark (made
-    # before 1.2.6, or by v2 with the same labels) are never deleted here.
+    # Keep the newest 20 of this app's backups. 1.2.8: the unmarked folders of 1.2.5 and older count
+    # too (same labels) -- GameOptimizerPro v2 has written to a folder of its own since v2.1
+    # (GameOptimizerPro-v2\RegistryBackups), so nothing here belongs to it any more.
     try {
-        Get-ChildItem -LiteralPath $Script:RegistryBackupRoot -Directory -ErrorAction Stop | Where-Object { $_.Name -match '^\d{8}_\d{6}_v1-' } | Sort-Object Name -Descending |
+        Get-ChildItem -LiteralPath $Script:RegistryBackupRoot -Directory -ErrorAction Stop | Where-Object { $_.Name -match '^\d{8}_\d{6}_(v1-)?(PreApply|PreRevert|PreRevertSelected|PreDriftReapply|Backup)$' } | Sort-Object Name -Descending |
             Select-Object -Skip 20 | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue; Write-Log "Old registry backup removed: $($_.Name)" }
     } catch { }
     return $backupDir
@@ -952,13 +1034,24 @@ function Get-PowerSchemeGuids {
     if ($guids.Count -eq 0) { $guids = @('SCHEME_CURRENT') }
     $guids
 }
+# A battery (laptop, tablet; a UPS on USB counts too): the power tweaks then only change the
+# values for "plugged in" -- until 1.2.7 they also took away sleep, CPU down-clocking and link
+# power saving on battery. The status checks read the plugged-in value anyway.
+function Test-HasBattery {
+    try {
+        $s = [System.Windows.Forms.SystemInformation]::PowerStatus.BatteryChargeStatus
+        -not ($s -band [System.Windows.Forms.BatteryChargeStatus]::NoSystemBattery) -and "$s" -ne 'Unknown'
+    } catch { $false }
+}
 function Set-PowerAllSchemes {
     param([string]$Sub, [string]$Setting, [int]$AC, [int]$DC = $AC)
+    $acOnly = Test-HasBattery
     foreach ($g in (Get-PowerSchemeGuids)) {
         powercfg /SETACVALUEINDEX $g $Sub $Setting $AC 2>$null | Out-Null
-        powercfg /SETDCVALUEINDEX $g $Sub $Setting $DC 2>$null | Out-Null
+        if (-not $acOnly) { powercfg /SETDCVALUEINDEX $g $Sub $Setting $DC 2>$null | Out-Null }
     }
     powercfg /SETACTIVE SCHEME_CURRENT 2>$null | Out-Null
+    if ($acOnly) { Write-Log "Battery found: $Sub / $Setting set for 'plugged in' only, the battery value stays as it is" }
 }
 
 # A copy of the Ultimate Performance template: ours (stored GUID) or any other -- the plan
@@ -1046,19 +1139,19 @@ $AllTweaks = @(
         Action   = {
             # -AllUsers on both sides: installed for another account, the app stayed and the
             # status check (which looks at every account) never turned green
-            foreach ($app in (Get-XboxPatterns)) { Get-AppxPackage -AllUsers $app | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue }
+            Invoke-WithUi "Removing the Xbox apps" { param($pats) foreach ($app in $pats) { Get-AppxPackage -AllUsers $app | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue } } ([string[]](Get-XboxPatterns)) | Out-Null
             Write-Log "Xbox apps removed (Game Bar, Identity Provider, TCUI, speech overlay)"
         }
     },
     [PSCustomObject]@{
         Name     = "Remove Copilot"
-        Desc     = "Deaktiviert und entfernt Windows Copilot (KI-Assistent). Verhindert dass Copilot im Hintergrund läuft und Daten sendet."
+        Desc     = "Entfernt die Copilot-App (KI-Assistent) für alle Konten und setzt zusätzlich die alte Richtlinie 'Windows Copilot ausschalten'. Diese Richtlinie wirkt laut Microsoft nur auf die frühere, in Windows eingebaute Copilot-Leiste, nicht auf die heutige Copilot-App - entscheidend ist deshalb das Entfernen der App. Zurück kommt sie über den Microsoft Store. Microsoft 365 Copilot in Office bleibt unberührt."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
             reg add "HKCU\Software\Policies\Microsoft\Windows\WindowsCopilot" /v TurnOffWindowsCopilot /t REG_DWORD /d 1 /f | Out-Null
-            Get-AppxPackage -AllUsers "*Copilot*" | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
-            Write-Log "Copilot disabled"
+            Invoke-WithUi "Removing the Copilot app" { Get-AppxPackage -AllUsers "*Copilot*" | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue } | Out-Null
+            Write-Log "Copilot app removed, old Copilot policy set"
         }
     },
     [PSCustomObject]@{
@@ -1074,7 +1167,7 @@ $AllTweaks = @(
             # Started with -Wait: called directly, the setup returns at once and the status check
             # still found OneDrive. A machine-wide install (Program Files) needs /allusers.
             $machine = @("$env:ProgramFiles\Microsoft OneDrive\OneDrive.exe", "${env:ProgramFiles(x86)}\Microsoft OneDrive\OneDrive.exe") | Where-Object { Test-Path $_ }
-            if (Test-Path $onedrive) { Start-Process -FilePath $onedrive -ArgumentList $(if ($machine) { '/uninstall /allusers' } else { '/uninstall' }) -Wait -WindowStyle Hidden }
+            if (Test-Path $onedrive) { $null = Invoke-ProcessWithUi $onedrive $(if ($machine) { '/uninstall /allusers' } else { '/uninstall' }) "Uninstalling OneDrive" 600 }
             reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v OneDrive /f 2>$null
             # Remove the leftover OneDrive entry from the File Explorer sidebar (64-bit + 32-bit)
             reg delete "HKCR\CLSID\{018D5C66-4533-4307-9B53-224DE2ED1FE6}" /f 2>$null
@@ -1084,7 +1177,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Remove Windows Recall"
-        Desc     = "Deaktiviert und entfernt Windows Recall - das KI-Feature, das Screenshots deiner Aktivitäten macht und lokal speichert. Nutzt die offiziellen Microsoft-Richtlinien: Snapshots aus + Recall-Komponente vom System entfernt (vorhandene Snapshots werden gelöscht). Neustart nötig."
+        Desc     = "Deaktiviert und entfernt Windows Recall - das KI-Feature, das Screenshots deiner Aktivitäten macht und lokal speichert. Nutzt die offiziellen Microsoft-Richtlinien: Recall nicht erlauben + Recall-Komponente vom System entfernt (vorhandene Snapshots werden gelöscht), dazu 'Snapshots aus' - diese Richtlinie wertet Windows laut Microsoft nur in Enterprise/Education aus, auf Home und Pro sorgen die anderen beiden Schritte dafür, dass Recall weg ist. Neustart nötig."
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
@@ -1093,7 +1186,7 @@ $AllTweaks = @(
             # and Windows REMOVES its bits (plus any saved snapshots) at the next restart.
             # DisableAIDataAnalysis alone only stops new snapshots.
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" /v AllowRecallEnablement /t REG_DWORD /d 0 /f | Out-Null
-            Disable-WindowsOptionalFeature -Online -FeatureName "Recall" -NoRestart -ErrorAction SilentlyContinue | Out-Null
+            Invoke-WithUi "Removing the Recall component" { Disable-WindowsOptionalFeature -Online -FeatureName "Recall" -NoRestart -ErrorAction SilentlyContinue | Out-Null } | Out-Null
             Write-Log "Recall disabled + removal enforced by policy (AllowRecallEnablement=0, takes effect after restart)"
         }
     },
@@ -1103,7 +1196,7 @@ $AllTweaks = @(
         Category = "Windows"
         Group    = "Bloatware"
         Action   = {
-            foreach ($app in (Get-BloatPatterns)) { Get-AppxPackage -AllUsers $app | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue }
+            Invoke-WithUi "Removing preinstalled apps" { param($pats) foreach ($app in $pats) { Get-AppxPackage -AllUsers $app | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue } } ([string[]](Get-BloatPatterns)) | Out-Null
             Write-Log "Bloatware removed"
         }
     },
@@ -1165,7 +1258,7 @@ $AllTweaks = @(
     # == WINDOWS / PRIVACY ================================================
     [PSCustomObject]@{
         Name     = "Disable Telemetry & Data Collection"
-        Desc     = "Deaktiviert alle Windows-Telemetriedienste (DiagTrack, dmwappushservice). Windows sendet dann keine Nutzungsdaten mehr an Microsoft. Empfohlen für alle Nutzer."
+        Desc     = "Schaltet die Telemetrie-Dienste 'Benutzererfahrungen und Telemetrie im verbundenen Modus' (DiagTrack) und dmwappushservice ab und setzt die Diagnosedaten-Richtlinie auf die niedrigste Stufe. Ganz aus (Stufe 0, 'Sicherheit') gibt es laut Microsoft nur in Enterprise, Education und Server - Home und Pro behandeln 0 wie 'Erforderliche Diagnosedaten'. Einzelne Apps wie Office oder Edge senden über eigene Wege weiter. Empfohlen für alle Nutzer."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
@@ -1180,10 +1273,11 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Activity History"
-        Desc     = "Deaktiviert die Windows Aktivitätsverlauf-Funktion (Timeline). Windows speichert dann nicht mehr welche Apps und Dateien du geöffnet hast."
+        Desc     = "Ab Pro: Deaktiviert den Aktivitätsverlauf per offizieller Richtlinie. Windows speichert dann nicht mehr, welche Apps und Dateien du geöffnet hast. Windows Home wertet die Richtlinie laut Microsoft nicht aus - dort ist der Tweak ausgegraut (unter Home: Einstellungen > Datenschutz > Aktivitätsverlauf)."
         Category = "Windows"
         Group    = "Privacy"
         Action   = {
+            if (Test-HomeEdition) { Write-Log "Activity History policy skipped: Windows Home doesn't read it"; return }
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v EnableActivityFeed /t REG_DWORD /d 0 /f | Out-Null
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v PublishUserActivities /t REG_DWORD /d 0 /f | Out-Null
             Write-Log "Activity History disabled"
@@ -1330,7 +1424,7 @@ $AllTweaks = @(
     # == WINDOWS / PERFORMANCE ============================================
     [PSCustomObject]@{
         Name     = "Ultimate Performance Plan"
-        Desc     = "Aktiviert den 'Ultimative Leistung' Energiesparplan und stellt ihn auf 'immer an': die CPU drosselt nicht mehr runter UND der PC geht nicht mehr in den Ruhemodus - Monitor, Festplatten und System bleiben an (kein Timeout). Maximale Performance zu jeder Zeit. Erhöht den Stromverbrauch."
+        Desc     = "Aktiviert den 'Ultimative Leistung' Energiesparplan und stellt ihn auf 'immer an': die CPU drosselt nicht mehr runter UND der PC geht nicht mehr in den Ruhemodus - Monitor, Festplatten und System bleiben an (kein Timeout). Maximale Performance zu jeder Zeit. Erhöht den Stromverbrauch. Auf Laptops gilt 'immer an' nur im Netzbetrieb."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -1358,10 +1452,13 @@ $AllTweaks = @(
                 # "Ultimate Performance" = a true always-on desktop plan: never sleep,
                 # never turn off the display or disks, no hibernate timeout -- set on
                 # THIS plan only (AC + DC). This is what users expect from "max power".
+                # With a battery only "plugged in": on battery the plan keeps its own timeouts.
+                $acOnly = Test-HasBattery
                 foreach ($s in @(@("SUB_SLEEP","STANDBYIDLE"), @("SUB_SLEEP","HIBERNATEIDLE"), @("SUB_VIDEO","VIDEOIDLE"), @("SUB_DISK","DISKIDLE"))) {
                     powercfg /SETACVALUEINDEX $guid $s[0] $s[1] 0 2>$null | Out-Null
-                    powercfg /SETDCVALUEINDEX $guid $s[0] $s[1] 0 2>$null | Out-Null
+                    if (-not $acOnly) { powercfg /SETDCVALUEINDEX $guid $s[0] $s[1] 0 2>$null | Out-Null }
                 }
+                if ($acOnly) { Write-Log "Ultimate Performance Plan: battery found -- 'never sleep / display off' set for 'plugged in' only" }
                 powercfg -setactive $guid 2>$null
                 # Remember the activated GUID so the status check works locale-independently
                 reg add "HKLM\SOFTWARE\GameOptimizerPro" /v UltimatePerfGuid /t REG_SZ /d $guid /f | Out-Null
@@ -1378,8 +1475,8 @@ $AllTweaks = @(
         }
     },
     [PSCustomObject]@{
-        Name     = "Disable HPET (High Precision Event Timer)"
-        Desc     = "Deaktiviert den High Precision Event Timer. Kann die System-Latenz reduzieren und Gaming-Performance verbessern. Auf manchen Systemen sorgt dies für niedrigere Frame-Zeiten."
+        Name     = "Disable Dynamic Tick (bcdedit)"
+        Desc     = "Früher 'Disable HPET'. Schaltet per bcdedit den 'Dynamic Tick' ab (der Timer-Takt läuft auch im Leerlauf weiter) und lässt Windows die Plattform-Uhr als Taktgeber nehmen (useplatformtick). Ein erzwungenes HPET (useplatformclock) wird entfernt - HPET selbst schaltet der Tweak nicht ab, das geht nur im BIOS. Manche Spieler berichten von gleichmäßigeren Frametimes, belegt ist das nicht; Microsoft beschreibt beide Optionen als Einstellungen nur zur Fehlersuche, und im Leerlauf braucht der PC etwas mehr Strom. Deshalb in keinem Preset. Neustart nötig."
         Category = "Windows"
         Group    = "Performance"
         Action   = {
@@ -1390,7 +1487,7 @@ $AllTweaks = @(
                 $out = bcdedit /set $opt yes 2>&1
                 if ($LASTEXITCODE -ne 0) { throw "bcdedit /set $opt failed: $(($out | Out-String).Trim())" }
             }
-            Write-Log "HPET disabled"
+            Write-Log "Dynamic tick disabled, platform tick on (bcdedit; forced HPET removed)"
         }
     },
     [PSCustomObject]@{
@@ -1672,10 +1769,11 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Storage Sense"
-        Desc     = "Deaktiviert Storage Sense (automatische Speicherbereinigung). Windows löscht dann nicht mehr eigenmächtig temporäre Dateien oder Papierkorb-Inhalte -- du behältst die volle Kontrolle."
+        Desc     = "Deaktiviert Storage Sense (automatische Speicherbereinigung). Windows löscht dann nicht mehr eigenmächtig temporäre Dateien oder Papierkorb-Inhalte -- du behältst die volle Kontrolle. Ab Pro: Windows Home wertet die Richtlinie laut Microsoft nicht aus - dort ist der Tweak ausgegraut (unter Home: Einstellungen > System > Speicher)."
         Category = "Windows"
         Group    = "Quality of Life"
         Action   = {
+            if (Test-HomeEdition) { Write-Log "Storage Sense policy skipped: Windows Home doesn't read it"; return }
             reg add "HKLM\Software\Policies\Microsoft\Windows\StorageSense" /v AllowStorageSenseGlobal /t REG_DWORD /d 0 /f | Out-Null
             Write-Log "Storage Sense disabled"
         }
@@ -1693,10 +1791,11 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Lock Screen"
-        Desc     = "Deaktiviert den Sperrbildschirm. Beim Start/Aufwachen geht es direkt zum Login-Feld -- spart einen Klick bzw. Wisch."
+        Desc     = "Deaktiviert den Sperrbildschirm. Beim Start/Aufwachen geht es direkt zum Login-Feld -- spart einen Klick bzw. Wisch. Ab Pro: Windows Home wertet die Richtlinie laut Microsoft nicht aus - dort ist der Tweak ausgegraut."
         Category = "Windows"
         Group    = "Quality of Life"
         Action   = {
+            if (Test-HomeEdition) { Write-Log "Lock screen policy skipped: Windows Home doesn't read it"; return }
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /t REG_DWORD /d 1 /f | Out-Null
             Write-Log "Lock screen disabled"
         }
@@ -1880,7 +1979,7 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Increase GPU Timeout Tolerance (TDR)"
-        Desc     = "Erhöht die GPU-Timeout-Toleranz (TDR-Delay von 2s auf 10s). Windows setzt den Grafiktreiber dann nicht mehr vorschnell zurück, wenn die GPU unter Volllast kurz nicht antwortet -- reduziert Blackscreens/Treiber-Resets in fordernden Spielen und beim Übertakten. Hinweis: erhoeht nicht die FPS, sondern die Stabilität."
+        Desc     = "Erhöht die GPU-Timeout-Toleranz (TDR-Delay von 2s auf 10s). Windows setzt den Grafiktreiber dann nicht mehr vorschnell zurück, wenn die GPU unter Volllast kurz nicht antwortet -- kann Blackscreens/Treiber-Resets in fordernden Spielen und beim Übertakten vermeiden. Bringt keine FPS. Microsoft beschreibt die TDR-Werte als Einstellungen nur für Tests und Fehlersuche, die Endnutzer nicht ändern sollen - deshalb in keinem Preset. Nur sinnvoll, wenn Windows wiederholt meldet, dass der Grafiktreiber zurückgesetzt wurde."
         Category = "Gaming"
         Group    = "GPU & Driver"
         Action   = {
@@ -2100,7 +2199,7 @@ $AllTweaks = @(
     # == RAM & STORAGE / MAINTENANCE ======================================
     [PSCustomObject]@{
         Name     = "Disable Write-Cache Buffer Flushing"
-        Desc     = "Deaktiviert das erzwungene Leeren des Schreibcache-Puffers bei SSDs. Verbessert die Schreibgeschwindigkeit spürbar (wie das Häkchen im Geräte-Manager). Bei Stromausfall können noch nicht geschriebene Daten verloren gehen - nur für Desktop-PCs mit stabiler Stromversorgung bzw. USV."
+        Desc     = "Deaktiviert das erzwungene Leeren des Schreibcache-Puffers bei SSDs. Verbessert die Schreibgeschwindigkeit spürbar (wie das Häkchen im Geräte-Manager). ACHTUNG: Bei Stromausfall oder einem harten Reset (Power-Knopf nach einem Freeze) gehen Daten verloren, die noch im Cache des Laufwerks liegen, und das Dateisystem kann beschädigt werden - Windows warnt im Geräte-Manager selbst davor. Fürs Gaming bringt es praktisch nichts. Nur mit USV; in keinem Preset, beim Anwenden kommt eine eigene Rückfrage."
         Category = "RAM & Storage"
         Group    = "SSD & NVMe"
         Action   = {
@@ -2138,23 +2237,18 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Clean Temp Files"
-        Desc     = "Loescht alle Dateien in %TEMP%, Windows\Temp und Prefetch-Ordner. Gibt Festplattenplatz frei und kann den Boot-Vorgang leicht beschleunigen. Laufende Anwendungen werden nicht beeinflusst."
+        Desc     = "Löscht die Dateien in %TEMP% und Windows\Temp und gibt Speicherplatz frei. Dateien, die gerade in Benutzung sind, bleiben liegen - laufende Programme merken nichts. Verknüpfte Ordner (Junctions, symbolische Links) werden übersprungen, nie das, worauf sie zeigen. Prefetch-Daten löscht 'Clean Prefetch Data'."
         Category = "RAM & Storage"
         Group    = "Maintenance"
         Action   = {
-            $tempPaths = @(
-                $env:TEMP,
-                "$env:SystemRoot\Temp",
-                "$env:SystemRoot\Prefetch"
-            )
-            foreach ($path in $tempPaths) {
+            # 1.2.8: Prefetch is no longer emptied here ("Clean Prefetch Data" does that, and the
+            # first starts after it are slower, not faster)
+            foreach ($path in @($env:TEMP, "$env:SystemRoot\Temp")) {
                 if (Test-Path $path) {
-                    # Skip GameOptimizerPro's own files in %TEMP% (this session's log,
-                    # the startup log, the downloaded script) -- deleting them wiped the
-                    # log of the very run the user may want to open afterwards.
-                    Get-ChildItem -Path $path -Recurse -Force -ErrorAction SilentlyContinue |
-                        Where-Object { $_.Name -notlike "GameOptimizerPro*" } |
-                        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+                    # Skip GameOptimizerPro's own files (this session's log, the startup log,
+                    # the downloaded script, the installer's folder in Windows\Temp) -- deleting
+                    # them wiped the log of the very run the user may want to open afterwards.
+                    Remove-ItemsNoFollow "$path\*" -Skip "GameOptimizerPro*"
                 }
             }
             Write-Log "Temp files cleaned"
@@ -2267,10 +2361,11 @@ $AllTweaks = @(
     },
     [PSCustomObject]@{
         Name     = "Disable Widgets"
-        Desc     = "WIN11: Deaktiviert das Widgets-Panel (Wetter, News, Aktien). Widgets laufen als MSN-Browser im Hintergrund und verbrauchen RAM. Icon wird aus der Taskleiste entfernt."
+        Desc     = "WIN11: Deaktiviert das Widgets-Panel (Wetter, News, Aktien). Widgets laufen als MSN-Browser im Hintergrund und verbrauchen RAM. Icon wird aus der Taskleiste entfernt. Ab Pro: Windows Home wertet die Richtlinie laut Microsoft nicht aus, und den Taskleisten-Schalter sperrt Windows seit 24H2 für Programme - unter Home ist der Tweak deshalb ausgegraut (dort: Rechtsklick auf die Taskleiste > Taskleisteneinstellungen > Widgets)."
         Category = "Windows 11"
         Group    = "Taskbar & Shell"
         Action   = {
+            if (Test-HomeEdition) { Write-Log "Widgets skipped: Windows Home doesn't read the policy, and Windows blocks the taskbar switch" ; return }
             reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarDa /t REG_DWORD /d 0 /f | Out-Null
             reg add "HKLM\SOFTWARE\Policies\Microsoft\Dsh" /v AllowNewsAndInterests /t REG_DWORD /d 0 /f | Out-Null
             Write-Log "Win11: Widgets disabled"
@@ -2775,7 +2870,7 @@ $RevertActions = @{
         }
         reg delete "HKLM\SOFTWARE\GameOptimizerPro" /v UltimatePerfGuid /f 2>$null
     }
-    "Disable HPET (High Precision Event Timer)" = {
+    "Disable Dynamic Tick (bcdedit)" = {
         # Remove all three BCD entries instead of forcing useplatformclock=true.
         # The Windows default is that NONE of them are set (the kernel picks the
         # timer source itself); explicitly forcing the platform clock on is a
@@ -3265,19 +3360,19 @@ $CheckFunctions = @{
     "Show File Extensions"               = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "HideFileExt") -eq 0 }
     "Show Hidden Files"                  = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "Hidden") -eq 1 }
     "Disable Reserved Storage"           = { try { $s = @(Get-PassCached 'Reserved' { Get-WindowsReservedStorageState -ErrorAction Stop }) | Select-Object -First 1; if (-not $s) { return $null }; $s.ReservedStorageState -eq "Disabled" } catch { $null } }
-    "Disable Storage Sense"              = { (Get-RegVal "HKLM:\Software\Policies\Microsoft\Windows\StorageSense" "AllowStorageSenseGlobal") -eq 0 }
+    "Disable Storage Sense"              = { if (Test-HomeEdition) { return $null }; (Get-RegVal "HKLM:\Software\Policies\Microsoft\Windows\StorageSense" "AllowStorageSenseGlobal") -eq 0 }
     # Windows rewrites this value at every sign-out with the CURRENT keyboard state
     # ("2" when NumLock was on), so test the NumLock bit (2), not the exact string --
     # comparing against "2147483650" reported the tweak as reverted after every reboot.
     "Num Lock on Startup"                = { $v = Get-RegVal "HKCU:\Control Panel\Keyboard" "InitialKeyboardIndicators"; $n = 0L; if ($null -ne $v -and [int64]::TryParse("$v", [ref]$n)) { ($n -band 2) -ne 0 } else { $false } }
-    "Disable Lock Screen"                = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization" "NoLockScreen") -eq 1 }
+    "Disable Lock Screen"                = { if (Test-HomeEdition) { return $null }; (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization" "NoLockScreen") -eq 1 }
     "Enable Long Paths"                  = { (Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" "LongPathsEnabled") -eq 1 }
 
     # Both halves of the Apply: Home/Pro treat AllowTelemetry=0 like 1 (0 is Enterprise
     # only), so the stopped DiagTrack service is what really counts there -- an update
     # that turns it back on must show as drift even while the policy value is still set.
     "Disable Telemetry & Data Collection" = { $s = Get-Service DiagTrack -EA SilentlyContinue; ((-not $s) -or $s.StartType -eq "Disabled") -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection" "AllowTelemetry") -eq 0) }
-    "Disable Activity History"           = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" "EnableActivityFeed") -eq 0 }
+    "Disable Activity History"           = { if (Test-HomeEdition) { return $null }; (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" "EnableActivityFeed") -eq 0 }
     "Disable Advertising ID"             = { (Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" "Enabled") -eq 0 }
     "Disable Text & Image Generation (AI)" = { (Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy" "LetAppsAccessSystemAIModels") -eq 2 }
     "Disable Click to Do & Settings Agent (AI)" = { ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableClickToDo") -eq 1) -and ((Get-RegVal "HKCU:\Software\Policies\Microsoft\Windows\WindowsAI" "DisableClickToDo") -eq 1) -and ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI" "DisableSettingsAgent") -eq 1) }
@@ -3313,7 +3408,7 @@ $CheckFunctions = @{
 
     # PERFORMANCE
     "Ultimate Performance Plan"          = { $g = Get-RegVal "HKLM:\SOFTWARE\GameOptimizerPro" "UltimatePerfGuid"; $a = (powercfg /getactivescheme 2>$null) -join " "; ($g -and $a -match [regex]::Escape($g)) -or ($a -match "Ultimate Performance|Ultimative Leistung") }
-    "Disable HPET (High Precision Event Timer)" = {
+    "Disable Dynamic Tick (bcdedit)" = {
         # HPET is applied via bcdedit (useplatformtick/disabledynamictick), not the
         # timer-resolution registry key -- so read the real BCD state here. bcdedit
         # prints element names + Yes/No in English regardless of Windows locale.
@@ -3453,6 +3548,8 @@ $CheckFunctions = @{
     "Disable Widgets"                    = {
         # The machine policy turns Widgets off completely. On 24H2+ Windows blocks writing
         # TaskbarDa (User Choice Protection Driver), so the policy is what counts there.
+        # Home reads neither the policy nor (since 24H2) a TaskbarDa written by a program.
+        if (Test-HomeEdition) { return $null }
         ((Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Dsh" "AllowNewsAndInterests") -eq 0) -or ((Get-RegVal "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarDa") -eq 0)
     }
     "Disable Recommended in Start Menu"  = {
@@ -3640,21 +3737,21 @@ $TweakDescEN = @{
     "Show File Extensions"                        = "Shows file extensions in Explorer (e.g. .exe, .txt, .jpg). Important for security -- disguised files like 'photo.jpg.exe' become immediately visible."
     "Show Hidden Files"                           = "Shows hidden files and folders in Explorer. Useful for seeing AppData, config files and hidden folders."
     "Disable Reserved Storage"                    = "Disables the reserved storage Windows sets aside for updates (~7 GB). Frees that space on the system drive. Windows then manages updates dynamically."
-    "Disable Storage Sense"                       = "Disables Storage Sense (automatic disk cleanup). Windows will no longer delete temp files or Recycle Bin contents on its own -- you keep full control."
+    "Disable Storage Sense"                       = "Disables Storage Sense (automatic disk cleanup). Windows will no longer delete temp files or Recycle Bin contents on its own -- you keep full control. Pro and up: Windows Home doesn't read this policy according to Microsoft, so it is greyed out there (on Home: Settings > System > Storage)."
     "Num Lock on Startup"                         = "Enables NumLock automatically at system startup and on the login screen. Handy if you want to use the numpad right away."
-    "Disable Lock Screen"                         = "Disables the lock screen. On start/wake it goes straight to the login field -- saves a click or swipe."
+    "Disable Lock Screen"                         = "Disables the lock screen. On start/wake it goes straight to the login field -- saves a click or swipe. Pro and up: Windows Home doesn't read this policy according to Microsoft, so it is greyed out there."
     "Enable Long Paths"                           = "Enables paths longer than 260 characters. Helpful for deep folder structures, game mods, Node projects etc. -- prevents 'path too long' errors."
     "Remove Xbox Apps" = "Removes the Xbox Game Bar, Xbox Identity Provider, Xbox TCUI and the speech overlay (on Windows 10 also the old Xbox app). These apps run in the background even without an Xbox. WARNING: afterwards the Xbox sign-in for Game Pass and Microsoft Store games (Xbox Identity Provider), Xbox mode and Game Bar recordings are missing until you reinstall the apps from the Microsoft Store. The Xbox app itself (Game Pass) stays. Steam, Epic and other games keep working."
-    "Remove Copilot"                              = "Disables and removes Windows Copilot AI assistant. Prevents Copilot from running in the background and sending data."
+    "Remove Copilot"                              = "Removes the Copilot app (AI assistant) for all accounts and also sets the old 'Turn off Windows Copilot' policy. According to Microsoft that policy only affects the former Copilot sidebar built into Windows, not today's Copilot app -- removing the app is what counts. It comes back through the Microsoft Store. Microsoft 365 Copilot in Office is not touched."
     "Remove OneDrive"                             = "Completely uninstalls OneDrive including autostart and Explorer integration. Local files remain untouched."
-    "Remove Windows Recall"                       = "Disables AND removes Windows Recall  --  the AI feature that takes screenshots of your activity. Uses Microsoft's official policies: snapshots off + Recall component removed from the system (existing snapshots are deleted). Restart required."
+    "Remove Windows Recall"                       = "Disables AND removes Windows Recall  --  the AI feature that takes screenshots of your activity. Uses Microsoft's official policies: Recall not allowed + Recall component removed from the system (existing snapshots are deleted), plus 'snapshots off' -- Windows reads that one only on Enterprise / Education according to Microsoft; on Home and Pro the other two steps make sure Recall is gone. Restart required."
     "Remove Other Bloatware"                      = "Removes pre-installed apps Windows or the PC maker put there: Candy Crush and other promoted games, News, Weather, Solitaire, Clipchamp, Microsoft To Do, Feedback Hub, Tips, Power Automate and the Mixed Reality Portal. The confirmation before applying lists which of them are on your PC. Apps you installed yourself (Spotify, Netflix, Instagram ...), the Media Player and Get Help stay. The apps come back through the Microsoft Store."
     "Stop Auto-Installed Suggested Apps"          = "Stops Windows from silently installing suggested apps and games (e.g. Candy Crush, TikTok), including the ones planned by the PC maker and Microsoft. Works on every edition including Home and Pro. Apps already installed stay -- use 'Remove Other Bloatware' for those."
     "Disable Tips, Ads & Suggestions" = "Turns off the ads, tips and suggestions Windows sprinkles everywhere: tip notifications, the 'finish setting up' pages and the welcome page after updates, suggestions in Settings and Start, account notices (Microsoft 365, OneDrive backup) in Start and Settings, and sync-provider ads in File Explorer. Windows Spotlight pictures on the lock screen stay, only the tips on them go -- the tweak deliberately leaves the master switch 'ContentDeliveryAllowed' alone, because it is not documented whether it also turns Spotlight off. Works on every edition. Recommendations in Start: 'Disable Recommended in Start Menu'."
     "Stop OneDrive Folder Backup" = "Uses the official OneDrive policy to stop OneDrive from moving Desktop, Documents and Pictures into the cloud ('folder backup') -- not even after asking during setup. Works on every edition. Folders that are already backed up stay in OneDrive; you get them back in OneDrive under Settings > Sync and backup. Without OneDrive installed nothing visible changes, but the policy applies if OneDrive comes back."
     "Disable Get Started & Copilot Sign-in Screens" = "Enterprise / Education only: the 'Get Started' app no longer launches automatically, and the Microsoft 365 Copilot setup promotion at sign-in is gone (that second policy only exists in Insider builds so far). According to Microsoft, Home and Pro ignore both policies -- there the tweak changes nothing and its status stays grey. Copilot itself stays usable."
-    "Disable Telemetry & Data Collection"         = "Disables all Windows telemetry services (DiagTrack, dmwappushservice). Windows stops sending usage data to Microsoft."
-    "Disable Activity History"                    = "Disables Windows Timeline/Activity History. Windows stops tracking which apps and files you open."
+    "Disable Telemetry & Data Collection"         = "Turns off the telemetry services 'Connected User Experiences and Telemetry' (DiagTrack) and dmwappushservice and sets the diagnostic data policy to its lowest level. Fully off (level 0, 'Security') exists only in Enterprise, Education and Server according to Microsoft -- Home and Pro treat 0 as 'Required diagnostic data'. Single apps such as Office or Edge keep sending through their own channels. Recommended for everyone."
+    "Disable Activity History"                    = "Pro and up: turns off Activity History by official policy. Windows stops tracking which apps and files you open. Windows Home doesn't read this policy according to Microsoft, so it is greyed out there (on Home: Settings > Privacy > Activity history)."
     "Disable Advertising ID"                      = "Disables the advertising ID Windows assigns each user. Apps can no longer track you across devices for targeted ads."
     "Disable Text & Image Generation (AI)"        = "Disables device-wide Text and Image Generation (on-device generative AI) for all apps via policy (Force Deny). Affects only local on-device AI, not cloud AI services."
     "Disable Click to Do & Settings Agent (AI)"   = "Turns off 'Click to Do' (AI that takes a screenshot on demand and analyzes what's on screen) and the AI agent in the Settings search (new in 26H2). Official Microsoft policies. Both only run on Copilot+ PCs with an NPU -- harmless on other PCs. Note: Click to Do is turned off on every edition; according to Microsoft, Windows only honours the Settings-agent policy on Enterprise/Education - on Home/Pro the agent stays on."
@@ -3664,8 +3761,8 @@ $TweakDescEN = @{
     "Disable Scheduled Telemetry Tasks" = "Disables the scheduled Windows tasks that collect and send telemetry and usage data: the compatibility appraiser and the other compatibility tasks (MareBackup, PcaPatchDbTask, StartupAppTask), the Customer Experience Improvement Program (CEIP), disk diagnostics, feedback prompts, the upload of collected error reports and the power efficiency analysis. Tasks this Windows doesn't have are skipped. A big Windows update can switch single ones back on -- the drift check reports it."
     "Disable Input & Speech Data Collection" = "Turns off data collection for input and speech, as under Settings > Privacy: online speech recognition, inking & typing personalization (Windows no longer learns from your typing, handwriting and contacts), 'improve inking and typing', tailored experiences with diagnostic data and feedback prompts (frequency 'Never', from Pro also by policy). Websites can no longer read your language list, and Windows stops tracking which apps you start -- so 'Most used' in Start stays empty. Dictation with Win+H can be limited without online speech recognition. Works on every edition."
     "Disable Remote Assistance" = "Turns off Windows Remote Assistance (System Properties > Remote: 'Allow Remote Assistance connections to this computer'). Nobody can connect to your PC through an invitation any more. Remote Desktop, the Quick Assist app and tools like AnyDesk or TeamViewer are not affected. Works on every edition."
-    "Ultimate Performance Plan"                   = "Activates the 'Ultimate Performance' power plan and sets it to always-on: Windows stops throttling CPU cores AND the PC no longer sleeps -- display, disks and system stay on (no timeout). Maximum performance at all times. Increases power consumption."
-    "Disable HPET (High Precision Event Timer)"   = "Disables the High Precision Event Timer. Can reduce system latency and improve gaming performance on some systems with lower frame times."
+    "Ultimate Performance Plan"                   = "Activates the 'Ultimate Performance' power plan and sets it to always-on: Windows stops throttling CPU cores AND the PC no longer sleeps -- display, disks and system stay on (no timeout). Maximum performance at all times. Increases power consumption. On laptops 'always on' applies only while plugged in."
+    "Disable Dynamic Tick (bcdedit)"   = "Formerly 'Disable HPET'. Uses bcdedit to turn off the 'dynamic tick' (the timer keeps ticking while the PC is idle) and to make Windows use the platform clock for the tick (useplatformtick). A forced HPET (useplatformclock) is removed -- the tweak does not switch HPET itself off, only the BIOS can. Some gamers report smoother frame times, which is not proven; Microsoft documents both options as debugging settings, and the PC draws a bit more power at idle. That's why it is in no preset. Restart required."
     "Allow Global Timer Resolution (Windows 11)"                  = "Since Windows 10 2004 a raised timer resolution only applies to the program that requests it - on Windows 11 not even while that program is minimized. This restores the old system-wide behavior. It is the prerequisite for timer tools such as TimerResolution or ISLC; it does NOT set a resolution by itself - games request their ~1 ms anyway. Restart required."
     "Disable Prefetch & Superfetch"               = "Disables Prefetch and SysMain (Superfetch). Recommended for SSDs  --  not for HDDs. Reduces background disk writes and RAM usage."
     "Optimize Visual Effects (Performance Mode)" = "Turns off the Windows animations and visual effects like 'Adjust for best performance' (System Properties > Performance Options): window, menu and taskbar animations, fades, shadows under windows and the mouse pointer, window contents while dragging, the translucent selection rectangle and icon label shadows. Font smoothing (ClearType) stays on so text stays sharp. Takes full effect after signing out and in again. Windows feels noticeably snappier, especially on weaker systems."
@@ -3684,7 +3781,7 @@ $TweakDescEN = @{
     "Enable MSI Mode (Message Signaled Interrupts)" = "Enables MSI mode for the primary GPU. Significantly reduces interrupt latency compared to Line-Based Interrupts. Reboot recommended."
     "Enable Hardware-Accelerated GPU Scheduling (HAGS)" = "Enables HAGS -- Windows hands GPU scheduling directly to the hardware instead of the software. Reduces CPU overhead and slightly lowers input lag. Needs NVIDIA RTX 2000+ or AMD RX 5000+ and Windows 10 2004+. Usually on already on current Windows 11 PCs; DLSS Frame Generation needs it. Revert puts back what was set before."
     "Clear Shader Cache"                          = "Clears the NVIDIA/AMD shader cache on disk. Forces fresh shader compilation on next game launch. Useful after driver updates or graphical glitches."
-    "Increase GPU Timeout Tolerance (TDR)"             = "Raises the GPU timeout tolerance (TDR delay 2s -> 10s) so Windows doesn't reset the graphics driver prematurely when the GPU stalls briefly under heavy load. Reduces black-screens / driver resets in demanding games and when overclocking. Note: improves stability, not FPS."
+    "Increase GPU Timeout Tolerance (TDR)"             = "Raises the GPU timeout tolerance (TDR delay 2s -> 10s) so Windows doesn't reset the graphics driver prematurely when the GPU stalls briefly under heavy load. Can prevent black screens / driver resets in demanding games and when overclocking. No FPS gain. Microsoft documents the TDR values as settings for testing and debugging only that end users shouldn't change -- that's why it is in no preset. Only worth it if Windows keeps reporting that the display driver was reset."
     "Disable Nagle's Algorithm (TCPNoDelay)"      = "Disables Nagle's Algorithm on all network adapters. Nagle buffers small packets at the cost of latency. Disabling noticeably reduces ping in online games."
     "Disable Large Send Offload (LSO)"            = "Disables Large Send Offload on all active network adapters. Can reduce ping spikes on some systems in online games."
     "Disable Network Throttling Index"            = "Disables Windows' network throttling index, which slows down network packets under high CPU load. Most useful for latency-sensitive gaming while the CPU is busy. Also sets SystemResponsiveness to 10 (the smallest value Windows accepts; smaller values are treated like 20)."
@@ -3701,9 +3798,9 @@ $TweakDescEN = @{
     "Disable Memory Compression"                  = "Disables RAM compression in Windows. Saves CPU cycles during gaming. Recommended when you have enough RAM (16GB+)."
     "Enable SSD TRIM"                             = "Enables TRIM for all connected SSDs. Informs the SSD about unused blocks  --  maintains SSD performance long-term and extends lifespan."
     "Disable Scheduled Defragmentation"           = "Turns off the weekly 'Optimize drives' task. On hard disks (HDD) that is defragmentation, on SSDs only a 'retrim' that tells the SSD which blocks are free -- Windows does not defragment SSDs. Only useful if you want to start the optimization yourself (Optimize drives > Optimize); not recommended for SSDs. In no preset."
-    "Disable Write-Cache Buffer Flushing"         = "Disables forced write-cache buffer flushing for SSDs. Noticeably improves write speed (same as the checkbox in Device Manager). If the power fails, data not yet written can be lost - desktop PCs with stable power or a UPS only."
+    "Disable Write-Cache Buffer Flushing"         = "Disables forced write-cache buffer flushing for SSDs. Noticeably improves write speed (same as the checkbox in Device Manager). WARNING: on a power cut or a hard reset (holding the power button after a freeze) data still in the drive's cache is lost and the file system can be damaged -- Windows itself warns about this in Device Manager. Practically no gain for gaming. Only with a UPS; in no preset, and the Apply asks once more."
     "Disable Hibernation"                         = "Disables hibernate and deletes hiberfil.sys. Frees several GB of disk space (about 40 % of your RAM). Fast Startup goes off too -- it needs hibernation; Windows then shuts down completely and starts a few seconds slower. Recommended for desktop PCs."
-    "Clean Temp Files"                            = "Deletes all files in %TEMP%, Windows\Temp and Prefetch folders. Frees disk space and can slightly speed up boot."
+    "Clean Temp Files"                            = "Deletes the files in %TEMP% and Windows\Temp to free disk space. Files that are in use stay -- running programs don't notice. Linked folders (junctions, symbolic links) are skipped, never what they point to. Prefetch data is cleaned by 'Clean Prefetch Data'."
     "Clean Browser Caches"                        = "Clears the caches of Chrome, Edge and Firefox (cache only -- no passwords/history/bookmarks). Often frees several hundred MB. Browsers should be closed."
     "Clean Windows Update Cache"                   = "Deletes the downloaded Windows Update cache (SoftwareDistribution\Download). Safe -- Windows re-downloads as needed. The update service is briefly stopped and restarted."
     "Clean Thumbnail Cache"                        = "Deletes the Explorer thumbnail database. Windows rebuilds it on demand. Fixes broken/outdated thumbnails and frees space."
@@ -3712,7 +3809,7 @@ $TweakDescEN = @{
     "Clean System Logs & Crash Dumps"             = "Deletes Windows temp, CBS logs, crash dumps and error-report files. Purely diagnostic data -- safe to remove, often frees noticeable space."
     "Restore Classic Right-Click Menu"            = "WIN11: Restores the Windows 10 classic right-click menu. No more 'Show more options' click needed to access common options."
     "Left-Align Taskbar"                          = "WIN11: Moves taskbar icons to the left like Windows 10. Windows 11 centers icons by default. Takes effect after Explorer restart."
-    "Disable Widgets"                             = "WIN11: Disables the Widgets panel (Weather, News, Stocks). Widgets run as an MSN browser process in the background consuming RAM."
+    "Disable Widgets"                             = "WIN11: Disables the Widgets panel (Weather, News, Stocks). Widgets run as an MSN browser process in the background consuming RAM. Pro and up: Windows Home doesn't read the policy according to Microsoft, and since 24H2 Windows blocks programs from flipping the taskbar switch -- so it is greyed out on Home (there: right-click the taskbar > Taskbar settings > Widgets)."
     "Disable Recommended in Start Menu" = "WIN11: Empties the 'Recommended' section in Start on every edition: no recently opened files and no tips or app recommendations (this also clears 'Recent' in File Explorer and the taskbar jump lists). Hiding the section completely takes a policy -- according to Microsoft from Pro up; on Home the empty section stays."
     "Enable End Task in Taskbar"                  = "WIN11: Enables 'End Task' directly in the taskbar right-click menu. Kill unresponsive processes without opening Task Manager."
     "Disable Snap Layout Hover Menu"              = "WIN11: Disables the Snap Layout popup when hovering over the maximize button. Prevents accidental snapping while gaming."
@@ -4455,7 +4552,7 @@ $Script:TweakRows    = @{}   # Name -> @{ Card; Desc; Tweak }
 $Script:GroupHeaders = @()   # @{ Root; Names; Cat }
 $Script:CatNotices   = @()   # banners hidden while searching
 $Script:OneTimeNames = @($CheckFunctions.Keys | Where-Object { $CheckFunctions[$_].ToString().Trim() -eq '$null' })
-$Script:RestartTweaks = @("Remove Windows Recall", "Disable HPET (High Precision Event Timer)", "Allow Global Timer Resolution (Windows 11)",
+$Script:RestartTweaks = @("Remove Windows Recall", "Disable Dynamic Tick (bcdedit)", "Allow Global Timer Resolution (Windows 11)",
     "Process Count Reduction (Svchost)", "Enable MSI Mode (Message Signaled Interrupts)", "Enable Hardware-Accelerated GPU Scheduling (HAGS)",
     "Disable Write-Cache Buffer Flushing", "Disable Windows Platform Binary Table (WPBT)", "Disable Memory Compression",
     "Disable Energy-Efficient Ethernet", "Disable Interrupt Moderation")
@@ -4463,11 +4560,19 @@ $Script:RestartTweaks = @("Remove Windows Recall", "Disable HPET (High Precision
 $Script:SignOutTweaks = @("Optimize Visual Effects (Performance Mode)", "Stop Background Apps (All Editions)", "Disable File Explorer Automatic Folder Discovery")
 $Script:EnterpriseOnly = @("Disable Get Started & Copilot Sign-in Screens", "Disable Consumer Features")
 # Policies Windows reads from Pro upwards (Policy CSP: Pro / Enterprise / Education) -- greyed out on Home
-$Script:ProOnly = @("Block Background Apps (Policy)", "Exclude Drivers from Windows Update", "Hold Feature Updates (Stay on Current Version)")
+# (1.2.8: + Lock Screen, Storage Sense, Activity History, Widgets -- Home showed them as active
+# while Windows ignored them; Widgets' own TaskbarDa switch is blocked by Windows since 24H2)
+$Script:ProOnly = @("Block Background Apps (Policy)", "Exclude Drivers from Windows Update", "Hold Feature Updates (Stay on Current Version)",
+    "Disable Lock Screen", "Disable Storage Sense", "Disable Activity History", "Disable Widgets")
 $Script:AppRemovals = @("Remove Xbox Apps", "Remove Copilot", "Remove OneDrive", "Remove Windows Recall", "Remove Other Bloatware")
 
+$Script:HasBattery = Test-HasBattery
 function Get-TweakDesc($Tweak) {
     $d = if ($LangState.Current -eq "DE") { $Tweak.Desc } elseif ($TweakDescEN.ContainsKey($Tweak.Name)) { $TweakDescEN[$Tweak.Name] } else { $Tweak.Desc }
+    # the power plan tweaks leave the battery values alone on a PC with a battery (Set-PowerAllSchemes)
+    if ($Script:HasBattery -and $Tweak.Category -eq 'Power Plan') {
+        $d += $(if ($LangState.Current -eq "DE") { " Dieser PC hat einen Akku: Der Tweak ändert nur die Werte für 'Netzbetrieb', der Akkubetrieb bleibt, wie er ist." } else { " This PC has a battery: the tweak only changes the 'plugged in' values, battery mode stays as it is." })
+    }
     $d -replace '\s+--\s+', $Script:EmDash
 }
 
@@ -4504,7 +4609,7 @@ function New-TweakRow {
     # Shown for texts longer than about two lines in the current language (see Set-DescLanguage).
     $more = $null
     $en = if ($TweakDescEN.ContainsKey($name)) { $TweakDescEN[$name] } else { '' }
-    if ([math]::Max($Tweak.Desc.Length, $en.Length) -gt 240) {
+    if ([math]::Max($Tweak.Desc.Length, $en.Length) + $(if ($Script:HasBattery -and $Tweak.Category -eq 'Power Plan') { 140 } else { 0 }) -gt 240) {
         $more = New-Text 'Show more' 11.5 $U.ACC 'SemiBold' -Margin 0, 2, 0, 0
         $more.Cursor = [System.Windows.Input.Cursors]::Hand; $more.HorizontalAlignment = 'Left'
         $more.Visibility = $(if ($d.Length -gt 240) { 'Visible' } else { 'Collapsed' })
@@ -4821,10 +4926,12 @@ try {
 # newlines) -- avoids PowerShell 5.1's ConvertTo-Json single/nested-array quirks.
 $Script:BaselineFile = "$env:LOCALAPPDATA\GameOptimizerPro\baseline.txt"
 
-# Tweaks renamed in 1.2.6 -- their old names in a baseline or a saved selection still count
+# Renamed tweaks -- their old names in a baseline or a saved selection still count
+# (1.2.6: the first two; 1.2.8: the "HPET" tweak never switched HPET off)
 $Script:RenamedTweaks = @{
-    'Disable Windows Update during Gaming' = 'Disable Automatic Windows Updates'
-    'Disable Background App Throttling'    = 'Stop Background Apps (All Editions)'
+    'Disable Windows Update during Gaming'      = 'Disable Automatic Windows Updates'
+    'Disable Background App Throttling'         = 'Stop Background Apps (All Editions)'
+    'Disable HPET (High Precision Event Timer)' = 'Disable Dynamic Tick (bcdedit)'
 }
 
 # Services Manager: the start type a service had before "Disable" here, so "Enable" brings
@@ -4880,45 +4987,59 @@ function Save-SvcOriginal($Map) {
 # The baseline lists the tweaks THIS APP applied (line 1: "# GameOptimizerPro v<version>").
 # Until 1.2.5 it listed every tweak that was active after an Apply -- also settings Windows or
 # the user had made themselves -- and "Revert all" set every tweak back, applied or not.
+# 1.2.8: the names of such an old list (no header line) are kept apart as Legacy -- written back
+# as "? <name>" lines. Revert all doesn't set them back on its own; it ticks the ones still active
+# for the user to check. An Apply that applies one of them again makes it a normal entry.
 function Read-Baseline {
-    $r = @{ Version = $null; Names = @() }
+    $r = @{ Version = $null; Names = @(); Legacy = @() }
     if (-not (Test-Path $Script:BaselineFile)) { return $r }
     try { $lines = @(Get-Content $Script:BaselineFile -ErrorAction Stop) } catch { return $r }
     $map = $Script:RenamedTweaks
     $known = @($AllTweaks | ForEach-Object { $_.Name })
+    $names = @(); $legacy = @()
     foreach ($l in $lines) {
         $t = "$l".Trim()
         if (-not $t) { continue }
         if ($t -match '^#\s*GameOptimizerPro\s+v?([0-9][0-9.]*)') { $r.Version = $matches[1]; continue }
         if ($t.StartsWith('#')) { continue }
+        $old = $t.StartsWith('?')
+        if ($old) { $t = $t.Substring(1).Trim() }
         if ($map -and $map.ContainsKey($t)) { $t = $map[$t] }
         if ($known.Count -and $known -notcontains $t) { continue }     # removed in a later version
-        $r.Names += $t
+        if ($old) { $legacy += $t } else { $names += $t }
     }
-    $r.Names = @($r.Names | Select-Object -Unique)
+    if (-not $r.Version) { $legacy = @($names) + @($legacy); $names = @() }   # written by 1.2.5 or older
+    $r.Names  = @($names | Select-Object -Unique)
+    $r.Legacy = @($legacy | Select-Object -Unique | Where-Object { $r.Names -notcontains $_ })
     $r
 }
-function Write-Baseline([string[]]$Names) {
+function Write-Baseline([string[]]$Names, [string[]]$Legacy = @()) {
     try {
         $dir = Split-Path $Script:BaselineFile
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-        Set-Content -Path $Script:BaselineFile -Value (@("# GameOptimizerPro v$($Script:AppVersion)") + @($Names | Where-Object { $_ } | Select-Object -Unique)) -Encoding UTF8 -ErrorAction Stop
+        $n  = @($Names | Where-Object { $_ } | Select-Object -Unique)
+        $lg = @($Legacy | Where-Object { $_ -and $n -notcontains $_ } | Select-Object -Unique | ForEach-Object { "? $_" })
+        Set-Content -Path $Script:BaselineFile -Value (@("# GameOptimizerPro v$($Script:AppVersion)") + $n + $lg) -Encoding UTF8 -ErrorAction Stop
         $true
     } catch { Write-Log "Baseline save failed: $_"; $false }
 }
 function Save-Baseline {
-    # Adds the tweaks an Apply just put in effect to the list of what this app applied
-    param([string[]]$Add)
-    $names = @(@((Read-Baseline).Names) + @($Add | Where-Object { $_ }) | Select-Object -Unique)
-    if (Write-Baseline $names) { Write-Log "Baseline saved ($($names.Count) tweaks applied by this app)" }
+    # Adds the tweaks an Apply just put in effect to the list of what this app applied.
+    # -Quiet: the Apply saves after every single tweak (an app closed halfway keeps its record).
+    param([string[]]$Add, [switch]$Quiet)
+    $b = Read-Baseline
+    $names = @(@($b.Names) + @($Add | Where-Object { $_ }) | Select-Object -Unique)
+    if ((Write-Baseline $names $b.Legacy) -and -not $Quiet) { Write-Log "Baseline saved ($($names.Count) tweaks applied by this app$(if ($b.Legacy.Count) { ", $(@($b.Legacy | Where-Object { $names -notcontains $_ }).Count) from an older record" }))" }
 }
 
 # The user declined re-applying these at launch, or set them back: stop tracking them, so the
 # same question doesn't come back on every start. The next Apply records them again.
-function Remove-FromBaseline([string[]]$Names) {
+function Remove-FromBaseline([string[]]$Names, [string]$Why = 're-apply declined or reverted') {
     if (-not (Test-Path $Script:BaselineFile)) { return }
-    $keep = @((Read-Baseline).Names | Where-Object { $Names -notcontains $_ })
-    if (Write-Baseline $keep) { Write-Log "Baseline: no longer tracking (re-apply declined or reverted): $($Names -join ', ')" }
+    $b = Read-Baseline
+    $keep    = @($b.Names | Where-Object { $Names -notcontains $_ })
+    $keepOld = @($b.Legacy | Where-Object { $Names -notcontains $_ })
+    if (Write-Baseline $keep $keepOld) { Write-Log "Baseline: no longer tracking ($Why): $($Names -join ', ')" }
 }
 
 # Current status of one tweak, read fresh ($true only when its check says so)
@@ -4945,7 +5066,11 @@ function Get-DriftedTweaks {
     # e.g. while Windows Update servicing locks the reserved-storage API) is not.
     param([hashtable]$Known = @{})
     $drifted = @()
-    foreach ($n in (Read-Baseline).Names) {
+    $b = Read-Baseline
+    foreach ($n in (@($b.Names) + @($b.Legacy))) {
+        # Microsoft Defender removes the hosts entries on purpose (HostsFileHijack): offering
+        # them again at every start would start the same loop. Revert all still cleans them up.
+        if ($n -eq "Block Telemetry Hosts (hosts file)") { continue }
         if ($Known.ContainsKey($n)) { if ($Known[$n] -eq 'F') { $drifted += $n }; continue }
         if ($CheckFunctions.ContainsKey($n)) {
             try { $r = & $CheckFunctions[$n]; if ($r -is [bool] -and -not $r) { $drifted += $n } } catch { }
@@ -5601,8 +5726,9 @@ function Get-BackupSummary {
 }
 function Get-BaselineSummary {
     if (Test-Path $Script:BaselineFile) {
-        $n = @((Read-Baseline).Names).Count
-        "$n tweaks applied$($Script:Mid)saved $((Get-Item $Script:BaselineFile).LastWriteTime.ToString('dd.MM.yyyy HH:mm'))"
+        $b = Read-Baseline
+        $n = @($b.Names).Count
+        "$n tweaks applied$(if ($b.Legacy.Count) { " (+$($b.Legacy.Count) from an older record)" })$($Script:Mid)saved $((Get-Item $Script:BaselineFile).LastWriteTime.ToString('dd.MM.yyyy HH:mm'))"
     } else { 'created after the first Apply' }
 }
 
@@ -6126,7 +6252,7 @@ function Build-BackupsPage {
         $c = New-Card $v @(0, 0, 0, 0); $c.VerticalAlignment = 'Stretch'; $c
     }
     $b1 = New-Btn 'Open backup folder' $U.VIOLET '#120a24' 0xE838 -Bold; $b1.Add_Click({ Open-BackupFolder })
-    Add-Grid2 $grid (& $mk 'Registry backups' $U.VIOLET 'Before every Apply and Revert, every registry key a tweak touches is exported to .reg files. Double-click one to put the saved values back; _remove-new-keys.reg deletes keys that did not exist yet, _values.reg holds two single values. Values a tweak added to an existing key go away with its revert. The newest 20 backups of this app are kept (those of GameOptimizerPro v2 in the same folder are left alone).' @(
+    Add-Grid2 $grid (& $mk 'Registry backups' $U.VIOLET 'Before every Apply and Revert, every registry key a tweak touches is exported to .reg files. Double-click one to put the saved values back; _remove-new-keys.reg deletes keys that did not exist yet, _values.reg holds two single values. Values a tweak added to an existing key go away with its revert. The newest 20 backups are kept (GameOptimizerPro v2 keeps its own in a folder of its own).' @(
         (New-Text "$($bk.Count) backup(s)$($Script:Mid)last: $($bk.Last)" 12 $U.DIM 'Normal' -Wrap -Margin 0, 8, 0, 0),
         (New-Text $Script:RegistryBackupRoot 11.5 $U.MUTED 'Normal' -Wrap -Mono -Margin 0, 4, 0, 0)) $b1)
     $b2 = New-Btn 'Open log' $U.CARD2 $U.TEXT 0xE838; $b2.Add_Click({ Open-LogFile })
@@ -6171,12 +6297,12 @@ $Script:PresetBalanced = $Script:PresetMinimal + @(
     "Remove Copilot","Remove Windows Recall","Remove Other Bloatware",
     "Stop Auto-Installed Suggested Apps","Disable Tips, Ads & Suggestions","Stop OneDrive Folder Backup","Disable Get Started & Copilot Sign-in Screens",
     "Disable Click to Do & Settings Agent (AI)","Disable AI in Paint & Notepad","Disable Text & Image Generation (AI)",
-    "Block Telemetry Hosts (hosts file)","Disable Input & Speech Data Collection","Disable Remote Assistance",
-    "Ultimate Performance Plan","Disable HPET (High Precision Event Timer)","Allow Global Timer Resolution (Windows 11)",
+    "Disable Input & Speech Data Collection","Disable Remote Assistance",
+    "Ultimate Performance Plan","Allow Global Timer Resolution (Windows 11)",
     "Disable Prefetch & Superfetch","Optimize Visual Effects (Performance Mode)","Disable Startup App Delay","Disable Bing in Windows Search",
     "Disable Store Recommended Search Results","Disable File Explorer Automatic Folder Discovery",
     "Disable Xbox Game Bar",
-    "Enable MSI Mode (Message Signaled Interrupts)","Enable Hardware-Accelerated GPU Scheduling (HAGS)","Increase GPU Timeout Tolerance (TDR)",
+    "Enable MSI Mode (Message Signaled Interrupts)","Enable Hardware-Accelerated GPU Scheduling (HAGS)",
     "AMD: Disable ULPS (Ultra Low Power State)",
     "Disable Audio Enhancements","Optimize MMCSS Audio Profile","Set Audio Service High Priority","Disable Windows Sound Scheme",
     "Disable Large Send Offload (LSO)","Disable Network Adapter Power Saving","Disable Energy-Efficient Ethernet",
@@ -6188,8 +6314,9 @@ $Script:PresetBalanced = $Script:PresetMinimal + @(
 )
 $Script:PresetAggressive = $Script:PresetBalanced + @(
     "Remove Xbox Apps","Remove OneDrive","Block Background Apps (Policy)","Stop Background Apps (All Editions)","Exclude Drivers from Windows Update",
+    "Block Telemetry Hosts (hosts file)",
     "Disable Windows Search Indexing","Process Count Reduction (Svchost)","Disable Interrupt Moderation",
-    "Disable Memory Compression","Disable Write-Cache Buffer Flushing","Disable Hibernation","Clear PageFile on Shutdown",
+    "Disable Memory Compression","Disable Hibernation","Clear PageFile on Shutdown",
     "Disable Reserved Storage","Disable Storage Sense","Disable Lock Screen",
     "Disable Sleep (System)"
 )
@@ -6204,6 +6331,11 @@ $Script:PresetAggressive = $Script:PresetBalanced + @(
 # and since 1.2.6 'Disable Automatic Windows Updates' (no security updates unless you look
 # yourself), 'Disable TCP Auto-Tuning' (caps downloads at the 64 KB window) and 'Disable
 # Scheduled Defragmentation' (on SSDs it only stops the weekly retrim).
+# 1.2.8: 'Disable Write-Cache Buffer Flushing' left Aggressive (a power cut or a hard reset after
+# a freeze can lose data and damage the file system -- it asks first when ticked by hand),
+# 'Disable Dynamic Tick (bcdedit)' and 'Increase GPU Timeout Tolerance (TDR)' left Balanced
+# (Microsoft documents both as settings for debugging / testing only), and 'Block Telemetry
+# Hosts' moved from Balanced to Aggressive (Microsoft Defender reports it as HostsFileHijack).
 
 function Set-Preset {
     param([string[]]$Names, [string]$Label)
@@ -6279,6 +6411,9 @@ function New-RestorePoint([string]$Description) {
         }
         $null = $ps.EndInvoke($handle)
         if ($ps.Streams.Error.Count) { throw $ps.Streams.Error[0] }
+        # Windows PowerShell 5.1 reports "a restore point was created within the past 24 hours"
+        # (and other refusals) as a WARNING, with no point made -- until 1.2.7 that counted as created
+        if ($ps.Streams.Warning.Count) { throw "$($ps.Streams.Warning[0].Message)" }
     } finally {
         $ps.Dispose()
         if ($null -eq $oldFreq -or $oldFreq -eq 0) { Remove-ItemProperty -Path $srKey -Name "SystemRestorePointCreationFrequency" -ErrorAction SilentlyContinue }
@@ -6301,6 +6436,26 @@ function Invoke-ProcessWithUi([string]$FilePath, [string]$Arguments, [string]$Wh
         Start-Sleep -Milliseconds 200
     }
     $p.ExitCode
+}
+# Slow cmdlets (app removals take seconds per package, removing the Recall component up to a
+# minute) on a background runspace while the window keeps answering -- until 1.2.7 they ran on the
+# UI thread and Windows showed "Not responding". $Code must be self-contained (cmdlets only, no
+# functions or variables of this script); $Arg is passed as its one parameter. Returns its output.
+function Invoke-WithUi([string]$What, [scriptblock]$Code, $Arg = $null) {
+    $ps = [powershell]::Create()
+    try {
+        [void]$ps.AddScript($Code.ToString())
+        if ($null -ne $Arg) { [void]$ps.AddArgument($Arg) }
+        $handle = $ps.BeginInvoke()
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        while (-not $handle.IsCompleted) {
+            Set-Status ("$What ... {0} s" -f [int]$sw.Elapsed.TotalSeconds)
+            try { $Window.Dispatcher.Invoke([Action] {}, [System.Windows.Threading.DispatcherPriority]::Background) } catch { }
+            Start-Sleep -Milliseconds 150
+        }
+        $ps.EndInvoke($handle)
+        foreach ($e in @($ps.Streams.Error)) { Write-Log "$($What): $e" }
+    } finally { $ps.Dispose() }
 }
 # Re-reads every tweak's status (dots, counts, $Script:CheckRaw) with a visible progress
 function Update-AllDots([string]$Label) {
@@ -6346,7 +6501,7 @@ $BtnPresetMin.Add_Click({ Set-Preset $Script:PresetMinimal "Minimal"; Show-Prese
 $BtnPresetBal.Add_Click({ Set-Preset $Script:PresetBalanced "Balanced"; Show-Preset-Result })
 $BtnPresetAgg.Add_Click({
     $r = [System.Windows.MessageBox]::Show(
-        "The 'Aggressive' preset also selects app removals (OneDrive, Xbox, Recall, bloatware) and aggressive tweaks.`n`nRemoved apps don't come back with 'Revert all' -- reinstall them from the Microsoft Store (OneDrive: its installer) or use System Restore.`n`nSelect the aggressive preset now? (Nothing is applied until you click 'Apply selected'.)",
+        "The 'Aggressive' preset also selects app removals (OneDrive, Xbox, Recall, bloatware) and aggressive tweaks: no sleep, no hibernation, no Windows Search index, no memory compression, and the telemetry block in the hosts file (Microsoft Defender may report that one as 'HostsFileHijack' and undo it).`n`nRemoved apps don't come back with 'Revert all' -- reinstall them from the Microsoft Store (OneDrive: its installer) or use System Restore.`n`nSelect the aggressive preset now? (Nothing is applied until you click 'Apply selected'.)",
         "GameOptimizerPro -- Aggressive Preset",
         [System.Windows.MessageBoxButton]::YesNo,
         [System.Windows.MessageBoxImage]::Warning)
@@ -6407,6 +6562,21 @@ $BtnApply.Add_Click({
             [System.Windows.MessageBoxImage]::Warning
         )
         if ($pwrWarn -ne [System.Windows.MessageBoxResult]::Yes) { return }
+    }
+
+    # 1.2.8: write-cache flushing off risks the file system -- never applied without its own yes
+    if ($selected | Where-Object { $_.Name -eq "Disable Write-Cache Buffer Flushing" }) {
+        $wcWarn = [System.Windows.MessageBox]::Show(
+            "'Disable Write-Cache Buffer Flushing' is ticked.`n`nWith it, a power cut or a hard reset (holding the power button after a freeze) loses the data that is still in the drives' cache, and the file system can be damaged. Windows warns about this in Device Manager too. For gaming it brings practically nothing.`n`nOnly use it with a UPS (uninterruptible power supply).`n`nYes = apply it anyway`nNo = apply the other tweaks without it",
+            "GameOptimizerPro -- Data loss risk",
+            [System.Windows.MessageBoxButton]::YesNoCancel,
+            [System.Windows.MessageBoxImage]::Warning)
+        if ($wcWarn -eq [System.Windows.MessageBoxResult]::Cancel) { return }
+        if ($wcWarn -ne [System.Windows.MessageBoxResult]::Yes) {
+            $selected = @($selected | Where-Object { $_.Name -ne "Disable Write-Cache Buffer Flushing" })
+            $CheckBoxMap["Disable Write-Cache Buffer Flushing"].IsChecked = $false
+            if (-not $selected.Count) { Set-Status "Nothing applied."; return }
+        }
     }
 
     # A restore point only when apps are removed: System Restore is one way to bring them back
@@ -6477,15 +6647,18 @@ $BtnApply.Add_Click({
     $Script:LastBackupDir = Backup-Registry -Label "PreApply"
     Set-Status "Registry backup saved. Applying tweaks..."
 
-    # Apply tweaks
+    # Apply tweaks. Each one is recorded the moment it ran -- until 1.2.7 the record was written
+    # after the last tweak, and an app closed halfway (or a crash) left applied tweaks unrecorded.
     $done  = 0
     $total = $selected.Count
     $failedNames = @()
+    $recordedBefore = @((Read-Baseline).Names)
     foreach ($tweak in $selected) {
         Set-Status "Applying: $($tweak.Name) ($done/$total)..."
         try {
             & $tweak.Action
             Write-Log "OK: $($tweak.Name)"
+            if ($Script:OneTimeNames -notcontains $tweak.Name) { Save-Baseline -Add @($tweak.Name) -Quiet }
         } catch {
             Write-Log "FAILED: $($tweak.Name) -- $_"
             $failedNames += $tweak.Name
@@ -6509,9 +6682,12 @@ $BtnApply.Add_Click({
     if ($failedNames.Count) { $problems += "`n`nFailed (details in the log):`n" + (& $listOf $failedNames) }
     if ($notActive.Count)   { $problems += "`n`nApplied, but Windows reports them as not in effect (often a policy, antivirus or a driver without that option -- see the log):`n" + (& $listOf $notActive) }
 
-    # Record what THIS app applied (in effect now; restart tweaks count once applied) -- the
-    # drift check at the next start and "Revert all" work from this list
+    # The record keeps what THIS app applied and is in effect now (restart tweaks count once
+    # applied) -- the drift check at the next start and "Revert all" work from it. A tweak Windows
+    # reports as not in effect is dropped again, unless an earlier Apply had recorded it already.
     $applied = @($selected | Where-Object { $Script:OneTimeNames -notcontains $_.Name -and $failedNames -notcontains $_.Name -and $notActive -notcontains $_.Name } | ForEach-Object { $_.Name })
+    $unrecord = @($notActive | Where-Object { $recordedBefore -notcontains $_ })
+    if ($unrecord.Count) { Remove-FromBaseline $unrecord 'not in effect after the Apply' }
     Save-Baseline -Add $applied
 
     # A restart / sign-out only matters for some tweaks -- no question after a cleanup
@@ -6547,7 +6723,11 @@ $BtnRevertAll.Add_Click({
     # back, also never applied ones -- light mode, location on, hibernation on, folder views
     # deleted, the power plans' timeouts rewritten.
     $catOf = @{}; foreach ($t in $AllTweaks) { $catOf[$t.Name] = $t.Category }
-    $cands = @((Read-Baseline).Names | Where-Object { $RevertActions.ContainsKey($_) -and -not ($catOf[$_] -eq 'Windows 11' -and -not $IsWin11) })
+    $bl = Read-Baseline
+    $cands = @($bl.Names | Where-Object { $RevertActions.ContainsKey($_) -and -not ($catOf[$_] -eq 'Windows 11' -and -not $IsWin11) })
+    # The record of 1.2.5 or older also listed settings that were on before (Windows' or the
+    # user's own) -- those are never set back blindly: the user picks them afterwards.
+    $oldList = @($bl.Legacy | Where-Object { $RevertActions.ContainsKey($_) -and $CheckBoxMap.ContainsKey($_) -and -not ($catOf[$_] -eq 'Windows 11' -and -not $IsWin11) })
     $appRemoved = @($cands | Where-Object { $Script:AppRemovals -contains $_ })
 
     # Step 1: Let user choose: System Restore or Quick Registry Reset
@@ -6562,6 +6742,7 @@ $BtnRevertAll.Add_Click({
         "  NO   ->  Quick Reset (Recommended)`n" +
         "           - The $($cands.Count) tweak(s) GameOptimizerPro applied on this PC go back`n" +
         "             to the Windows default; settings you made yourself stay`n" +
+        $(if ($oldList.Count) { "           - $($oldList.Count) more from the record of an older version (1.2.5 or`n             before) are only ticked afterwards -- you choose which go back`n" } else { "" }) +
         "           - No reboot required`n" +
         "           - Removed apps (OneDrive, Xbox etc.) stay removed`n`n" +
         "  CANCEL  ->  Do nothing",
@@ -6600,6 +6781,7 @@ $BtnRevertAll.Add_Click({
     $confirm = [System.Windows.MessageBox]::Show(
         "Quick Registry Reset`n`n" +
         $(if ($cands.Count) { "These $($cands.Count) tweak(s) GameOptimizerPro applied go back to the Windows default:`n$list`n`n" }
+          elseif ($oldList.Count) { "GameOptimizerPro has only the record of an older version (1.2.5 or before) for this PC. That record also lists settings that were already on before -- so nothing from it is set back here; the ones still active are ticked afterwards for you to check.`n`n" }
           else { "GameOptimizerPro has no record of tweaks it applied on this PC (the record starts with the first Apply). To set single tweaks back, tick them and use 'Revert selected'.`n`n" }) +
         "Leftovers of tweaks removed in earlier versions are cleaned up as well.`n" +
         $(if ($appRemoved.Count) { "Removed apps don't come back this way -- reinstall them from the Microsoft Store (OneDrive: its installer) or use System Restore.`n" }) +
@@ -6631,13 +6813,22 @@ $BtnRevertAll.Add_Click({
     # The record keeps only what could not be set back. Keeping the rest would make the drift
     # check on the NEXT launch offer to re-apply exactly what the user just undid.
     try {
-        if ($failedNames.Count) { $null = Write-Baseline $failedNames }
+        if ($failedNames.Count -or $bl.Legacy.Count) { $null = Write-Baseline $failedNames $bl.Legacy }
         elseif (Test-Path $Script:BaselineFile) { Remove-Item $Script:BaselineFile -Force -ErrorAction Stop }
-        Write-Log "Baseline updated after Revert All ($($failedNames.Count) left)"
+        Write-Log "Baseline updated after Revert All ($($failedNames.Count) left, $($bl.Legacy.Count) from an older record kept for the user to choose)"
     } catch { Write-Log "Baseline could not be cleared: $_" }
 
     # Refresh the status dots so they reflect the reverted state (Apply does the same)
     Update-AllDots "Checking the result:"
+
+    # The old record's tweaks that are still active: ticked, nothing else ticked -- the user
+    # unticks what they want to keep and uses "Revert selected"
+    $oldActive = @($oldList | Where-Object { $Script:TweakState[$_] -eq 'active' -and $CheckBoxMap[$_].IsEnabled })
+    if ($oldActive.Count) {
+        foreach ($cb in $CheckBoxMap.Values) { $cb.IsChecked = $false }
+        foreach ($nm in $oldActive) { $CheckBoxMap[$nm].IsChecked = $true }
+        Write-Log "Revert All: $($oldActive.Count) active tweak(s) from the record of an older version ticked for the user to check"
+    }
 
     $ok = $cands.Count - $failedNames.Count
     Set-Status "Revert complete! $ok of $($cands.Count) tweaks set back$(if ($retired) { ", $retired leftover value(s) removed" }). Log: $LogFile"
@@ -6649,11 +6840,13 @@ $BtnRevertAll.Add_Click({
         $(if ($retired) { "`n$retired leftover value(s) of tweaks removed in earlier versions cleaned up." } else { "" }) +
         $(if ($failedNames.Count) { "`n`nFailed (see the log):`n  - " + ($failedNames -join "`n  - ") } else { "" }) +
         $(if ($appRemoved.Count) { "`n`nRemoved apps stay removed: " + ($appRemoved -join ', ') + " -- reinstall them from the Microsoft Store (OneDrive: its installer) or use System Restore." } else { "" }) +
+        $(if ($oldActive.Count) { "`n`n$($oldActive.Count) more tweak(s) come from the record of an older GameOptimizerPro version (1.2.5 or before). That record also listed settings that were already on before -- made by Windows or by you -- so they were NOT set back. They are ticked in the tweak list now: untick what you want to keep, then click 'Revert selected'." } else { "" }) +
         "`n`nSome changes require a restart to take effect.`nLog: $LogFile`n`nPre-revert registry backup (.reg files):`n$Script:LastBackupDir",
         "GameOptimizerPro  --  Revert Complete",
         [System.Windows.MessageBoxButton]::OK,
         [System.Windows.MessageBoxImage]::Information
     )
+    if ($oldActive.Count) { Show-Preset-Result; Set-Status "$($oldActive.Count) tweak(s) from the older record are ticked -- untick what you want to keep, then click 'Revert selected'." }
     } finally { Set-Busy $false }
 })
 
@@ -6690,8 +6883,10 @@ $BtnRevertSel.Add_Click({
             $CheckBoxMap[$t.Name].IsChecked = $false
         }
         Update-Counts
-        # the next start must not offer them again as "reset by a Windows update"
-        Remove-FromBaseline $names
+        # the next start must not offer them again as "reset by a Windows update" -- but what
+        # could not be set back stays recorded, so "Revert all" still knows about it
+        $untrack = @($names | Where-Object { $failed -notcontains $_ })
+        if ($untrack.Count) { Remove-FromBaseline $untrack }
         Set-Status "$done of $($names.Count) tweak(s) set back to the Windows default$(if ($failed.Count) { " -- $($failed.Count) failed, see the log" }). Log: $LogFile"
         if ($failed.Count) {
             [System.Windows.MessageBox]::Show("These could not be set back (details in the log):`n`n  - " + ($failed -join "`n  - ") + "`n`nLog: $LogFile",
@@ -7594,6 +7789,45 @@ Write-Host "[$(Get-Date -f 'HH:mm:ss')] Alles OK  --  ShowDialog wird aufgerufen
 
 Set-Splash "Almost done ..." 97
 $Window.Add_ContentRendered({ Close-Splash })   # main window is on screen -> splash goes
+
+# 1.2.8: an error nobody caught in a button handler went up through ShowDialog and ended the app
+# with "STARTUP ERROR". Now it goes to the log and a message, and the window stays open.
+$Window.Dispatcher.Add_UnhandledException({
+    param($s, $e)
+    $e.Handled = $true
+    $m = "$($e.Exception.Message)"
+    try { Write-Log "UNEXPECTED ERROR (the app keeps running): $m" } catch { }
+    try { Set-Busy $false } catch { }
+    try { [System.Windows.MessageBox]::Show("Something went wrong:`n$m`n`nThe app keeps running. Details are in the log:`n$LogFile", "GameOptimizerPro -- Error", [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error) | Out-Null } catch { }
+})
+
+# --- Started with another account's admin rights? (a parent types the admin password on a
+# child's account: "over-the-shoulder" elevation) Then HKCU and %LOCALAPPDATA% are the admin's:
+# every per-user tweak would change the admin's settings and show green, the signed-in user's
+# stay as they are. Compared with the owner of Explorer in this session. ---
+try {
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $sess = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+    $owner = $null
+    foreach ($ex in @(Get-WmiSafe "SELECT Handle, SessionId FROM Win32_Process WHERE Name='explorer.exe' AND SessionId=$sess" -TimeoutSec 5)) {
+        $o = $ex.InvokeMethod('GetOwner', $null, $null)
+        if ($o -and $o['User']) { $owner = "$($o['Domain'])\$($o['User'])"; break }
+    }
+    if ($owner -and $me -and $owner -ne $me) {
+        Write-Log "Startup: running as $me, but $owner is signed in -- per-user tweaks would change $me's settings"
+        Close-Splash
+        $r = [System.Windows.MessageBox]::Show(
+            "GameOptimizerPro runs with the account '$me', but '$owner' is signed in. That happens when another account's administrator password was typed in -- or when Windows' 'Administrator protection' runs elevated apps under an account of their own.`n`nAbout half of the tweaks are per user (mouse, visual effects, privacy and Start menu settings, Game Bar ...). They would change the settings of '$me', not yours, while the status shows them as active.`n`nFor the per-user tweaks, sign in with an account that has administrator rights itself and start GameOptimizerPro there.`n`nContinue anyway? (The PC-wide tweaks work either way.)",
+            "GameOptimizerPro -- Another account's rights",
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Warning)
+        if ($r -ne [System.Windows.MessageBoxResult]::Yes) {
+            Write-Log "Startup: closed by the user (other account)"
+            try { if ($Script:InstanceMutex) { $Script:InstanceMutex.ReleaseMutex() } } catch { }
+            exit
+        }
+    }
+} catch { Write-Log "Account check skipped: $_" }
 
 # --- Baseline drift check: did a Windows update revert tweaks you applied before? ---
 # Runs only at launch (no background process). If the last-applied snapshot has
