@@ -45,7 +45,7 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 - 🔄 **Merkt, wenn Windows Tweaks zurücksetzt** — Updates stellen gern Dinge zurück. Beim Start vergleicht das Tool mit deinem letzten Apply und bietet an, Zurückgesetztes neu anzuwenden.
 - 🛟 **Sicherheitsnetz vor jeder Änderung** — ein `.reg`-Backup aller betroffenen Schlüssel vor jedem Apply und Revert, dazu ein Systemwiederherstellungspunkt, sobald Apps entfernt werden.
 - 🧾 **Ehrliche Beschreibungen** — jeder Tweak sagt, was er tut, was er kostet und wo Windows ihn ignoriert (z. B. Richtlinien, die nur auf Enterprise / Education wirken).
-- 🌍 **Englisch & Deutsch** — alle Tweak-Beschreibungen und der komplette BIOS Guide, live umschaltbar.
+- 🌍 **Englisch & Deutsch** — alle Tweak-Beschreibungen, der komplette BIOS Guide und die Erklärungen auf jeder Seite (Dashboard, Presets, Backups, Dienste, Autostart-Manager), live umschaltbar. Namen und Schaltflächen bleiben englisch.
 
 ## 📸 Screenshots
 
@@ -60,7 +60,7 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 </tr>
 </table>
 
-<sub>Die Oberfläche ist englisch; die Beschreibungen der Tweaks und der BIOS Guide schalten mit „Info: DE“ auf Deutsch um.</sub>
+<sub>Namen und Schaltflächen sind englisch; die Beschreibungen der Tweaks, der BIOS Guide und die Erklärungen auf allen Seiten schalten mit „Info: DE“ auf Deutsch um.</sub>
 
 ## 🧰 Was drin ist
 

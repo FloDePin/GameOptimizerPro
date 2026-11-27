@@ -9,7 +9,7 @@
 .AUTHOR
     FloDePin
 .VERSION
-    1.2.12
+    1.3
 #>
 
 $ErrorActionPreference = "Continue"
@@ -19,7 +19,7 @@ $ErrorActionPreference = "Continue"
 # startup/close log lines all derive from this, so a version bump only needs
 # to change this ONE value (keep it in sync with the .VERSION block above).
 # -----------------------------------------
-$Script:AppVersion = "1.2.12"
+$Script:AppVersion = "1.3"
 
 # --- STARTUP LOG (mehrere Orte) ---
 $logPaths = @(
@@ -3748,7 +3748,7 @@ $Script:UIStrings = @{
     "svc_found"         = @{ EN = "services found  |  Green = safe to disable  |  Red = system service (caution)";
                              DE = "Dienste gefunden  |  Grün = sicher deaktivierbar  |  Rot = Systemdienst (Vorsicht)" }
     "svc_none_sel"      = @{ EN = "No services selected.";  DE = "Keine Dienste ausgewählt." }
-    "svc_disabled_msg"  = @{ EN = "service(s) disabled. Full effect after restart.";  DE = "Dienst(e) deaktiviert. Wirkt nach Neustart vollstaendig." }
+    "svc_disabled_msg"  = @{ EN = "service(s) disabled. Full effect after restart.";  DE = "Dienst(e) deaktiviert. Wirkt nach einem Neustart vollständig." }
     "svc_enabled_msg"   = @{ EN = "service(s) back to the start type they had before (Manual if unknown).";  DE = "Dienst(e) auf die vorherige Starteinstellung zurückgesetzt (Manuell, wenn unbekannt)." }
 
     # Status words (managers)
@@ -3761,14 +3761,37 @@ $Script:UIStrings = @{
     "word_unknown"      = @{ EN = "Unknown";      DE = "Unbekannt" }
 }
 
+# Names, buttons and column titles stay English; the explanations and messages below follow the
+# Info: DE / EN switch (1.3)
+$Script:UIExplIds = @('status_ready', 'sw_loading', 'sw_legend', 'sw_none_sel', 'sw_disabled_msg', 'sw_enabled_msg',
+    'svc_subtitle', 'svc_legend_safe', 'svc_legend_caution', 'svc_legend_done', 'svc_found', 'svc_none_sel', 'svc_disabled_msg', 'svc_enabled_msg')
 function Get-UIString {
     param([string]$Id)
-    # UI language is permanently English. The DE/EN toggle only affects the
-    # "?" info-popup descriptions, not the interface labels.
     if ($Script:UIStrings.ContainsKey($Id)) {
+        if ($LangState.Current -eq 'DE' -and $Script:UIExplIds -contains $Id) { return $Script:UIStrings[$Id]["DE"] }
         return $Script:UIStrings[$Id]["EN"]
     }
     return $Id
+}
+
+# 1.3: the Info: DE / EN switch covers the explanations on every page too, like the tweak
+# descriptions -- names, buttons and labels stay English.
+function Select-Lang([string]$EN, [string]$DE) { if ($LangState.Current -eq 'DE' -and $DE) { $DE } else { $EN } }
+$Script:ExplTexts = New-Object System.Collections.ArrayList
+# Shows the text of the current language in a TextBlock (or as a tooltip) and remembers both
+# for the switch. " -- " is shown as an em dash, like in the tweak descriptions.
+function Set-Expl($Tb, [string]$EN, [string]$DE, [switch]$ToolTip) {
+    if (-not $Tb) { return }
+    $e = @{ Tb = $Tb; EN = ($EN -replace '\s+--\s+', $Script:EmDash); DE = ($DE -replace '\s+--\s+', $Script:EmDash); Tip = [bool]$ToolTip }
+    [void]$Script:ExplTexts.Add($e)
+    $t = Select-Lang $e.EN $e.DE
+    if ($e.Tip) { $Tb.ToolTip = $t } else { $Tb.Text = $t }
+}
+function Update-ExplLanguage {
+    foreach ($e in $Script:ExplTexts) {
+        $t = Select-Lang $e.EN $e.DE
+        try { if ($e.Tip) { $e.Tb.ToolTip = $t } else { $e.Tb.Text = $t } } catch { }
+    }
 }
 
 $TweakDescEN = @{
@@ -4193,7 +4216,7 @@ Set-Splash "Building the interface ..." 22
                             <Border Width="3" CornerRadius="2" Background="#e53935" Margin="0,2,16,2"/>
                             <StackPanel Grid.Column="1">
                                 <TextBlock Text="Tweaks" FontSize="26" FontWeight="SemiBold" Foreground="#e6edf3"/>
-                                <TextBlock Text="Every tweak can be undone &#183; live status where Windows reports it" FontSize="12.5" Foreground="#7d8896" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Name="TweaksSub" Text="Every tweak can be undone &#183; live status where Windows reports it" FontSize="12.5" Foreground="#7d8896" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
                             </StackPanel>
                             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                 <Button Name="BtnSelectAll" Style="{StaticResource GopBtn}" Content="All" Margin="8,0,0,0"/>
@@ -4433,13 +4456,14 @@ function Mix-Hex([string]$A, [string]$B, [double]$T) {
 }
 function Th { param([double[]]$V) if ($V.Count -eq 1) { [Windows.Thickness]::new($V[0]) } else { [Windows.Thickness]::new($V[0], $V[1], $V[2], $V[3]) } }
 function New-Text {
-    param([string]$Text, [double]$Size = 13, [string]$Color = $Script:UI.TEXT, [string]$Weight = 'Normal', [switch]$Wrap, [double[]]$Margin, [switch]$Mono)
+    param([string]$Text, [double]$Size = 13, [string]$Color = $Script:UI.TEXT, [string]$Weight = 'Normal', [switch]$Wrap, [double[]]$Margin, [switch]$Mono, [string]$DE)
     $tb = [Windows.Controls.TextBlock]::new()
     $tb.Text = $Text; $tb.FontSize = $Size; $tb.Foreground = Brush $Color; $tb.FontWeight = $Weight
     if ($Wrap) { $tb.TextWrapping = [Windows.TextWrapping]::Wrap }
     if ($Margin) { $tb.Margin = Th $Margin }
     if ($Mono) { $tb.FontFamily = [Windows.Media.FontFamily]::new("Consolas") }
     $tb.VerticalAlignment = 'Center'
+    if ($DE) { Set-Expl $tb $Text $DE }   # follows the Info: DE / EN switch
     $tb
 }
 function New-Icon {
@@ -4521,7 +4545,7 @@ function New-Btn {
     $btn
 }
 function New-PageHeader {
-    param([string]$Title, [string]$Sub, [string]$Accent, [object[]]$Right)
+    param([string]$Title, [string]$Sub, [string]$Accent, [object[]]$Right, [string]$SubDE)
     $g = [Windows.Controls.Grid]::new(); $g.Margin = Th 0, 0, 4, 18
     foreach ($w in @('Auto', '*', 'Auto')) {
         $cd = [Windows.Controls.ColumnDefinition]::new()
@@ -4532,7 +4556,7 @@ function New-PageHeader {
     $bar.Background = Brush $Accent; $bar.Margin = Th 0, 2, 16, 2
     $g.Children.Add($bar) | Out-Null
     # (not "$sub": PowerShell names are case-insensitive, that would be the [string] parameter $Sub)
-    $subBlock = New-Text $Sub 12.5 $Script:UI.DIM 'Normal' -Wrap -Margin 0, 3, 0, 0
+    $subBlock = New-Text $Sub 12.5 $Script:UI.DIM 'Normal' -Wrap -Margin 0, 3, 0, 0 -DE $SubDE
     $txt = New-VStack @((New-Text $Title 26 $Script:UI.TEXT 'SemiBold'), $subBlock)
     [Windows.Controls.Grid]::SetColumn($txt, 1); $g.Children.Add($txt) | Out-Null
     if ($Right) {
@@ -4558,14 +4582,14 @@ function New-SectionTitle {
     $g
 }
 function New-Banner {
-    param([string]$Text, [string]$Color, [int]$Glyph = 0xE946)
+    param([string]$Text, [string]$Color, [int]$Glyph = 0xE946, [string]$DE)
     $b = [Windows.Controls.Border]::new()
     $b.Background = Brush (Mix-Hex $Script:UI.APP $Color 0.10); $b.BorderBrush = Brush (Mix-Hex $Script:UI.APP $Color 0.35)
     $b.BorderThickness = Th 1; $b.CornerRadius = [Windows.CornerRadius]::new(8); $b.Padding = Th 12, 8, 12, 8; $b.Margin = Th 0, 0, 0, 12
     $g = [Windows.Controls.DockPanel]::new()
     $ic = New-Icon $Glyph 13 $Color @(0, 1, 10, 0); $ic.VerticalAlignment = 'Top'
     [Windows.Controls.DockPanel]::SetDock($ic, 'Left'); $g.Children.Add($ic) | Out-Null
-    $g.Children.Add((New-Text $Text 12 $Color 'Normal' -Wrap)) | Out-Null
+    $g.Children.Add((New-Text $Text 12 $Color 'Normal' -Wrap -DE $DE)) | Out-Null
     $b.Child = $g
     $b
 }
@@ -4712,16 +4736,27 @@ function Update-TweakDot($dot, $tweakName) {
     }
     $Script:TweakState[$tweakName] = $state
     switch ($state) {
-        "active"   { $dot.Fill = Brush $Script:UI.GREEN; $dot.Stroke = $null; $dot.ToolTip = "Active -- this tweak is in effect" }
-        "inactive" { $dot.Fill = [Windows.Media.Brushes]::Transparent; $dot.Stroke = Brush $Script:UI.MUTED; $dot.StrokeThickness = 1.5; $dot.ToolTip = "Not active" }
-        default    { $dot.Fill = Brush $Script:UI.MUTED; $dot.Stroke = $null
-                     $dot.ToolTip = $(if ($Script:OneTimeNames -contains $tweakName) { "One-time action -- nothing lasting to check" } else { "Status unknown right now -- not applicable to this PC, or Windows didn't answer (e.g. busy installing updates). Verify checks again." }) }
+        "active"   { $dot.Fill = Brush $Script:UI.GREEN; $dot.Stroke = $null }
+        "inactive" { $dot.Fill = [Windows.Media.Brushes]::Transparent; $dot.Stroke = Brush $Script:UI.MUTED; $dot.StrokeThickness = 1.5 }
+        default    { $dot.Fill = Brush $Script:UI.MUTED; $dot.Stroke = $null }
     }
+    $dot.ToolTip = Get-DotTip $state $tweakName
     if ($Script:TweakBadges.ContainsKey($tweakName)) { $Script:TweakBadges[$tweakName].Visibility = $(if ($state -eq "active") { 'Visible' } else { 'Collapsed' }) }
     return $state
 }
 
+function Get-DotTip([string]$State, [string]$Name) {
+    switch ($State) {
+        'active'   { Select-Lang 'Active -- this tweak is in effect' 'Aktiv -- dieser Tweak wirkt' }
+        'inactive' { Select-Lang 'Not active' 'Nicht aktiv' }
+        default {
+            if ($Script:OneTimeNames -contains $Name) { Select-Lang 'One-time action -- nothing lasting to check' 'Einmalige Aktion -- nichts Dauerhaftes zu prüfen' }
+            else { Select-Lang "Status unknown right now -- not applicable to this PC, or Windows didn't answer (e.g. busy installing updates). Verify checks again." 'Status gerade unbekannt -- auf diesem PC nicht anwendbar, oder Windows hat nicht geantwortet (z. B. beim Installieren von Updates). Verify prüft erneut.' }
+        }
+    }
+}
 function Set-DescLanguage {
+    foreach ($n in @($Script:TweakDots.Keys)) { try { $Script:TweakDots[$n].ToolTip = Get-DotTip $Script:TweakState[$n] $n } catch { } }
     foreach ($r in $Script:TweakRows.Values) {
         $d = Get-TweakDesc $r.Tweak; $r.Desc.Text = $d; $r.Desc.ToolTip = $d
         if ($r.More) { $r.Desc.MaxHeight = 34; $r.More.Text = 'Show more'; $r.More.Visibility = $(if ($d.Length -gt 240) { 'Visible' } else { 'Collapsed' }) }
@@ -4912,24 +4947,25 @@ foreach ($c in $Script:Cats) {
     $c.Title = $title
 
     if ($c.Key -eq 'Windows 11') {
-        $n = if ($IsWin11) { New-Banner "Windows 11 (build $OSBuild) detected -- all tweaks in this tab are available." $Script:UI.GREEN 0xE73E }
-             else { New-Banner "Windows 10 detected (build $OSBuild) -- these tweaks need Windows 11 and are disabled." $Script:UI.AMBER 0xE7BA }
+        $n = if ($IsWin11) { New-Banner "Windows 11 (build $OSBuild) detected -- all tweaks in this tab are available." $Script:UI.GREEN 0xE73E -DE "Windows 11 (Build $OSBuild) erkannt -- alle Tweaks in diesem Tab sind verfügbar." }
+             else { New-Banner "Windows 10 detected (build $OSBuild) -- these tweaks need Windows 11 and are disabled." $Script:UI.AMBER 0xE7BA -DE "Windows 10 erkannt (Build $OSBuild) -- diese Tweaks brauchen Windows 11 und sind deaktiviert." }
         $panel.Children.Add($n) | Out-Null; $Script:CatNotices += $n
     }
     if ($c.Key -eq 'GPU Tweaks') {
         # NVIDIA keeps its driver settings in its own profile database (NVIDIA app / Control
         # Panel), not in registry values a script could set -- so this tab is AMD only.
-        $n = if ($IsAMD) { New-Banner "$GPU detected -- the AMD driver tweaks below are available." $Script:UI.RED 0xE7F4 }
-             elseif ($IsNVIDIA) { New-Banner "$GPU detected -- these tweaks are for AMD cards only. NVIDIA keeps its driver settings in the NVIDIA app, not in the registry." $Script:UI.NV 0xE7F4 }
-             else { New-Banner "$GPU detected -- these tweaks are for AMD cards only." $Script:UI.AMBER 0xE7F4 }
+        $n = if ($IsAMD) { New-Banner "$GPU detected -- the AMD driver tweaks below are available." $Script:UI.RED 0xE7F4 -DE "$GPU erkannt -- die AMD-Treiber-Tweaks unten sind verfügbar." }
+             elseif ($IsNVIDIA) { New-Banner "$GPU detected -- these tweaks are for AMD cards only. NVIDIA keeps its driver settings in the NVIDIA app, not in the registry." $Script:UI.NV 0xE7F4 -DE "$GPU erkannt -- diese Tweaks gelten nur für AMD-Karten. NVIDIA speichert seine Treiber-Einstellungen in der NVIDIA App, nicht in der Registry." }
+             else { New-Banner "$GPU detected -- these tweaks are for AMD cards only." $Script:UI.AMBER 0xE7F4 -DE "$GPU erkannt -- diese Tweaks gelten nur für AMD-Karten." }
         $panel.Children.Add($n) | Out-Null; $Script:CatNotices += $n
     }
     if ($c.Key -eq 'Network') {
         try {
             $ns = Get-NetSummary
             $txt = if ($ns) { "$($ns.Name): $($ns.Desc)$(if ($ns.Speed) { " ($($ns.Speed))" })$($Script:Mid)gateway $(if ($ns.Gateway) { $ns.Gateway } else { 'unknown' })$($Script:Mid)DNS $(if ($ns.Dns.Count) { $ns.Dns -join ', ' } else { 'unknown' })" } else { "No active network adapter detected." }
-        } catch { $txt = "Network info unavailable." }
-        $n = New-Banner "$txt  (Ping test: Dashboard)" $Script:UI.CYAN 0xE839
+            $txtDE = if ($ns) { "$($ns.Name): $($ns.Desc)$(if ($ns.Speed) { " ($($ns.Speed))" })$($Script:Mid)Gateway $(if ($ns.Gateway) { $ns.Gateway } else { 'unbekannt' })$($Script:Mid)DNS $(if ($ns.Dns.Count) { $ns.Dns -join ', ' } else { 'unbekannt' })" } else { "Kein aktiver Netzwerkadapter gefunden." }
+        } catch { $txt = "Network info unavailable."; $txtDE = "Netzwerk-Infos nicht verfügbar." }
+        $n = New-Banner "$txt  (Ping test: Dashboard)" $Script:UI.CYAN 0xE839 -DE "$txtDE  (Ping-Test: Dashboard)"
         $panel.Children.Add($n) | Out-Null; $Script:CatNotices += $n
     }
 
@@ -5772,16 +5808,18 @@ function Open-LogFile {
 }
 function Get-BackupSummary {
     $dirs = @(Get-ChildItem $Script:RegistryBackupRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
-    if (-not $dirs) { return @{ Count = 0; Last = 'none yet' } }
+    if (-not $dirs) { return @{ Count = 0; Last = 'none yet'; LastDE = 'noch keine' } }
     $last = $dirs[0].Name -replace '^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})\d{2}_(?:v1-)?(.+)$', '$3.$2.$1 $4:$5 ($6)'
-    @{ Count = $dirs.Count; Last = $last }
+    @{ Count = $dirs.Count; Last = $last; LastDE = $last }
 }
-function Get-BaselineSummary {
+function Get-BaselineSummary([switch]$DE) {
     if (Test-Path $Script:BaselineFile) {
         $b = Read-Baseline
         $n = @($b.Names).Count
-        "$n tweaks applied$(if ($b.Legacy.Count) { " (+$($b.Legacy.Count) from an older record)" })$($Script:Mid)saved $((Get-Item $Script:BaselineFile).LastWriteTime.ToString('dd.MM.yyyy HH:mm'))"
-    } else { 'created after the first Apply' }
+        $when = (Get-Item $Script:BaselineFile).LastWriteTime.ToString('dd.MM.yyyy HH:mm')
+        if ($DE) { "$n Tweaks angewendet$(if ($b.Legacy.Count) { " (+$($b.Legacy.Count) aus einer älteren Aufzeichnung)" })$($Script:Mid)gespeichert $when" }
+        else { "$n tweaks applied$(if ($b.Legacy.Count) { " (+$($b.Legacy.Count) from an older record)" })$($Script:Mid)saved $when" }
+    } elseif ($DE) { 'wird beim ersten Apply angelegt' } else { 'created after the first Apply' }
 }
 
 # Memory integrity (HVCI), virtualization-based security and drive encryption of C: -- read
@@ -5821,42 +5859,56 @@ function Start-UpdateCheck {
 function Show-UpdateNotice([string]$Tag) {
     $new = $null; $have = $null
     if (-not ([version]::TryParse(($Tag -replace '^v', ''), [ref]$new) -and [version]::TryParse($Script:AppVersion, [ref]$have) -and $new -gt $have)) { return }
-    $Script:Dash.UpdateText.Text = "GameOptimizerPro $Tag is available $($Script:EmDash.Trim()) you have v$($Script:AppVersion). Run the install command again to update."
+    Set-Expl $Script:Dash.UpdateText "GameOptimizerPro $Tag is available -- you have v$($Script:AppVersion). Run the install command again to update." "GameOptimizerPro $Tag ist da -- du hast v$($Script:AppVersion). Starte den Installationsbefehl noch einmal, um zu aktualisieren."
     $Script:Dash.UpdateCard.Visibility = 'Visible'
     Write-Log "Update check: $Tag is available (this is v$($Script:AppVersion))"
 }
 
 function Get-SecurityStatus {
+    # Value / Hint in English, ValueDE / HintDE in German (Info: DE / EN switch). The hints say what
+    # the feature is, not only its state -- "memory integrity" alone tells most people nothing.
     $dg = try { Get-WmiSafe "SELECT * FROM Win32_DeviceGuard" 'root\Microsoft\Windows\DeviceGuard' | Select-Object -First 1 } catch { $null }
     $hv = if ($dg) { @($dg.SecurityServicesRunning) } else { $null }
+    $miWhat = 'Memory integrity (core isolation) uses virtualization so that only trusted, signed drivers get into the Windows kernel -- protection against malicious drivers.'
+    $miWhatDE = 'Speicherintegrität (Kernisolierung) sorgt per Virtualisierung dafür, dass nur vertrauenswürdige, signierte Treiber in den Windows-Kern kommen -- Schutz vor bösartigen Treibern.'
     $mi = if ($null -eq $hv) {
-        @{ Value = 'not readable'; Warn = $false; Hint = 'Windows Security > Device security > Core isolation shows it.' }
+        @{ Value = 'not readable'; ValueDE = 'nicht lesbar'; Warn = $false
+           Hint = "$miWhat Windows Security > Device security > Core isolation shows it."; HintDE = "$miWhatDE Windows-Sicherheit > Gerätesicherheit > Kernisolierung zeigt den Stand." }
     } elseif ($hv -contains 2) {
-        @{ Value = 'on'; Warn = $true; Hint = 'Protects against malicious drivers; in some games it costs a few percent. Switch it in Windows Security > Device security > Core isolation -- your call.' }
+        @{ Value = 'on'; ValueDE = 'an'; Warn = $true
+           Hint = "$miWhat In some games it costs a few percent. Switch it in Windows Security > Device security > Core isolation -- your call."
+           HintDE = "$miWhatDE In manchen Spielen kostet sie ein paar Prozent. Umschalten unter Windows-Sicherheit > Gerätesicherheit > Kernisolierung -- deine Entscheidung." }
     } else {
-        @{ Value = 'off'; Warn = $false; Hint = 'Windows updates (KB5127936 and later) can switch it on -- worth a look after big updates.' }
+        @{ Value = 'off'; ValueDE = 'aus'; Warn = $false
+           Hint = "$miWhat Off is a little faster in some games, but less protected. Windows updates (KB5127936 and later) can switch it on -- worth a look after big updates."
+           HintDE = "$miWhatDE Aus ist in manchen Spielen etwas schneller, aber weniger geschützt. Windows-Updates (ab KB5127936) können sie einschalten -- nach großen Updates lohnt ein Blick." }
     }
     $bl = try { [int](New-Object -ComObject Shell.Application).NameSpace('C:').Self.ExtendedProperty('System.Volume.BitLockerProtection') } catch { -1 }
     $hint = 'Software encryption costs SSD speed on some drives. Keep the recovery key (account.microsoft.com/devices/recoverykey). Settings > Privacy & security > Device encryption.'
+    $hintDE = 'Software-Verschlüsselung kostet bei manchen SSDs Tempo. Bewahre den Wiederherstellungsschlüssel auf (account.microsoft.com/devices/recoverykey). Einstellungen > Datenschutz und Sicherheit > Geräteverschlüsselung.'
     $dr = switch ($bl) {
-        { $_ -in 1, 6 } { @{ Value = 'encrypted (BitLocker / device encryption)'; Warn = $true; Hint = $hint } }
-        3 { @{ Value = 'encrypting right now'; Warn = $true; Hint = $hint } }
-        4 { @{ Value = 'decrypting right now'; Warn = $false; Hint = 'Leave the PC on until it is done.' } }
-        5 { @{ Value = 'encrypted, protection paused'; Warn = $true; Hint = $hint } }
-        2 { @{ Value = 'not encrypted'; Warn = $false; Hint = 'Since 24H2 a clean install often encrypts the drive by itself -- this one is not.' } }
-        default { @{ Value = 'unknown'; Warn = $false; Hint = 'Settings > Privacy & security > Device encryption shows it.' } }
+        { $_ -in 1, 6 } { @{ Value = 'encrypted (BitLocker / device encryption)'; ValueDE = 'verschlüsselt (BitLocker / Geräteverschlüsselung)'; Warn = $true; Hint = $hint; HintDE = $hintDE } }
+        3 { @{ Value = 'encrypting right now'; ValueDE = 'wird gerade verschlüsselt'; Warn = $true; Hint = $hint; HintDE = $hintDE } }
+        4 { @{ Value = 'decrypting right now'; ValueDE = 'wird gerade entschlüsselt'; Warn = $false; Hint = 'Leave the PC on until it is done.'; HintDE = 'Lass den PC an, bis es fertig ist.' } }
+        5 { @{ Value = 'encrypted, protection paused'; ValueDE = 'verschlüsselt, Schutz angehalten'; Warn = $true; Hint = $hint; HintDE = $hintDE } }
+        2 { @{ Value = 'not encrypted'; ValueDE = 'nicht verschlüsselt'; Warn = $false; Hint = 'Since 24H2 a clean install often encrypts the drive by itself -- this one is not.'; HintDE = 'Seit 24H2 verschlüsselt eine Neuinstallation das Laufwerk oft von selbst -- dieses ist nicht verschlüsselt.' } }
+        default { @{ Value = 'unknown'; ValueDE = 'unbekannt'; Warn = $false; Hint = 'Settings > Privacy & security > Device encryption shows it.'; HintDE = 'Einstellungen > Datenschutz und Sicherheit > Geräteverschlüsselung zeigt es.' } }
     }
     # VBS can keep running with memory integrity off (Credential Guard, System Guard, a policy)
+    $vbsWhat = 'Virtualization-based security (VBS) is what memory integrity runs on: with its hypervisor Windows walls off a protected area of memory.'
+    $vbsWhatDE = 'Virtualisierungsbasierte Sicherheit (VBS) ist die Grundlage der Speicherintegrität: Windows trennt mit seinem Hypervisor einen geschützten Speicherbereich ab.'
     $vs = switch ($(if ($dg) { [int]$dg.VirtualizationBasedSecurityStatus } else { -1 })) {
-        2 { if ($hv -contains 2) { @{ Value = 'running (with memory integrity)'; Warn = $true; Hint = 'Comes with memory integrity -- see above.' } }
-            else { @{ Value = 'running, although memory integrity is off'; Warn = $true; Hint = 'Something else keeps the Windows hypervisor on (Credential Guard, System Guard, a policy); in CPU-heavy games that can still cost a little. System Information (msinfo32) lists what runs.' } } }
-        1 { @{ Value = 'enabled, not running'; Warn = $false; Hint = 'Switched on but not active -- usually CPU virtualization (SVM / VT-x) is off in the BIOS.' } }
-        0 { @{ Value = 'off'; Warn = $false; Hint = 'The Windows hypervisor security layer is not running.' } }
-        default { @{ Value = 'not readable'; Warn = $false; Hint = 'System Information (msinfo32) shows it under "Virtualization-based security".' } }
+        2 { if ($hv -contains 2) { @{ Value = 'running (with memory integrity)'; ValueDE = 'läuft (mit Speicherintegrität)'; Warn = $true; Hint = "$vbsWhat It comes with memory integrity -- see above."; HintDE = "$vbsWhatDE Sie gehört zur Speicherintegrität -- siehe oben." } }
+            else { @{ Value = 'running, although memory integrity is off'; ValueDE = 'läuft, obwohl die Speicherintegrität aus ist'; Warn = $true
+                      Hint = "$vbsWhat Something else keeps it on (Credential Guard, System Guard, a policy); in CPU-heavy games that can still cost a little. System Information (msinfo32) lists what runs."
+                      HintDE = "$vbsWhatDE Etwas anderes hält sie an (Credential Guard, System Guard, eine Richtlinie); in CPU-lastigen Spielen kann das etwas kosten. Die Systeminformationen (msinfo32) zeigen, was läuft." } } }
+        1 { @{ Value = 'enabled, not running'; ValueDE = 'eingeschaltet, läuft nicht'; Warn = $false; Hint = "$vbsWhat Switched on but not active -- usually CPU virtualization (SVM / VT-x) is off in the BIOS."; HintDE = "$vbsWhatDE Eingeschaltet, aber nicht aktiv -- meist ist die CPU-Virtualisierung (SVM / VT-x) im BIOS aus." } }
+        0 { @{ Value = 'off'; ValueDE = 'aus'; Warn = $false; Hint = "$vbsWhat It is not running."; HintDE = "$vbsWhatDE Sie läuft nicht." } }
+        default { @{ Value = 'not readable'; ValueDE = 'nicht lesbar'; Warn = $false; Hint = "$vbsWhat System Information (msinfo32) shows it under `"Virtualization-based security`"."; HintDE = "$vbsWhatDE Die Systeminformationen (msinfo32) zeigen es unter `"Virtualisierungsbasierte Sicherheit`"." } }
     }
-    @(([pscustomobject]@{ Label = 'Memory integrity'; Value = $mi.Value; Warn = $mi.Warn; Hint = $mi.Hint }),
-      ([pscustomobject]@{ Label = 'VBS'; Value = $vs.Value; Warn = $vs.Warn; Hint = $vs.Hint }),
-      ([pscustomobject]@{ Label = 'Drive C:'; Value = $dr.Value; Warn = $dr.Warn; Hint = $dr.Hint }))
+    @(([pscustomobject]@{ Label = 'Memory integrity'; Value = $mi.Value; ValueDE = $mi.ValueDE; Warn = $mi.Warn; Hint = $mi.Hint; HintDE = $mi.HintDE }),
+      ([pscustomobject]@{ Label = 'VBS'; Value = $vs.Value; ValueDE = $vs.ValueDE; Warn = $vs.Warn; Hint = $vs.Hint; HintDE = $vs.HintDE }),
+      ([pscustomobject]@{ Label = 'Drive C:'; Value = $dr.Value; ValueDE = $dr.ValueDE; Warn = $dr.Warn; Hint = $dr.Hint; HintDE = $dr.HintDE }))
 }
 
 function New-HwCard([int]$Glyph, [string]$Color, [string]$Label, [string]$Value, [string]$Sub) {
@@ -5876,7 +5928,7 @@ function New-LiveRow([string]$Label, [string]$Color) {
 function Build-DashboardPage {
     $U = $Script:UI; $D = $Script:Dash
     $DashboardPanel.Children.Clear()
-    $DashboardPanel.Children.Add((New-PageHeader 'Dashboard' 'System overview, optimization score and live values' $U.RED)) | Out-Null
+    $DashboardPanel.Children.Add((New-PageHeader 'Dashboard' 'System overview, optimization score and live values' $U.RED -SubDE 'Systemübersicht, Optimierungs-Score und Live-Werte')) | Out-Null
 
     # ---- hardware cards ----
     $cpuO = $Script:CpuObj                                   # read once at startup
@@ -5921,16 +5973,17 @@ function Build-DashboardPage {
         # WMI reports fractional modes rounded down (143.98 Hz -> 143, max 144)
         $atMax = ([int]$m.CurrentRefreshRate + 1) -ge [int]$m.MaxRefreshRate
         $adv = if ($atMax) { "  $($Script:EmDash.Trim()) maximum, nothing to do" } else { "  $($Script:EmDash.Trim()) can do $($m.MaxRefreshRate) Hz! Set it in Windows: Display settings > Advanced display > Refresh rate" }
+        $advDE = if ($atMax) { "  $($Script:EmDash.Trim()) Maximum, nichts zu tun" } else { "  $($Script:EmDash.Trim()) kann $($m.MaxRefreshRate) Hz! In Windows einstellen: Anzeigeeinstellungen > Erweiterte Anzeige > Bildwiederholrate" }
         $mon.Children.Add((New-HStack @((New-Icon 0xE7F4 13 $U.CYAN @(0, 0, 10, 0)), (New-Text "Monitor $mi$(if ($mi -eq 1) { ' (primary)' })" 12.5 $U.TEXT 'SemiBold'),
             (New-Text "   $($m.CurrentHorizontalResolution) x $($m.CurrentVerticalResolution) @ $($m.CurrentRefreshRate) Hz" 12.5 $U.TEXT2),
-            (New-Text $adv 12.5 $(if ($atMax) { $U.DIM } else { $U.AMBER }))) @(0, 3, 0, 0))) | Out-Null
+            (New-Text $adv 12.5 $(if ($atMax) { $U.DIM } else { $U.AMBER }) -DE $advDE)) @(0, 3, 0, 0))) | Out-Null
         $mi++
     }
     # Two Windows security features that cost performance -- shown only, never switched here
     foreach ($s in @(Get-SecurityStatus)) {
         $mon.Children.Add((New-HStack @((New-Icon 0xE72E 13 $U.SLATE @(0, 0, 10, 0)), (New-Text $s.Label 12.5 $U.TEXT 'SemiBold'),
-            (New-Text "   $($s.Value)" 12.5 $(if ($s.Warn) { $U.AMBER } else { $U.TEXT2 }))) @(0, 6, 0, 0))) | Out-Null
-        $mon.Children.Add((New-Text ($s.Hint -replace '\s+--\s+', $Script:EmDash) 11.5 $U.DIM 'Normal' -Wrap -Margin 23, 1, 0, 0)) | Out-Null
+            (New-Text "   $($s.Value)" 12.5 $(if ($s.Warn) { $U.AMBER } else { $U.TEXT2 }) -DE "   $($s.ValueDE)")) @(0, 6, 0, 0))) | Out-Null
+        $mon.Children.Add((New-Text ($s.Hint -replace '\s+--\s+', $Script:EmDash) 11.5 $U.DIM 'Normal' -Wrap -Margin 23, 1, 0, 0 -DE $s.HintDE)) | Out-Null
     }
     $scoreBody = New-VStack @(
         (New-CardTitle 'Optimization score' $U.RED $verifyBtn),
@@ -5942,12 +5995,12 @@ function Build-DashboardPage {
     $row = New-Object Windows.Controls.Grid
     foreach ($i in 0, 1) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $row.ColumnDefinitions.Add($cd) }
     $lr = @{ Cpu = (New-LiveRow 'CPU' $U.RED); Ram = (New-LiveRow 'RAM' $U.VIOLET); Disk = (New-LiveRow 'Disk' $U.AMBER); Net = (New-LiveRow 'Network' $U.CYAN) }
-    $liveBody = New-VStack @((New-CardTitle 'Live monitor' $U.CYAN (New-Text 'updates every 1.5 s, background thread' 11 $U.DIM)), $lr.Cpu.Root, $lr.Ram.Root, $lr.Disk.Root, $lr.Net.Root)
+    $liveBody = New-VStack @((New-CardTitle 'Live monitor' $U.CYAN (New-Text 'updates every 1.5 s, background thread' 11 $U.DIM -DE 'alle 1,5 s, im Hintergrund')), $lr.Cpu.Root, $lr.Ram.Root, $lr.Disk.Root, $lr.Net.Root)
     $liveCard = New-Card $liveBody @(0, 0, 7, 14); $row.Children.Add($liveCard) | Out-Null
 
     $gwAddr = try { (Get-NetSummary).Gateway } catch { $null }
     $pingRows = New-VStack @()
-    $pingInfo = New-Text "10 pings per target: average latency, packet loss and jitter. Gateway $(if ($gwAddr) { $gwAddr } else { 'unknown' })." 12 $U.DIM 'Normal' -Wrap -Margin 0, 0, 0, 4
+    $pingInfo = New-Text "10 pings per target: average latency, packet loss and jitter. Gateway $(if ($gwAddr) { $gwAddr } else { 'unknown' })." 12 $U.DIM 'Normal' -Wrap -Margin 0, 0, 0, 4 -DE "10 Pings pro Ziel: mittlere Latenz, Paketverlust und Jitter. Gateway $(if ($gwAddr) { $gwAddr } else { 'unbekannt' })."
     $pingRows.Children.Add($pingInfo) | Out-Null
     $pingBtn = New-Btn 'Run test' $U.ACC '#071018' 0xE768 -Bold -Margin 0, 0, 0, 0
     $pingBody = New-VStack @((New-CardTitle 'Network latency' $U.BLUE $pingBtn), $pingRows)
@@ -5958,7 +6011,7 @@ function Build-DashboardPage {
     $pingBtn.Add_Click({
         $pingBtn.IsEnabled = $false
         $pingRows.Children.Clear()
-        $wait = New-Object Windows.Controls.TextBlock; $wait.Text = "Testing (10 pings per target -- the window stays responsive) ..."; $wait.FontSize = 12.5
+        $wait = New-Object Windows.Controls.TextBlock; $wait.Text = Select-Lang "Testing (10 pings per target -- the window stays responsive) ..." "Teste (10 Pings pro Ziel -- das Fenster bleibt bedienbar) ..."; $wait.FontSize = 12.5
         $wait.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($U2.DIM))
         $pingRows.Children.Add($wait) | Out-Null
         $tgts = New-Object System.Collections.ArrayList
@@ -6002,7 +6055,7 @@ function Build-DashboardPage {
                 $c0 = New-Object Windows.Controls.ColumnDefinition; $c1 = New-Object Windows.Controls.ColumnDefinition; $c1.Width = [Windows.GridLength]::Auto
                 $g.ColumnDefinitions.Add($c0); $g.ColumnDefinitions.Add($c1)
                 $a = New-Object Windows.Controls.TextBlock; $a.Text = $r[0]; $a.FontSize = 12.5; $a.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($U2.TEXT2))
-                $b = New-Object Windows.Controls.TextBlock; $b.Text = $r[1]; $b.FontSize = 12.5; $b.FontFamily = New-Object Windows.Media.FontFamily("Consolas")
+                $b = New-Object Windows.Controls.TextBlock; $b.Text = Select-Lang $r[1] ("$($r[1])".Replace('unreachable (100% loss)', 'nicht erreichbar (100 % Verlust)').Replace('loss ', 'Verlust ')); $b.FontSize = 12.5; $b.FontFamily = New-Object Windows.Media.FontFamily("Consolas")
                 $b.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($col))
                 [Windows.Controls.Grid]::SetColumn($b, 1); $g.Children.Add($a) | Out-Null; $g.Children.Add($b) | Out-Null
                 $pingRows.Children.Add($g) | Out-Null
@@ -6019,7 +6072,7 @@ function Build-DashboardPage {
     $btnCompare  = New-Btn 'Compare' $U.CARD2 $U.TEXT
     $resultPanel = New-VStack @() @(0, 10, 0, 0)
     $snapBody = New-VStack @((New-CardTitle 'Snapshot & compare' $U.VIOLET),
-        (New-Text 'Take a snapshot, apply or revert tweaks (or install a Windows update), then compare: every tweak whose status changed is listed. The snapshot is kept after a restart.' 12.5 $U.DIM 'Normal' -Wrap -Margin 0, 0, 0, 12),
+        (New-Text 'Take a snapshot, apply or revert tweaks (or install a Windows update), then compare: every tweak whose status changed is listed. The snapshot is kept after a restart.' 12.5 $U.DIM 'Normal' -Wrap -Margin 0, 0, 0, 12 -DE 'Snapshot erstellen, Tweaks anwenden oder zurücksetzen (oder ein Windows-Update installieren), dann vergleichen: Jeder Tweak, dessen Status sich geändert hat, wird aufgelistet. Der Snapshot bleibt nach einem Neustart erhalten.'),
         (New-HStack @($btnSnapshot, $btnCompare)), $resultPanel)
     $snapCard = New-Card $snapBody @(0, 0, 7, 14); $row2.Children.Add($snapCard) | Out-Null
 
@@ -6036,14 +6089,14 @@ function Build-DashboardPage {
         $gr
     }
     $safeBody = New-VStack @((New-CardTitle 'Safety net' $U.GREEN),
-        (& $safeRow 0xEA18 $U.GREEN 'Restore point before app removals' $(if (Test-SystemProtection) { New-Text "on ($env:SystemDrive protected)" 12.5 $U.TEXT 'SemiBold' } else { New-Text "System Protection off $($Script:EmDash.Trim()) asked first" 12.5 $U.AMBER 'SemiBold' })),
+        (& $safeRow 0xEA18 $U.GREEN 'Restore point before app removals' $(if (Test-SystemProtection) { New-Text "on ($env:SystemDrive protected)" 12.5 $U.TEXT 'SemiBold' -DE "an ($env:SystemDrive geschützt)" } else { New-Text "System Protection off $($Script:EmDash.Trim()) asked first" 12.5 $U.AMBER 'SemiBold' -DE "Computerschutz aus $($Script:EmDash.Trim()) wird vorher gefragt" })),
         (& $safeRow 0xE81C $U.VIOLET 'Last registry backup' $D.SafeBackup),
         (& $safeRow 0xE895 $U.CYAN 'Drift baseline' $D.SafeBase))
     $safeCard = New-Card $safeBody @(7, 0, 0, 14); [Windows.Controls.Grid]::SetColumn($safeCard, 1); $row2.Children.Add($safeCard) | Out-Null
     $DashboardPanel.Children.Add($row2) | Out-Null
 
     $snapState = @{ Snap = (Read-Snapshot) }
-    if ($snapState.Snap) { $resultPanel.Children.Add((New-Text "Saved snapshot from $($snapState.Snap.Time.ToString('dd.MM.yyyy HH:mm')) -- click Compare." 12 $U.DIM)) | Out-Null }
+    if ($snapState.Snap) { $resultPanel.Children.Add((New-Text "Saved snapshot from $($snapState.Snap.Time.ToString('dd.MM.yyyy HH:mm')) -- click Compare." 12 $U.DIM -DE "Gespeicherter Snapshot vom $($snapState.Snap.Time.ToString('dd.MM.yyyy HH:mm')) -- auf Compare klicken.")) | Out-Null }
     $btnSnapshot.Add_Click({
         $states = @{}
         Start-StatusPass
@@ -6051,13 +6104,16 @@ function Build-DashboardPage {
         $snapState.Snap = @{ Time = Get-Date; States = $states }
         $kept = Save-Snapshot $snapState.Snap
         $resultPanel.Children.Clear()
-        $resultPanel.Children.Add((New-Text ("Snapshot taken at $((Get-Date).ToString('HH:mm:ss')) -- $($states.Count) tweaks recorded" + $(if ($kept) { ", kept after a restart." } else { " (could not be saved -- only until the app closes)." })) 12 $U.GREEN -Wrap)) | Out-Null
+        $now = (Get-Date).ToString('HH:mm:ss')
+        $msgEN = "Snapshot taken at $now -- $($states.Count) tweaks recorded" + $(if ($kept) { ", kept after a restart." } else { " (could not be saved -- only until the app closes)." })
+        $msgDE = "Snapshot um $now erstellt -- $($states.Count) Tweaks erfasst" + $(if ($kept) { ", bleibt nach einem Neustart erhalten." } else { " (konnte nicht gespeichert werden -- gilt nur, bis die App geschlossen wird)." })
+        $resultPanel.Children.Add((New-Text (Select-Lang $msgEN $msgDE) 12 $U.GREEN -Wrap)) | Out-Null
     }.GetNewClosure())
     $btnCompare.Add_Click({
         $resultPanel.Children.Clear()
-        if (-not $snapState.Snap) { $resultPanel.Children.Add((New-Text "No snapshot yet -- click 'Take snapshot' first." 12 $U.AMBER)) | Out-Null; return }
+        if (-not $snapState.Snap) { $resultPanel.Children.Add((New-Text (Select-Lang "No snapshot yet -- click 'Take snapshot' first." "Noch kein Snapshot -- zuerst auf 'Take snapshot' klicken.") 12 $U.AMBER)) | Out-Null; return }
         $since = if ($snapState.Snap.Time.Date -eq (Get-Date).Date) { $snapState.Snap.Time.ToString('HH:mm:ss') } else { $snapState.Snap.Time.ToString('dd.MM.yyyy HH:mm') }
-        $resultPanel.Children.Add((New-Text "Changes since $($since):" 12 $U.TEXT 'SemiBold' -Margin 0, 0, 0, 4)) | Out-Null
+        $resultPanel.Children.Add((New-Text (Select-Lang "Changes since $($since):" "Änderungen seit $($since):") 12 $U.TEXT 'SemiBold' -Margin 0, 0, 0, 4)) | Out-Null
         $changeCount = 0
         Start-StatusPass
         try {
@@ -6068,13 +6124,13 @@ function Build-DashboardPage {
             if ($before -ne $after) {
                 $changeCount++
                 # No hashtable lookup with a $null key here (illegal in a PowerShell hash literal)
-                $lblBefore = if ($null -eq $before) { "unknown" } elseif ($before -eq $true) { "active" } else { "inactive" }
-                $lblAfter  = if ($null -eq $after)  { "unknown" } elseif ($after  -eq $true) { "active" } else { "inactive" }
+                $lblBefore = if ($null -eq $before) { Select-Lang "unknown" "unbekannt" } elseif ($before -eq $true) { Select-Lang "active" "aktiv" } else { Select-Lang "inactive" "inaktiv" }
+                $lblAfter  = if ($null -eq $after)  { Select-Lang "unknown" "unbekannt" } elseif ($after  -eq $true) { Select-Lang "active" "aktiv" } else { Select-Lang "inactive" "inaktiv" }
                 $resultPanel.Children.Add((New-Text "$($tweak.Name): $lblBefore -> $lblAfter" 12 $U.TEXT2 -Margin 0, 1, 0, 1)) | Out-Null
             }
         }
         } finally { Stop-StatusPass }
-        if ($changeCount -eq 0) { $resultPanel.Children.Add((New-Text "No changes detected since the snapshot." 12 $U.DIM)) | Out-Null }
+        if ($changeCount -eq 0) { $resultPanel.Children.Add((New-Text (Select-Lang "No changes detected since the snapshot." "Seit dem Snapshot keine Änderungen.") 12 $U.DIM)) | Out-Null }
     }.GetNewClosure())
 
     # ---- live monitor sampler: CIM perf classes on a BACKGROUND runspace; the UI timer only reads ----
@@ -6136,11 +6192,13 @@ function Update-ScoreCard {
     $score = if ($c) { [math]::Round($a / $c * 100) } else { 0 }
     $col = if ($score -ge 80) { $Script:UI.GREEN } elseif ($score -ge 50) { $Script:UI.AMBER } else { $Script:UI.ERR }
     $D.ScorePct.Text = "$score %"; $D.ScorePct.Foreground = Brush $col
-    $D.ScoreLine.Text = "$a of $c tweaks of the recommended Balanced preset are active"
-    $D.ScoreSub.Text = "All tweaks: $($sc.Active) active$($Script:Mid)$($sc.Inactive) inactive" + $(if ($sc.NA) { "$($Script:Mid)$($sc.NA) not applicable here" } else { "" }) + "$($Script:Mid)drift check at every start"
+    $D.ScoreLine.Text = Select-Lang "$a of $c tweaks of the recommended Balanced preset are active" "$a von $c Tweaks des empfohlenen Balanced-Presets sind aktiv"
+    $D.ScoreSub.Text = Select-Lang ("All tweaks: $($sc.Active) active$($Script:Mid)$($sc.Inactive) inactive" + $(if ($sc.NA) { "$($Script:Mid)$($sc.NA) not applicable here" } else { "" }) + "$($Script:Mid)drift check at every start") `
+        ("Alle Tweaks: $($sc.Active) aktiv$($Script:Mid)$($sc.Inactive) inaktiv" + $(if ($sc.NA) { "$($Script:Mid)$($sc.NA) hier nicht anwendbar" } else { "" }) + "$($Script:Mid)Drift-Prüfung bei jedem Start")
     Set-Bar $D.ScoreBar $score $col
-    if ($D.SafeBackup) { $D.SafeBackup.Text = (Get-BackupSummary).Last }   # missing: the dashboard was not built completely
-    if ($D.SafeBase) { $D.SafeBase.Text = Get-BaselineSummary }
+    $bs = Get-BackupSummary
+    if ($D.SafeBackup) { $D.SafeBackup.Text = Select-Lang $bs.Last $bs.LastDE }   # missing: the dashboard was not built completely
+    if ($D.SafeBase) { $D.SafeBase.Text = Select-Lang (Get-BaselineSummary) (Get-BaselineSummary -DE) }
 }
 
 # =============================================================================
@@ -6158,12 +6216,12 @@ function Build-PresetsPage {
     $PresetsPanel.Children.Clear()
     $vb = New-Btn 'Verify status' $U.CARD2 $U.TEXT 0xE72C -Margin 0, 0, 0, 0
     $vb.Add_Click({ Invoke-Verify })
-    $PresetsPanel.Children.Add((New-PageHeader 'Presets' 'One click ticks a set of tweaks -- nothing changes until you press Apply selected (a registry backup comes first, plus a restore point if apps are removed).' $U.AMBER @($vb))) | Out-Null
+    $PresetsPanel.Children.Add((New-PageHeader 'Presets' 'One click ticks a set of tweaks -- nothing changes until you press Apply selected (a registry backup comes first, plus a restore point if apps are removed).' $U.AMBER @($vb) -SubDE 'Ein Klick setzt die Haken für eine Gruppe von Tweaks -- es ändert sich nichts, bis du auf Apply selected klickst (vorher kommt ein Registry-Backup, dazu ein Wiederherstellungspunkt, wenn Apps entfernt werden).')) | Out-Null
 
     $defs = @(
-        @{ Name = 'Minimal';    Color = $U.GREEN; Fg = '#ffffff'; Desc = 'Safe basics only: privacy, gaming priority, network latency. No app removal, nothing you would miss. Ideal first run.' }
-        @{ Name = 'Balanced';   Color = $U.AMBER; Fg = '#1a1205'; Desc = 'Minimal + Ultimate Performance, timer, GPU and audio tweaks, light debloat (Copilot, Recall, tips & ads) and the Windows AI and privacy switches. The recommended all-round setup.' }
-        @{ Name = 'Aggressive'; Color = $U.RED;   Fg = '#ffffff'; Desc = 'Balanced + Xbox / OneDrive removal, no background Store apps, no drivers from Windows Update, no hibernation, no memory compression, the hosts-file telemetry block. For experienced users -- removed apps come back through the Microsoft Store or System Restore.' }
+        @{ Name = 'Minimal';    Color = $U.GREEN; Fg = '#ffffff'; Desc = 'Safe basics only: privacy, gaming priority, network latency. No app removal, nothing you would miss. Ideal first run.'; DescDE = 'Nur sichere Grundlagen: Datenschutz, Gaming-Priorität, Netzwerk-Latenz. Keine App-Entfernung, nichts, was du vermissen würdest. Ideal für den ersten Lauf.' }
+        @{ Name = 'Balanced';   Color = $U.AMBER; Fg = '#1a1205'; Desc = 'Minimal + Ultimate Performance, timer, GPU and audio tweaks, light debloat (Copilot, Recall, tips & ads) and the Windows AI and privacy switches. The recommended all-round setup.'; DescDE = 'Minimal + Ultimate Performance, Timer-, GPU- und Audio-Tweaks, leichtes Debloat (Copilot, Recall, Tipps & Werbung) und die Windows-KI- und Datenschutz-Schalter. Die empfohlene Allround-Einstellung.' }
+        @{ Name = 'Aggressive'; Color = $U.RED;   Fg = '#ffffff'; Desc = 'Balanced + Xbox / OneDrive removal, no background Store apps, no drivers from Windows Update, no hibernation, no memory compression, the hosts-file telemetry block. For experienced users -- removed apps come back through the Microsoft Store or System Restore.'; DescDE = 'Balanced + Entfernen von Xbox / OneDrive, keine Store-Apps im Hintergrund, keine Treiber über Windows Update, kein Ruhezustand, keine Speicherkomprimierung, die Telemetrie-Sperre in der hosts-Datei. Für erfahrene Nutzer -- entfernte Apps kommen über den Microsoft Store oder die Systemwiederherstellung zurück.' }
     )
     $grid = New-Object Windows.Controls.Grid; $grid.Margin = Th 0, 0, -14, 0
     foreach ($i in 0..2) { $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = New-Object Windows.GridLength(1, [Windows.GridUnitType]::Star); $grid.ColumnDefinitions.Add($cd) }
@@ -6176,7 +6234,7 @@ function Build-PresetsPage {
         $sel = New-Btn 'Select' $d.Color $d.Fg 0 -Bold -Margin 0, 0, 0, 0
         $prev = New-Btn 'Preview' $U.CARD2 $U.TEXT
         $prev.Add_Click({ Show-PresetPreview $name }.GetNewClosure())
-        $desc = New-Text $d.Desc 12.5 $U.DESC 'Normal' -Wrap -Margin 0, 12, 0, 14
+        $desc = New-Text $d.Desc 12.5 $U.DESC 'Normal' -Wrap -Margin 0, 12, 0, 14 -DE $d.DescDE
         $desc.MinHeight = 52
         $body = New-VStack @((New-HStack @($dot, (New-VStack @((New-Text $name 15 $U.TEXT 'SemiBold'), $sub))) @(0, 0, 0, 10)), $bar, $desc, (New-HStack @($sel, $prev)))
         $card = New-Card $body @(0, 0, 14, 14); [Windows.Controls.Grid]::SetColumn($card, $col); $grid.Children.Add($card) | Out-Null
@@ -6214,7 +6272,7 @@ function Build-PresetsPage {
         Show-Preset-Result
     })
     $own = New-VStack @((New-CardTitle 'Your own selection' $U.VIOLET),
-        (New-Text 'Save the tweaks you ticked to a text file and tick them again later -- after a reinstall or on a second PC. Loading only ticks; nothing changes until you press Apply selected. Tweaks this PC cannot use are skipped.' 12.5 $U.DESC 'Normal' -Wrap -Margin 0, 0, 0, 12),
+        (New-Text 'Save the tweaks you ticked to a text file and tick them again later -- after a reinstall or on a second PC. Loading only ticks; nothing changes until you press Apply selected. Tweaks this PC cannot use are skipped.' 12.5 $U.DESC 'Normal' -Wrap -Margin 0, 0, 0, 12 -DE 'Speichere die angehakten Tweaks in einer Textdatei und hake sie später wieder an -- nach einer Neuinstallation oder auf einem zweiten PC. Laden setzt nur Haken; es ändert sich nichts, bis du auf Apply selected klickst. Tweaks, die dieser PC nicht nutzen kann, werden übersprungen.'),
         (New-HStack @($exp, $imp)))
     $PresetsPanel.Children.Add((New-Card $own @(0, 0, 0, 14))) | Out-Null
 
@@ -6232,7 +6290,7 @@ function Build-PresetsPage {
         $bar = New-Bar 0 $c.Color 4
         $card = New-Card (New-VStack @($hdr, $bar)) @(0, 0, 12, 12) @(14, 12, 14, 12)
         $card.Cursor = [System.Windows.Input.Cursors]::Hand
-        $card.ToolTip = "Open the $($c.Label) tweaks"
+        Set-Expl $card "Open the $($c.Label) tweaks" "Die $($c.Label)-Tweaks öffnen" -ToolTip
         $card.Add_MouseLeftButtonUp({ Show-Page 'tweaks'; Select-Category $catKey }.GetNewClosure())
         [Windows.Controls.Grid]::SetRow($card, [math]::Floor($i / 4)); [Windows.Controls.Grid]::SetColumn($card, $i % 4)
         $cg.Children.Add($card) | Out-Null
@@ -6246,12 +6304,12 @@ function Build-PresetsPage {
     $bar2 = New-Object Windows.Controls.Border; $bar2.Width = 3; $bar2.Height = 16; $bar2.CornerRadius = New-Object Windows.CornerRadius(2); $bar2.Background = Brush $U.AMBER; $bar2.Margin = Th 0, 0, 10, 0
     $V.PreviewBar = $bar2
     $ptitle.Children.Add((New-HStack @($bar2, $V.PreviewTitle))) | Out-Null
-    $lg = New-Text "green = already active$($Script:Mid)grey = would be applied" 11.5 $U.DIM; $lg.HorizontalAlignment = 'Right'
+    $lg = New-Text "green = already active$($Script:Mid)grey = would be applied" 11.5 $U.DIM -DE "grün = schon aktiv$($Script:Mid)grau = würde angewendet"; $lg.HorizontalAlignment = 'Right'
     $ptitle.Children.Add($lg) | Out-Null
     $PresetsPanel.Children.Add((New-Card (New-VStack @($ptitle, $V.PreviewWrap)) @(0, 4, 0, 14))) | Out-Null
 
     $drift = New-HStack @((New-Icon 0xEA18 16 $U.GREEN @(0, 0, 12, 0)),
-        (New-VStack @((New-Text 'Drift check' 13.5 $U.TEXT 'SemiBold'), (New-Text 'At every start the tool compares your last Apply with the live state and offers to re-apply what a Windows update reset. No background process, no autostart.' 12 $U.DIM 'Normal' -Wrap))))
+        (New-VStack @((New-Text 'Drift check' 13.5 $U.TEXT 'SemiBold'), (New-Text 'At every start the tool compares your last Apply with the live state and offers to re-apply what a Windows update reset. No background process, no autostart.' 12 $U.DIM 'Normal' -Wrap -DE 'Bei jedem Start vergleicht das Tool dein letztes Apply mit dem aktuellen Stand und bietet an, erneut anzuwenden, was ein Windows-Update zurückgesetzt hat. Kein Hintergrundprozess, kein Autostart.'))))
     $PresetsPanel.Children.Add((New-Card $drift)) | Out-Null
 }
 
@@ -6286,7 +6344,7 @@ function Update-PresetCards {
         $chip.CornerRadius = [Windows.CornerRadius]::new(6); $chip.Background = Brush $Script:UI.CARD2; $chip.BorderBrush = Brush $Script:UI.BORDER
         $chip.BorderThickness = Th 1; $chip.Padding = Th 8, 3, 8, 3; $chip.Margin = Th 0, 0, 6, 6
         $chip.Child = New-HStack @($e, (New-Text $t.Name 11.5 $Script:UI.TEXT2))
-        if ($CheckBoxMap.ContainsKey($t.Name) -and -not $CheckBoxMap[$t.Name].IsEnabled) { $chip.Opacity = 0.45; $chip.ToolTip = 'Not available on this PC -- skipped' }
+        if ($CheckBoxMap.ContainsKey($t.Name) -and -not $CheckBoxMap[$t.Name].IsEnabled) { $chip.Opacity = 0.45; $chip.ToolTip = Select-Lang 'Not available on this PC -- skipped' 'Auf diesem PC nicht verfügbar -- wird übersprungen' }
         $V.PreviewWrap.Children.Add($chip) | Out-Null
     }
 }
@@ -6297,36 +6355,36 @@ function Update-PresetCards {
 function Build-BackupsPage {
     $U = $Script:UI
     $BackupsPanel.Children.Clear()
-    $BackupsPanel.Children.Add((New-PageHeader 'Backups & Log' 'Everything GameOptimizerPro changes is backed up first -- here are the backups, the log and the ways back.' $U.VIOLET)) | Out-Null
+    $BackupsPanel.Children.Add((New-PageHeader 'Backups & Log' 'Everything GameOptimizerPro changes is backed up first -- here are the backups, the log and the ways back.' $U.VIOLET -SubDE 'Alles, was GameOptimizerPro ändert, wird vorher gesichert -- hier sind die Backups, das Log und die Wege zurück.')) | Out-Null
     $grid = New-Grid2
     $bk = Get-BackupSummary
     $mk = {
-        param([string]$Title, [string]$Accent, [string]$Text, [object[]]$Extra, $Button)
-        $v = New-VStack @((New-CardTitle $Title $Accent), (New-Text $Text 12.5 $Script:UI.TEXT2 'Normal' -Wrap))
+        param([string]$Title, [string]$Accent, [string]$Text, [object[]]$Extra, $Button, [string]$TextDE)
+        $v = New-VStack @((New-CardTitle $Title $Accent), (New-Text $Text 12.5 $Script:UI.TEXT2 'Normal' -Wrap -DE $TextDE))
         foreach ($x in $Extra) { if ($x) { $v.Children.Add($x) | Out-Null } }
         if ($Button) { $Button.HorizontalAlignment = 'Left'; $Button.Margin = Th 0, 12, 0, 0; $v.Children.Add($Button) | Out-Null }
         $c = New-Card $v @(0, 0, 0, 0); $c.VerticalAlignment = 'Stretch'; $c
     }
     $b1 = New-Btn 'Open backup folder' $U.VIOLET '#120a24' 0xE838 -Bold; $b1.Add_Click({ Open-BackupFolder })
     Add-Grid2 $grid (& $mk 'Registry backups' $U.VIOLET 'Before every Apply and Revert, every registry key a tweak touches is exported to .reg files. Double-click one to put the saved values back; _remove-new-keys.reg deletes keys that did not exist yet, _values.reg holds two single values. Values a tweak added to an existing key go away with its revert. The newest 20 backups are kept (GameOptimizerPro v2 keeps its own in a folder of its own).' @(
-        (New-Text "$($bk.Count) backup(s)$($Script:Mid)last: $($bk.Last)" 12 $U.DIM 'Normal' -Wrap -Margin 0, 8, 0, 0),
-        (New-Text $Script:RegistryBackupRoot 11.5 $U.MUTED 'Normal' -Wrap -Mono -Margin 0, 4, 0, 0)) $b1)
+        (New-Text "$($bk.Count) backup(s)$($Script:Mid)last: $($bk.Last)" 12 $U.DIM 'Normal' -Wrap -Margin 0, 8, 0, 0 -DE "$($bk.Count) Backup(s)$($Script:Mid)zuletzt: $($bk.LastDE)"),
+        (New-Text $Script:RegistryBackupRoot 11.5 $U.MUTED 'Normal' -Wrap -Mono -Margin 0, 4, 0, 0)) $b1 -TextDE 'Vor jedem Apply und Revert wird jeder Registry-Schlüssel, den ein Tweak anfasst, in .reg-Dateien exportiert. Ein Doppelklick auf eine Datei stellt die gesicherten Werte wieder her; _remove-new-keys.reg löscht Schlüssel, die es vorher noch nicht gab, _values.reg enthält zwei einzelne Werte. Werte, die ein Tweak zu einem vorhandenen Schlüssel hinzugefügt hat, verschwinden mit seinem Revert. Die neuesten 20 Backups bleiben erhalten (GameOptimizerPro v2 hat einen eigenen Ordner).')
     $b2 = New-Btn 'Open log' $U.CARD2 $U.TEXT 0xE838; $b2.Add_Click({ Open-LogFile })
     Add-Grid2 $grid (& $mk 'Log' $U.CYAN 'Every action of this session is written to a log file -- what was applied, what failed and why.' @(
-        (New-Text $LogFile 11.5 $U.MUTED 'Normal' -Wrap -Mono -Margin 0, 8, 0, 0)) $b2)
+        (New-Text $LogFile 11.5 $U.MUTED 'Normal' -Wrap -Mono -Margin 0, 8, 0, 0)) $b2 -TextDE 'Jede Aktion dieser Sitzung landet in einer Log-Datei -- was angewendet wurde, was fehlschlug und warum.')
     $b3 = New-Btn 'Open System Restore' $U.CARD2 $U.TEXT 0xE7A7
     $b3.Add_Click({ try { Start-Process "rstrui.exe" } catch { [System.Windows.MessageBox]::Show("Could not open System Restore (rstrui.exe). Run it manually: Start -> type rstrui", "Error") | Out-Null } })
-    Add-Grid2 $grid (& $mk 'System Restore' $U.GREEN 'A restore point is created before every Apply that removes apps; if System Protection is off, you are asked first. Removed apps also come back through the Microsoft Store. Everything else has its own revert and is in the registry backup.' @() $b3)
+    Add-Grid2 $grid (& $mk 'System Restore' $U.GREEN 'A restore point is created before every Apply that removes apps; if System Protection is off, you are asked first. Removed apps also come back through the Microsoft Store. Everything else has its own revert and is in the registry backup.' @() $b3 -TextDE 'Vor jedem Apply, das Apps entfernt, wird ein Wiederherstellungspunkt erstellt; ist der Computerschutz aus, wirst du vorher gefragt. Entfernte Apps kommen auch über den Microsoft Store zurück. Alles andere hat einen eigenen Revert und steckt im Registry-Backup.')
     $b4 = New-Btn 'Revert all ...' $U.AMBER '#1a1205' 0xE7A7 -Bold
     $b4.Add_Click({ $BtnRevertAll.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Button]::ClickEvent))) })
-    Add-Grid2 $grid (& $mk 'Revert all' $U.AMBER 'Sets every tweak GameOptimizerPro applied back to the Windows default -- no reboot needed. Settings you made yourself stay. Removed apps come back through the Microsoft Store or System Restore.' @() $b4)
+    Add-Grid2 $grid (& $mk 'Revert all' $U.AMBER 'Sets every tweak GameOptimizerPro applied back to the Windows default -- no reboot needed. Settings you made yourself stay. Removed apps come back through the Microsoft Store or System Restore.' @() $b4 -TextDE 'Setzt jeden Tweak, den GameOptimizerPro angewendet hat, auf den Windows-Standard zurück -- ohne Neustart. Einstellungen, die du selbst gemacht hast, bleiben. Entfernte Apps kommen über den Microsoft Store oder die Systemwiederherstellung zurück.')
     Add-Grid2 $grid (& $mk 'Drift check' $U.WIN11 'After every Apply the active tweaks are recorded. At every start the tool checks whether a Windows update reset any of them and offers to re-apply them -- no background process, no autostart.' @(
-        (New-Text "Baseline: $(Get-BaselineSummary)" 12 $U.DIM 'Normal' -Wrap -Margin 0, 8, 0, 0)) $null)
+        (New-Text "Baseline: $(Get-BaselineSummary)" 12 $U.DIM 'Normal' -Wrap -Margin 0, 8, 0, 0 -DE "Aufzeichnung: $(Get-BaselineSummary -DE)")) $null -TextDE 'Nach jedem Apply werden die aktiven Tweaks aufgezeichnet. Bei jedem Start prüft das Tool, ob ein Windows-Update welche davon zurückgesetzt hat, und bietet an, sie erneut anzuwenden -- kein Hintergrundprozess, kein Autostart.')
     $BackupsPanel.Children.Add($grid) | Out-Null
 }
 
 # =============================================================================
-# LANGUAGE (descriptions only -- the interface stays English)
+# LANGUAGE (descriptions and explanations -- names, buttons and labels stay English)
 # =============================================================================
 function Update-LangButton {
     $BtnLang.Content = New-HStack @((New-Icon 0xE774 12 $Script:UI.TEXT2 @(0, 0, 6, 0)), (New-Text "Info: $($LangState.Current)" 11.5 $Script:UI.TEXT 'SemiBold'))
@@ -6432,6 +6490,7 @@ function Register-ClosureFunctions {
     }
 }
 Register-ClosureFunctions
+Set-Expl ($Window.FindName("TweaksSub")) "Every tweak can be undone$($Script:Mid)live status where Windows reports it" "Jeder Tweak lässt sich rückgängig machen$($Script:Mid)Live-Status, wo Windows ihn meldet"
 
 Set-Splash "Building the dashboard ..." 88
 # The dashboard only shows things. If a part of it fails (an unexpected WMI answer, a broken
@@ -6968,14 +7027,16 @@ $BtnRevertSel.Add_Click({
 })
 
 $BtnLang.Add_Click({
-    # The interface stays permanently English. This toggle switches the language
-    # of the tweak descriptions and the BIOS Guide explanations (DE/EN).
+    # Names, buttons and labels stay English. This toggle switches the tweak descriptions, the
+    # BIOS Guide and (1.3) the explanations on every page between German and English.
     $LangState.Current  = if ($LangState.Current -eq "EN") { "DE" } else { "EN" }
     Update-LangButton
     Set-DescLanguage
+    Update-ExplLanguage
+    try { Update-ScoreCard; Update-PresetCards } catch { }
     if ($Script:BiosDetectDone) { Render-BiosPage }   # not built yet: it opens in the new language
     if ($SearchBox.Text) { Apply-TweakFilter }
-    $StatusText.Text = if ($LangState.Current -eq "DE") { "Descriptions now in German. The interface stays English." } else { "Descriptions now in English." }
+    $StatusText.Text = if ($LangState.Current -eq "DE") { "Erklärungen jetzt auf Deutsch. Namen und Schaltflächen bleiben Englisch." } else { "Explanations now in English." }
 })
 
 # -----------------------------------------
@@ -7343,9 +7404,9 @@ $BtnStartup.Add_Click({
                 New-Object Windows.Media.SolidColorBrush (Get-DelayColor $delayMs)
             }
             $tbDelay.ToolTip = if ($delayMs -gt 0) {
-                "Slowest measured start: $delayMs ms`nSource: Windows boot performance log (event 101)"
+                Select-Lang "Slowest measured start: $delayMs ms`nSource: Windows boot performance log (event 101)" "Langsamster gemessener Start: $delayMs ms`nQuelle: Windows-Startleistungsprotokoll (Ereignis 101)"
             } else {
-                "No delay logged for this program.`nWindows only logs programs that slowed the boot down."
+                Select-Lang "No delay logged for this program.`nWindows only logs programs that slowed the boot down." "Für dieses Programm ist keine Verzögerung protokolliert.`nWindows protokolliert nur Programme, die den Start gebremst haben."
             }
 
             $row.Children.Add($cb)       | Out-Null
@@ -7387,7 +7448,7 @@ $BtnStartup.Add_Click({
             catch { $fail++; Write-Log "Startup Manager: could not disable '$($entry.Item.Name)' -- $_" }
         }
         Build-StartupRows   # status, colours and the boot-delay column straight away, not only after Refresh
-        $swStatus.Text = "$count " + (Get-UIString "sw_disabled_msg") + $(if ($fail) { " -- $fail failed, see the log" } else { "" })
+        $swStatus.Text = "$count " + (Get-UIString "sw_disabled_msg") + $(if ($fail) { Select-Lang " -- $fail failed, see the log" " -- $fail fehlgeschlagen, siehe Log" } else { "" })
     })
     $swEnable.Add_Click({
         $sel = $swCbMap.Values | Where-Object { $_.Cb.IsChecked -eq $true }
@@ -7398,7 +7459,7 @@ $BtnStartup.Add_Click({
             catch { $fail++; Write-Log "Startup Manager: could not enable '$($entry.Item.Name)' -- $_" }
         }
         Build-StartupRows
-        $swStatus.Text = "$count " + (Get-UIString "sw_enabled_msg") + $(if ($fail) { " -- $fail failed, see the log" } else { "" })
+        $swStatus.Text = "$count " + (Get-UIString "sw_enabled_msg") + $(if ($fail) { Select-Lang " -- $fail failed, see the log" " -- $fail fehlgeschlagen, siehe Log" } else { "" })
     })
     $swRefresh.Add_Click({ Build-StartupRows })
     $swClose.Add_Click({  $sw.Close() })
@@ -7414,35 +7475,35 @@ $BtnServices.Add_Click({
 
     # Curated list: Name -> @{ Desc; Safe; Category }
     $KnownServices = @{
-        "DiagTrack"              = @{ Desc="Telemetry & Diagnostics -- sends usage data to Microsoft.";        Safe=$true;  Cat="Privacy" }
-        "dmwappushservice"       = @{ Desc="WAP Push Message Routing -- part of the telemetry infrastructure.";     Safe=$true;  Cat="Privacy" }
-        "SysMain"                = @{ Desc="Superfetch -- preloads often used apps into free RAM so they start faster (according to Microsoft from SSDs too). Turning it off brings no proven gain.";            Safe=$true;  Cat="Performance" }
-        "WSearch"                = @{ Desc="Windows Search -- indexes your drives for fast search in Start, File Explorer and Outlook. Indexing causes disk activity now and then; without it search is slower.";       Safe=$true;  Cat="Performance" }
-        "RemoteRegistry"         = @{ Desc="Remote Registry -- allows remote access to the registry. Security risk."; Safe=$true;  Cat="Security" }
-        "Fax"                    = @{ Desc="Fax service -- used by almost nobody.";                 Safe=$true;  Cat="Bloat" }
-        "MapsBroker"             = @{ Desc="Maps Broker -- for the Windows Maps app. Rarely used.";             Safe=$true;  Cat="Bloat" }
-        "RetailDemo"             = @{ Desc="Retail Demo Service -- only for store demo devices.";              Safe=$true;  Cat="Bloat" }
-        "WerSvc"                 = @{ Desc="Windows Error Reporting -- sends crash reports to Microsoft."; Safe=$true;  Cat="Privacy" }
-        "XblGameSave"            = @{ Desc="Xbox cloud saves -- Game Pass / Microsoft Store games need it. Unneeded if you only play on Steam, Epic & co."; Safe=$true;  Cat="Bloat" }
-        "XblAuthManager"         = @{ Desc="Xbox sign-in -- Game Pass / Microsoft Store games and achievements need it. Unneeded for Steam, Epic & co."; Safe=$true;  Cat="Bloat" }
-        "XboxNetApiSvc"          = @{ Desc="Xbox networking -- multiplayer in Game Pass / Microsoft Store games needs it.";            Safe=$true;  Cat="Bloat" }
-        "xbgm"                   = @{ Desc="Xbox game monitoring -- used by Game Pass / Microsoft Store games.";                       Safe=$true;  Cat="Bloat" }
-        "Spooler"                = @{ Desc="Print Spooler -- only needed if a printer is connected.";      Safe=$false; Cat="System" }
-        "BITS"                   = @{ Desc="Background Intelligent Transfer -- the Windows Update downloader.";   Safe=$false; Cat="System" }
-        "wuauserv"               = @{ Desc="Windows Update -- automatic updates. Be careful disabling this!"; Safe=$false; Cat="System" }
-        "TabletInputService"     = @{ Desc="Touch keyboard, emoji panel (Win+.) and handwriting -- some input languages need it; on Windows 10 typing in the Start search can stop working without it."; Safe=$false; Cat="System" }
-        "WMPNetworkSvc"          = @{ Desc="Windows Media Player Network -- media sharing on the network.";    Safe=$true;  Cat="Bloat" }
-        "lfsvc"                  = @{ Desc="Geolocation Service -- location requests from apps.";            Safe=$true;  Cat="Privacy" }
-        "SharedAccess"           = @{ Desc="Internet Connection Sharing -- only needed for ICS/hotspot."; Safe=$true;  Cat="Network" }
-        "PhoneSvc"               = @{ Desc="Phone Service -- telephony features. Rarely needed.";         Safe=$true;  Cat="Bloat" }
-        "wisvc"                  = @{ Desc="Windows Insider Service -- on an Insider build the Insider updates stop without it. Not needed on normal Windows."; Safe=$false; Cat="System" }
-        "WpcMonSvc"              = @{ Desc="Parental Controls -- family safety monitoring.";                  Safe=$true;  Cat="Bloat" }
-        "CscService"             = @{ Desc="Offline Files -- cached offline access. Usually unnecessary.";       Safe=$true;  Cat="Performance" }
-        "TrkWks"                 = @{ Desc="Distributed Link Tracking -- tracks moved files.";     Safe=$true;  Cat="Performance" }
-        "WdiServiceHost"         = @{ Desc="Diagnostic Service Host -- Windows diagnostic tools.";             Safe=$true;  Cat="Bloat" }
-        "icssvc"                 = @{ Desc="Windows Mobile Hotspot -- mobile hotspot. Usually unnecessary.";     Safe=$true;  Cat="Bloat" }
-        "vmicvss"                = @{ Desc="Hyper-V VSS -- only for Hyper-V VMs.";                          Safe=$true;  Cat="Bloat" }
-        "HvHost"                 = @{ Desc="Hyper-V Host -- for virtual machines (Hyper-V, WSL 2, Windows Sandbox).";                          Safe=$true;  Cat="Bloat" }
+        "DiagTrack"              = @{ Desc="Telemetry & Diagnostics -- sends usage data to Microsoft."; DescDE="Telemetrie & Diagnose -- sendet Nutzungsdaten an Microsoft.";        Safe=$true;  Cat="Privacy" }
+        "dmwappushservice"       = @{ Desc="WAP Push Message Routing -- part of the telemetry infrastructure."; DescDE="WAP-Push-Nachrichten -- Teil der Telemetrie-Infrastruktur.";     Safe=$true;  Cat="Privacy" }
+        "SysMain"                = @{ Desc="Superfetch -- preloads often used apps into free RAM so they start faster (according to Microsoft from SSDs too). Turning it off brings no proven gain."; DescDE="Superfetch -- lädt oft genutzte Apps vorab in den freien Arbeitsspeicher, damit sie schneller starten (laut Microsoft auch von SSDs). Abschalten bringt keinen belegten Gewinn.";            Safe=$true;  Cat="Performance" }
+        "WSearch"                = @{ Desc="Windows Search -- indexes your drives for fast search in Start, File Explorer and Outlook. Indexing causes disk activity now and then; without it search is slower."; DescDE="Windows-Suche -- indiziert deine Laufwerke für die schnelle Suche in Start, Explorer und Outlook. Das Indizieren sorgt ab und zu für Datenträgerlast; ohne Index ist die Suche langsamer.";       Safe=$true;  Cat="Performance" }
+        "RemoteRegistry"         = @{ Desc="Remote Registry -- allows remote access to the registry. Security risk."; DescDE="Remoteregistrierung -- erlaubt Zugriff auf die Registry über das Netzwerk. Sicherheitsrisiko."; Safe=$true;  Cat="Security" }
+        "Fax"                    = @{ Desc="Fax service -- used by almost nobody."; DescDE="Faxdienst -- nutzt fast niemand.";                 Safe=$true;  Cat="Bloat" }
+        "MapsBroker"             = @{ Desc="Maps Broker -- for the Windows Maps app. Rarely used."; DescDE="Karten-Broker -- für die Windows-Karten-App. Selten gebraucht.";             Safe=$true;  Cat="Bloat" }
+        "RetailDemo"             = @{ Desc="Retail Demo Service -- only for store demo devices."; DescDE="Einzelhandels-Demo -- nur für Vorführgeräte im Laden.";              Safe=$true;  Cat="Bloat" }
+        "WerSvc"                 = @{ Desc="Windows Error Reporting -- sends crash reports to Microsoft."; DescDE="Windows-Fehlerberichterstattung -- sendet Absturzberichte an Microsoft."; Safe=$true;  Cat="Privacy" }
+        "XblGameSave"            = @{ Desc="Xbox cloud saves -- Game Pass / Microsoft Store games need it. Unneeded if you only play on Steam, Epic & co."; DescDE="Xbox-Cloud-Spielstände -- Game Pass / Microsoft-Store-Spiele brauchen ihn. Unnötig, wenn du nur über Steam, Epic & Co. spielst."; Safe=$true;  Cat="Bloat" }
+        "XblAuthManager"         = @{ Desc="Xbox sign-in -- Game Pass / Microsoft Store games and achievements need it. Unneeded for Steam, Epic & co."; DescDE="Xbox-Anmeldung -- Game Pass / Microsoft-Store-Spiele und Erfolge brauchen sie. Unnötig für Steam, Epic & Co."; Safe=$true;  Cat="Bloat" }
+        "XboxNetApiSvc"          = @{ Desc="Xbox networking -- multiplayer in Game Pass / Microsoft Store games needs it."; DescDE="Xbox-Netzwerk -- Mehrspieler in Game Pass / Microsoft-Store-Spielen braucht ihn.";            Safe=$true;  Cat="Bloat" }
+        "xbgm"                   = @{ Desc="Xbox game monitoring -- used by Game Pass / Microsoft Store games."; DescDE="Xbox-Spielüberwachung -- wird von Game Pass / Microsoft-Store-Spielen genutzt.";                       Safe=$true;  Cat="Bloat" }
+        "Spooler"                = @{ Desc="Print Spooler -- only needed if a printer is connected."; DescDE="Druckwarteschlange -- nur nötig, wenn ein Drucker angeschlossen ist.";      Safe=$false; Cat="System" }
+        "BITS"                   = @{ Desc="Background Intelligent Transfer -- the Windows Update downloader."; DescDE="Intelligenter Hintergrundübertragungsdienst -- der Download-Dienst von Windows Update.";   Safe=$false; Cat="System" }
+        "wuauserv"               = @{ Desc="Windows Update -- automatic updates. Be careful disabling this!"; DescDE="Windows Update -- automatische Updates. Vorsicht beim Deaktivieren!"; Safe=$false; Cat="System" }
+        "TabletInputService"     = @{ Desc="Touch keyboard, emoji panel (Win+.) and handwriting -- some input languages need it; on Windows 10 typing in the Start search can stop working without it."; DescDE="Bildschirmtastatur, Emoji-Panel (Win+.) und Handschrift -- manche Eingabesprachen brauchen ihn; unter Windows 10 kann ohne ihn das Tippen in der Startsuche ausfallen."; Safe=$false; Cat="System" }
+        "WMPNetworkSvc"          = @{ Desc="Windows Media Player Network -- media sharing on the network."; DescDE="Windows-Media-Player-Netzwerkfreigabe -- Medien im Netzwerk teilen.";    Safe=$true;  Cat="Bloat" }
+        "lfsvc"                  = @{ Desc="Geolocation Service -- location requests from apps."; DescDE="Standortdienst -- Standortanfragen von Apps.";            Safe=$true;  Cat="Privacy" }
+        "SharedAccess"           = @{ Desc="Internet Connection Sharing -- only needed for ICS/hotspot."; DescDE="Internetverbindungsfreigabe -- nur für ICS / Hotspot nötig."; Safe=$true;  Cat="Network" }
+        "PhoneSvc"               = @{ Desc="Phone Service -- telephony features. Rarely needed."; DescDE="Telefondienst -- Telefoniefunktionen. Selten gebraucht.";         Safe=$true;  Cat="Bloat" }
+        "wisvc"                  = @{ Desc="Windows Insider Service -- on an Insider build the Insider updates stop without it. Not needed on normal Windows."; DescDE="Windows-Insider-Dienst -- auf einer Insider-Version stoppen ohne ihn die Insider-Updates. Auf normalem Windows nicht nötig."; Safe=$false; Cat="System" }
+        "WpcMonSvc"              = @{ Desc="Parental Controls -- family safety monitoring."; DescDE="Jugendschutz -- Überwachung für die Microsoft-Familiensicherheit.";                  Safe=$true;  Cat="Bloat" }
+        "CscService"             = @{ Desc="Offline Files -- cached offline access. Usually unnecessary."; DescDE="Offlinedateien -- zwischengespeicherter Offline-Zugriff. Meist unnötig.";       Safe=$true;  Cat="Performance" }
+        "TrkWks"                 = @{ Desc="Distributed Link Tracking -- tracks moved files."; DescDE="Überwachung verteilter Verknüpfungen -- verfolgt verschobene Dateien.";     Safe=$true;  Cat="Performance" }
+        "WdiServiceHost"         = @{ Desc="Diagnostic Service Host -- Windows diagnostic tools."; DescDE="Diagnosediensthost -- Windows-Diagnosewerkzeuge.";             Safe=$true;  Cat="Bloat" }
+        "icssvc"                 = @{ Desc="Windows Mobile Hotspot -- mobile hotspot. Usually unnecessary."; DescDE="Mobiler Hotspot -- meist unnötig.";     Safe=$true;  Cat="Bloat" }
+        "vmicvss"                = @{ Desc="Hyper-V VSS -- only for Hyper-V VMs."; DescDE="Hyper-V-VSS -- nur für Hyper-V-VMs.";                          Safe=$true;  Cat="Bloat" }
+        "HvHost"                 = @{ Desc="Hyper-V Host -- for virtual machines (Hyper-V, WSL 2, Windows Sandbox)."; DescDE="Hyper-V-Host -- für virtuelle Maschinen (Hyper-V, WSL 2, Windows-Sandbox).";                          Safe=$true;  Cat="Bloat" }
     }
 
     # Build XAML sub-window
@@ -7689,13 +7750,13 @@ $BtnServices.Add_Click({
 
             # Description
             $tbDesc = New-Object Windows.Controls.TextBlock
-            $tbDesc.Text  = $info.Desc
+            $tbDesc.Text  = Select-Lang $info.Desc $info.DescDE
             $tbDesc.Width = 310
             $tbDesc.FontSize = 11
             $tbDesc.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(150,150,150))
             $tbDesc.VerticalAlignment = "Center"
             $tbDesc.TextTrimming = "CharacterEllipsis"
-            $tbDesc.ToolTip = $info.Desc
+            $tbDesc.ToolTip = $tbDesc.Text
 
             # Status
             $tbStatus = New-Object Windows.Controls.TextBlock

@@ -45,7 +45,7 @@ powershell -ExecutionPolicy Bypass -File .\GameOptimizerPro.ps1
 - 🔄 **Notices when Windows resets your tweaks** — updates like to switch things back. At start the app compares with your last Apply and offers to re-apply what was reverted.
 - 🛟 **Safety net before every change** — a `.reg` backup of every affected key before every Apply and Revert, plus a System Restore point whenever apps are removed.
 - 🧾 **Honest descriptions** — every tweak says what it does, what it costs and where Windows ignores it (e.g. policies that only work on Enterprise / Education).
-- 🌍 **English & German** — all tweak descriptions and the whole BIOS Guide, switchable live.
+- 🌍 **English & German** — all tweak descriptions, the whole BIOS Guide and the explanations on every page (dashboard, presets, backups, services, startup manager), switchable live. Names and buttons stay English.
 
 ## 📸 Screenshots
 

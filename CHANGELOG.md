@@ -6,6 +6,21 @@ All notable changes to GameOptimizerPro (the PowerShell edition), newest first. 
 
 ---
 
+## [1.3] — 2026-11-27
+
+- **Explanations in German everywhere** — "Info: DE" now also switches the explanations on every page, not only the tweak descriptions and the BIOS Guide: the dashboard (optimization score, monitor, memory integrity / VBS / drive encryption, live monitor, ping test, snapshot, safety net), the Presets page, Backups & Log, the notices on the tweak tabs, the status tooltips of the tweaks, and the descriptions and messages in the Services and Startup Manager. Names, buttons and labels stay English.
+- **What memory integrity and VBS are** — the dashboard now says what the two security features do (in both languages), not only whether they are on.
+
+<details>
+<summary><b>Development log — 1.3</b></summary>
+
+- **How** — every explanation text keeps its English and German version and switches with the button; texts that are built anew (score, safety net, snapshot results, ping results) are written in the current language. The version is 1.3 because the user named this step so (1.3 – 1.5 of October were renumbered to 1.2.1 – 1.2.3 back then; the tags are free).
+- **Tests** — the offscreen app test (started like the installer) switches to German, takes screenshots of the dashboard, presets and backups pages, checks that all registered explanation texts are German, and that they are English again after switching back. Both test PCs, the unit tests and the app test pass; the real system unchanged.
+
+</details>
+
+---
+
 ## [1.2.12] — 2026-11-27
 
 *1.2.11 was published by mistake on the 1.2.10 commit (its tag can't be moved) — 1.2.12 is the release with these changes.*
